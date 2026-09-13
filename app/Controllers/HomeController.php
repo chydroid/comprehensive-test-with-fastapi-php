@@ -1,0 +1,154 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Controllers;
+
+use App\Models\Exam;
+use App\Models\ExamCategory;
+use App\Models\ExamNews;
+use App\Models\Grade;
+use App\Models\SchoolClass;
+use App\Models\SiteConfig;
+use App\Models\Subject;
+use App\Services\AuthSession;
+use Core\Database;
+use Core\Response;
+
+/**
+ * 前台门户：站点信息、帮助、科目/类别、单位班级、首页考试公告
+ */
+class HomeController extends BaseController
+{
+    /** GET /api/public/site —— 站点配置（标题/版权/联系方式）+ 基础统计 */
+    public function site(): Response
+    {
+        $config = (new SiteConfig())->allAsMap();
+        $quizStats = Database::fetch(
+            "SELECT
+                SUM(CASE WHEN quiz_class='radio1'   THEN 1 ELSE 0 END) AS radio1,
+                SUM(CASE WHEN quiz_class='radio2'   THEN 1 ELSE 0 END) AS radio2,
+                SUM(CASE WHEN quiz_class='checkbox' THEN 1 ELSE 0 END) AS checkbox,
+                SUM(CASE WHEN quiz_class='text'     THEN 1 ELSE 0 END) AS text,
+                SUM(CASE WHEN quiz_class='longtext' THEN 1 ELSE 0 END) AS longtext,
+                COUNT(*) AS total
+             FROM `quizlib`"
+        ) ?? [];
+
+        return $this->ok([
+            'config'     => $config,
+            'quiz_stats' => [
+                'total'    => (int) ($quizStats['total'] ?? 0),
+                'radio1'   => (int) ($quizStats['radio1'] ?? 0),
+                'radio2'   => (int) ($quizStats['radio2'] ?? 0),
+                'checkbox' => (int) ($quizStats['checkbox'] ?? 0),
+                'text'     => (int) ($quizStats['text'] ?? 0),
+                'longtext' => (int) ($quizStats['longtext'] ?? 0),
+            ],
+            'exam_count'     => (int) (Database::fetch('SELECT COUNT(*) c FROM `examinfo`')['c'] ?? 0),
+            'student_count'  => (int) (Database::fetch('SELECT COUNT(*) c FROM `stuinfo`')['c'] ?? 0),
+        ]);
+    }
+
+    /** GET /api/public/help —— 帮助页静态内容 */
+    public function help(): Response
+    {
+        $site = (new SiteConfig())->allAsMap();
+        return $this->ok([
+            'title'  => $site['site_title'] ?? '网上理论考核系统',
+            'blocks' => [
+                [
+                    'heading' => '考试流程',
+                    'items'   => [
+                        '使用准考证号与密码登录，未注册的考生请先完成注册。',
+                        '在考试列表中选择班级对应的考试，输入监考教师公布的考试口令进入考场。',
+                        '答题过程中系统会自动保存，请勿关闭浏览器。',
+                        '提交试卷后当日即可在“成绩查询”查看成绩。',
+                    ],
+                ],
+                [
+                    'heading' => '在线练习',
+                    'items'   => [
+                        '练习模式不限制次数，可随时开始，逐题查看答案解析。',
+                        '模拟考试按真实考试规则组卷与计时，用于考前自测。',
+                    ],
+                ],
+                [
+                    'heading' => '成绩与证书',
+                    'items'   => [
+                        '成绩以交卷时系统判定为准，客观题自动判分。',
+                        '如需成绩证明，请联系监考教师或管理员。',
+                    ],
+                ],
+            ],
+        ]);
+    }
+
+    /** GET /api/public/subjects */
+    public function subjects(): Response
+    {
+        return $this->ok((new Subject())->all('id ASC'));
+    }
+
+    /** GET /api/public/categories */
+    public function categories(): Response
+    {
+        return $this->ok((new ExamCategory())->all('sort_order ASC'));
+    }
+
+    /**
+     * GET /api/public/exams —— 首页考试公告
+     * 未登录考生：全部进行中考试；已登录考生：该考生尚未结束的考试。
+     */
+    public function exams(): Response
+    {
+        $student = AuthSession::get(AuthSession::STUDENT);
+        if ($student !== null) {
+            return $this->ok([
+                'scope' => 'mine',
+                'list'  => $this->pendingForClass((string) ($student['class_id'] ?? ''), (string) $student['id']),
+            ]);
+        }
+        return $this->ok([
+            'scope' => 'all',
+            'list'  => Exam::activeWithSubject(),
+        ]);
+    }
+
+    /** GET /api/public/options —— 注册/查询页所需下拉数据（单位、班级） */
+    public function options(): Response
+    {
+        return $this->ok([
+            'grades'  => (new Grade())->all('id ASC'),
+            'classes' => (new SchoolClass())->all('id ASC'),
+        ]);
+    }
+
+    /** GET /api/public/news —— 首页公告（最多 5 条） */
+    public function news(): Response
+    {
+        return $this->ok(array_slice((new ExamNews())->all('id DESC'), 0, 5));
+    }
+
+    /** 按班级匹配的待考列表（含该考生交卷状态） */
+    private function pendingForClass(string $classId, string $stuId): array
+    {
+        $classId = trim($classId);
+        if ($classId === '') {
+            return [];
+        }
+        return Database::fetchAll(
+            "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
+                    e.exam_score, e.subj_id, s.subj_name, c.category_name,
+                    sc.stu_status, sc.stu_score
+             FROM `examinfo` e
+             INNER JOIN `subject` s ON s.id = e.subj_id
+             LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
+             LEFT JOIN `stuscore` sc ON sc.exam_id = e.id AND sc.stu_id = ?
+             WHERE e.exam_status IN ('exam', 'paper', 'testing')
+               AND FIND_IN_SET(?, e.stu_class) > 0
+             ORDER BY e.exam_start ASC, e.id DESC",
+            [$stuId, $classId]
+        );
+    }
+}

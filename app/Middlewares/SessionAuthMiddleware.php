@@ -48,9 +48,15 @@ class SessionAuthMiddleware implements Middleware
         ['/api/student/login',    'public'],
         ['/api/student/logout',   'public'],
 
+        // 考场入口（考生在考场内自行以准考证号 + 考场口令登录）
+        ['/api/exam/login',       'public'],
+        ['/api/exam/logout',      'public'],
+
         // 考生端
         ['/api/student/',         'student'],
-        ['/api/exam/',            'student'],
+        // 考场内部接口：使用独立的「考试会话」（exam_id + stu_id），
+        // 由 ExamController::login 建立，与个人中心登录态互不影响
+        ['/api/exam/',            'exam'],
         ['/api/exercise/',        'student'],
         ['/api/exercise',         'student'],
 
@@ -246,17 +252,21 @@ class SessionAuthMiddleware implements Middleware
     /** 读取当前身份会话；未登录返回 null */
     private function currentSession(string $identity): ?array
     {
-        $key = match ($identity) {
-            'admin'   => 'admin',
-            'student' => 'student',
-            'teacher' => 'teacher',
+        // [会话键, 必须存在的字段]
+        $map = match ($identity) {
+            'admin'   => ['admin', 'id'],
+            'student' => ['student', 'id'],
+            'teacher' => ['teacher', 'id'],
+            // 考场会话独立存储，由 ExamController 维护
+            'exam'    => ['exam_session', 'exam_id'],
             default   => null,
         };
-        if ($key === null) {
+        if ($map === null) {
             return null;
         }
+        [$key, $idField] = $map;
         $sess = sess_get($key);
-        return is_array($sess) && isset($sess['id']) ? $sess : null;
+        return is_array($sess) && isset($sess[$idField]) ? $sess : null;
     }
 
     /**
@@ -293,9 +303,9 @@ class SessionAuthMiddleware implements Middleware
     /** 是否存在任一登录态 */
     private function anySession(): ?array
     {
-        foreach (['admin', 'student', 'teacher'] as $key) {
+        foreach ([['admin', 'id'], ['student', 'id'], ['teacher', 'id'], ['exam_session', 'exam_id']] as [$key, $idField]) {
             $sess = sess_get($key);
-            if (is_array($sess) && isset($sess['id'])) {
+            if (is_array($sess) && isset($sess[$idField])) {
                 return $sess;
             }
         }

@@ -27,6 +27,51 @@ class Exam extends Model
     /** 四种题型的组卷字段前缀 */
     public const TYPE_PREFIXES = ['radio1', 'radio2', 'checkbox', 'text'];
 
+    /** 旧系统实际状态取值（与库中存量数据一致，勿改） */
+    public const STATUS_TESTING  = 'testing';   // 进行中
+    public const STATUS_EXAM     = 'exam';      // 已开考
+    public const STATUS_PAPER    = 'paper';     // 已排卷
+    public const STATUS_OVER_BAK = 'overBak';   // 已结束（历史）
+
+    /** 「未结束」状态集合，用于考生端展示待考考试 */
+    public const ACTIVE_STATUSES = ['exam', 'paper', 'testing'];
+
+    /** 进行中的考试（含科目名/类别名），供前台门户展示 */
+    public static function activeWithSubject(): array
+    {
+        return \Core\Database::fetchAll(
+            "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
+                    e.exam_score, e.subj_id, s.subj_name, c.category_name
+             FROM `examinfo` e
+             INNER JOIN `subject` s ON s.id = e.subj_id
+             LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
+             WHERE e.exam_status = 'testing'
+             ORDER BY e.id DESC"
+        );
+    }
+
+    /** 已登录考生的待考考试（按班级匹配 + 交卷状态） */
+    public static function pendingForStudent(string $stuId, string $classId): array
+    {
+        $stuId = trim($stuId);
+        $classId = trim($classId);
+        if ($stuId === '' || $classId === '') {
+            return [];
+        }
+        return \Core\Database::fetchAll(
+            "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
+                    e.exam_score, s.subj_name, c.category_name, sc.stu_status, sc.stu_score
+             FROM `examinfo` e
+             INNER JOIN `subject` s ON s.id = e.subj_id
+             LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
+             LEFT JOIN `stuscore` sc ON sc.exam_id = e.id AND sc.stu_id = ?
+             WHERE e.exam_status IN ('exam', 'paper', 'testing')
+               AND FIND_IN_SET(?, e.stu_class) > 0
+             ORDER BY e.exam_start ASC, e.id DESC",
+            [$stuId, $classId]
+        );
+    }
+
     /** 从考试记录中提取组卷配置：[['type'=>'radio1','easy'=>n,'mid'=>n,'hard'=>n,'val'=>n], ...] */
     public static function paperPlan(array $exam): array
     {
