@@ -12,17 +12,28 @@ class HttpException extends \RuntimeException
     /** 405 时允许的方法列表，用于响应 Allow 头 */
     public array $allowedMethods = [];
 
+    /** 附加数据（如批量校验的失败明细），随响应 data 字段一同下发 */
+    public mixed $errorData = null;
+
     public function __construct(
         public readonly int $statusCode,
         string $message,
         public readonly int $errorCode = 0,
+        mixed $data = null,
     ) {
         parent::__construct($message);
+        $this->errorData = $data;
     }
 
     public function setAllowedMethods(array $methods): static
     {
         $this->allowedMethods = $methods;
+        return $this;
+    }
+
+    public function setData(mixed $data): static
+    {
+        $this->errorData = $data;
         return $this;
     }
 }

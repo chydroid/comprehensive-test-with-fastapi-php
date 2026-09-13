@@ -12,4 +12,25 @@ class Subject extends Model
     protected bool $timestamps = false;
 
     protected array $fillable = ['subj_name', 'subj_info'];
+
+    /** 科目名是否被他人占用 */
+    public function nameTaken(string $name, int $excludeId = 0): bool
+    {
+        $row = $this->firstWhere(['subj_name' => $name]);
+        return $row !== null && (int) $row['id'] !== $excludeId;
+    }
+
+    /** 该科目下是否已有题目（用于删除前校验） */
+    public function hasQuizzes(int $id): bool
+    {
+        $row = \Core\Database::fetch('SELECT COUNT(*) AS c FROM `quizlib` WHERE subj_id = ?', [$id]);
+        return (int) ($row['c'] ?? 0) > 0;
+    }
+
+    /** 该科目下是否有考试 */
+    public function hasExams(int $id): bool
+    {
+        $row = \Core\Database::fetch('SELECT COUNT(*) AS c FROM `examinfo` WHERE subj_id = ?', [$id]);
+        return (int) ($row['c'] ?? 0) > 0;
+    }
 }

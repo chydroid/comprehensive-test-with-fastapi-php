@@ -175,6 +175,7 @@ return [
             'image/png'  => 'png',
             'image/gif'  => 'gif',
             'image/webp' => 'webp',
+            'image/bmp'  => 'bmp',
         ],
     ],
 ];

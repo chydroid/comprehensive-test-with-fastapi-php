@@ -114,6 +114,50 @@ final class ExamEngine
         );
     }
 
+    /**
+     * 创建模拟考试记录（exam_class = '模拟考试'，exam_status = 'testing'）。
+     * 与正式考试的区分完全依赖 exam_class，因此监控/成绩等模块可据此排除模拟考试。
+     */
+    public static function createPracticeExam(array $config): int
+    {
+        Database::query(
+            "INSERT INTO `examinfo`
+                (exam_name, subj_id, exam_start, exam_end, exam_tea, stu_class, exam_status, exam_class)
+             VALUES (?, ?, ?, ?, '', '', 'testing', ?)",
+            [
+                (string) ($config['exam_name'] ?? '模拟考试'),
+                (int) ($config['subj_id'] ?? 0),
+                date('Y-m-d H:i:s'),
+                date('Y-m-d H:i:s', time() + 3600),
+                '模拟考试',
+            ]
+        );
+        return Database::lastInsertId();
+    }
+
+    /**
+     * 结束整场考试：为未交卷考生自动判分，并把考试状态置为 over。
+     * @return array{graded:int, total:int}
+     */
+    public static function endExam(int $examId): array
+    {
+        $rows = Database::fetchAll(
+            "SELECT stu_id, stu_status FROM `stuscore` WHERE exam_id = ?",
+            [$examId]
+        );
+        $graded = 0;
+        foreach ($rows as $r) {
+            // 已交卷（over 前缀）的跳过，避免重复判分
+            if (str_starts_with((string) ($r['stu_status'] ?? ''), 'over')) {
+                continue;
+            }
+            self::autoGrade($examId, (string) $r['stu_id']);
+            $graded++;
+        }
+        Database::query("UPDATE `examinfo` SET exam_status = 'over' WHERE id = ?", [$examId]);
+        return ['graded' => $graded, 'total' => count($rows)];
+    }
+
     /** 创建成绩记录（stu_pwd 为考场口令快照） */
     public static function createScore(int $examId, string $stuId, string $examPwd): void
     {

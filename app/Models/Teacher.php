@@ -18,6 +18,14 @@ class Teacher extends Model
         return $this->firstWhere(['tea_name' => $name]);
     }
 
+    /** 姓名是否被他人占用 */
+    public function nameTaken(string $name, int $excludeId = 0): bool
+    {
+        $row = $this->findByName($name);
+        return $row !== null && (int) $row['id'] !== $excludeId;
+    }
+
+    /** 剥离密码字段 */
     public static function sanitize(?array $row): ?array
     {
         if ($row === null) {

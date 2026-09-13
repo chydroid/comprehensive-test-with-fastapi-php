@@ -80,7 +80,7 @@ class App
             // 中间件链包裹路由分发：中间件先于路由匹配执行
             $response = $this->handle($request, $response);
         } catch (HttpException $e) {
-            $response->error($e->errorCode, $e->getMessage(), $e->statusCode);
+            $response->error($e->errorCode, $e->getMessage(), $e->statusCode, $e->errorData);
             if ($e->allowedMethods !== []) {
                 $response->header('Allow', implode(', ', $e->allowedMethods));
             }
@@ -204,7 +204,7 @@ class App
     {
         $response = new Response();
         if ($e instanceof HttpException) {
-            $response->error($e->errorCode, $e->getMessage(), $e->statusCode);
+            $response->error($e->errorCode, $e->getMessage(), $e->statusCode, $e->errorData);
         } else {
             $this->logError($e);
             $response->error(50000, $this->isDebug() ? $e->getMessage() : '服务器内部错误', 500);

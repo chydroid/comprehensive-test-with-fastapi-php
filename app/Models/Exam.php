@@ -50,6 +50,114 @@ class Exam extends Model
         );
     }
 
+    /**
+     * 管理端考试列表（支持按科目/状态/关键字过滤 + 分页）。
+     * @param array{subj_id?:int,status?:string,keyword?:string} $filters
+     * @return array{data:array,total:int}
+     */
+    public function adminList(array $filters, int $offset, int $perPage): array
+    {
+        $where = ['1=1'];
+        $params = [];
+        if (!empty($filters['subj_id'])) {
+            $where[] = 'e.subj_id = ?';
+            $params[] = (int) $filters['subj_id'];
+        }
+        if (!empty($filters['status'])) {
+            $where[] = 'e.exam_status = ?';
+            $params[] = (string) $filters['status'];
+        }
+        if (!empty($filters['keyword'])) {
+            $where[] = '(e.exam_name LIKE ? OR e.exam_class LIKE ?)';
+            $kw = '%' . $filters['keyword'] . '%';
+            $params[] = $kw;
+            $params[] = $kw;
+        }
+        $sqlWhere = implode(' AND ', $where);
+
+        $total = (int) (\Core\Database::fetch(
+            "SELECT COUNT(*) AS c FROM `examinfo` e WHERE {$sqlWhere}",
+            $params
+        )['c'] ?? 0);
+
+        $rows = \Core\Database::fetchAll(
+            "SELECT e.*, s.subj_name, c.category_name
+             FROM `examinfo` e
+             INNER JOIN `subject` s ON s.id = e.subj_id
+             LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
+             WHERE {$sqlWhere}
+             ORDER BY e.id DESC
+             LIMIT {$perPage} OFFSET {$offset}",
+            $params
+        );
+        return ['data' => $rows, 'total' => $total];
+    }
+
+    /** 单场考试详情（含科目/类别名） */
+    public function detail(int $id): ?array
+    {
+        return \Core\Database::fetch(
+            "SELECT e.*, s.subj_name, c.category_name
+             FROM `examinfo` e
+             INNER JOIN `subject` s ON s.id = e.subj_id
+             LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
+             WHERE e.id = ?",
+            [$id]
+        );
+    }
+
+    /** 已结束的正式考试（排除模拟考试），供成绩模块选择 */
+    public function finishedList(): array
+    {
+        return \Core\Database::fetchAll(
+            "SELECT e.id, e.exam_name, e.exam_status, e.exam_score, s.subj_name
+             FROM `examinfo` e
+             INNER JOIN `subject` s ON s.id = e.subj_id
+             WHERE LEFT(e.exam_status, 4) = 'over'
+               AND COALESCE(e.exam_class, '') != '模拟考试'
+             ORDER BY e.id DESC"
+        );
+    }
+
+    /**
+     * 启动考试：生成 6 位考场口令，写入考试与已建成绩记录。
+     * @return string 考场口令
+     */
+    public function start(int $id): string
+    {
+        $pwd = (string) random_int(100000, 999999);
+        \Core\Database::query(
+            "UPDATE `examinfo` SET exam_status = 'testing', exam_pwd = ? WHERE id = ?",
+            [$pwd, $id]
+        );
+        \Core\Database::query(
+            "UPDATE `stuscore` SET stu_pwd = ? WHERE exam_id = ?",
+            [$pwd, $id]
+        );
+        return $pwd;
+    }
+
+    /** 考生状态汇总：用于监控页与仪表盘 */
+    public function statusSummary(int $examId): array
+    {
+        $row = \Core\Database::fetch(
+            "SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN stu_status = 'online' THEN 1 ELSE 0 END) AS online,
+                    SUM(CASE WHEN stu_status = 'locked' THEN 1 ELSE 0 END) AS locked,
+                    SUM(CASE WHEN stu_status = 'waiting' THEN 1 ELSE 0 END) AS waiting,
+                    SUM(CASE WHEN LEFT(stu_status, 4) = 'over' THEN 1 ELSE 0 END) AS over_cnt
+             FROM `stuscore` WHERE exam_id = ?",
+            [$examId]
+        );
+        return [
+            'total'   => (int) ($row['total'] ?? 0),
+            'online'  => (int) ($row['online'] ?? 0),
+            'locked'  => (int) ($row['locked'] ?? 0),
+            'waiting' => (int) ($row['waiting'] ?? 0),
+            'over'    => (int) ($row['over_cnt'] ?? 0),
+        ];
+    }
+
     /** 已登录考生的待考考试（按班级匹配 + 交卷状态） */
     public static function pendingForStudent(string $stuId, string $classId): array
     {

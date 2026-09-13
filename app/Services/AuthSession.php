@@ -17,6 +17,8 @@ final class AuthSession
     public const ADMIN = 'admin';
     public const STUDENT = 'student';
     public const TEACHER = 'teacher';
+    /** 考场会话（由 ExamController 建立，与会话键名一致） */
+    public const EXAM = 'exam_session';
 
     /**
      * 建立登录态
@@ -36,8 +38,7 @@ final class AuthSession
     /** 当前登录的身份类型（优先级 admin > student > teacher），未登录返回 null */
     public static function current(): ?string
     {
-        foreach ([self::ADMIN, self::STUDENT, self::TEACHER] as $type) {
-            $s = sess_get($type);
+        foreach ([self::ADMIN, self::STUDENT, self::TEACHER] as $type) {            $s = sess_get($type);
             if (is_array($s) && isset($s['id'])) {
                 return $type;
             }
@@ -83,5 +84,6 @@ final class AuthSession
         sess_forget(self::ADMIN);
         sess_forget(self::STUDENT);
         sess_forget(self::TEACHER);
+        sess_forget(self::EXAM);
     }
 }

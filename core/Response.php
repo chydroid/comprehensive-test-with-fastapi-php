@@ -164,6 +164,24 @@ class Response
         return $this;
     }
 
+    /**
+     * 直接把字符串作为附件下载（用于 CSV 导出等动态内容）。
+     * 与 download() 的区别：不落盘、可被 CLI 测试捕获。
+     */
+    public function downloadText(string $content, string $name, string $contentType = 'text/csv; charset=utf-8'): static
+    {
+        $this->body = $content;
+        $this->rawHtml = true;
+        $this->rawContentType = $contentType;
+        $this->statusCode = 200;
+        $this->headers = array_merge($this->headers, [
+            'Content-Type'        => $contentType,
+            'Content-Disposition' => 'attachment; filename="' . rawurlencode($name) . '"',
+            'Content-Length'      => (string) strlen($content),
+        ]);
+        return $this;
+    }
+
     public function send(): void
     {
         self::emitStatus($this->statusCode);
