@@ -212,13 +212,25 @@ abstract class Model
         }
     }
 
-    /** 校验排序子句：允许 "col" 或 "col ASC/DESC"，返回规范化结果 */
+    /**
+     * 校验排序子句：支持单列或多列（逗号分隔），每列可带 ASC/DESC。
+     * 例："id DESC" / "sort_order ASC, id ASC" / "sort_order, id DESC"
+     * 任何不含法的片段都会抛异常，杜绝 SQL 注入。
+     */
     private function assertOrderBy(string $orderBy): string
     {
-        if (!preg_match('/^([A-Za-z_][A-Za-z0-9_]*)(?:\s+(ASC|DESC))?$/i', trim($orderBy), $m)) {
-            throw new \InvalidArgumentException("非法排序字段: {$orderBy}");
+        $parts = array_filter(array_map('trim', explode(',', $orderBy)), static fn ($s) => $s !== '');
+        if ($parts === []) {
+            throw new \InvalidArgumentException('排序字段不能为空');
         }
-        return '`' . $m[1] . '`' . (isset($m[2]) ? ' ' . strtoupper($m[2]) : '');
+        $normalized = [];
+        foreach ($parts as $part) {
+            if (!preg_match('/^([A-Za-z_][A-Za-z0-9_]*)(?:\s+(ASC|DESC))?$/i', $part, $m)) {
+                throw new \InvalidArgumentException("非法排序字段: {$orderBy}");
+            }
+            $normalized[] = '`' . $m[1] . '`' . (isset($m[2]) ? ' ' . strtoupper($m[2]) : '');
+        }
+        return implode(', ', $normalized);
     }
 
     /** 仅保留 fillable 白名单字段；白名单为空表示全部接受；所有列名走白名单校验（纵深防御） */

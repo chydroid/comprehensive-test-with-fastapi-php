@@ -1,0 +1,246 @@
+/**
+ * 模拟考试视图：自主组卷 → 限时答题（复用 exam-runner）→ 成绩与错题回顾。
+ */
+
+import { el, clear, mount } from '../../core/dom.js';
+import { icon } from '../../core/icons.js';
+import {
+  button, card, badge, field, input, select, table, notify, alertBox,
+} from '../../ui/components.js';
+import { withLoading } from '../../core/bootstrap.js';
+import { exerciseApi } from '../../api/index.js';
+import { createExamRunner, QTYPE } from '../exam-runner.js';
+import { fmtScore, fmtDuration } from '../../core/format.js';
+
+/** 模拟考试默认分值（与后端 VALUE_MAP 一致） */
+const MOCK_VALUE = { radio1: 2, radio2: 2, checkbox: 3, text: 5 };
+
+/* ============================ 组卷配置 ============================ */
+export function MockSetupView({ router }) {
+  const root = el('div.stack');
+  const bodySlot = el('div');
+
+  const state = { subjects: [], subjId: 0, counts: {}, want: { radio1: 0, radio2: 0, checkbox: 0, text: 0 } };
+
+  root.append(el('div.page-head', {}, [
+    el('div', {}, [
+      el('h1.page-title', { text: '模拟考试' }),
+      el('p.page-sub', { text: '自主配置题型数量，系统随机组卷' }),
+    ]),
+    el('div.page-head-actions', {}, [
+      button('返回', { variant: 'ghost', size: 'sm', iconName: 'arrow-left', onClick: () => router.navigate('/exercise') }),
+    ]),
+  ]), bodySlot);
+
+  (async () => {
+    const res = await withLoading(bodySlot, () => exerciseApi.mockConfig());
+    if (!res.ok) return;
+    state.subjects = res.result.subjects || [];
+    if (!state.subjects.length) { mount(bodySlot, alertBox('暂无可用科目', { type: 'warning' })); return; }
+    state.subjId = state.subjects[0].id;
+    await loadCounts();
+    render();
+  })();
+
+  async function loadCounts() {
+    const res = await exerciseApi.mockCounts({ subj_id: state.subjId }).catch(() => null);
+    state.counts = (res && res.counts) || { radio1: 0, radio2: 0, checkbox: 0, text: 0 };
+  }
+
+  function render() {
+    clear(bodySlot);
+    const subjSel = select(
+      state.subjects.map((s) => ({ value: String(s.id), label: s.subj_name })),
+      { name: 'subj_id', value: String(state.subjId) },
+    );
+    subjSel.addEventListener('change', async () => {
+      state.subjId = Number(subjSel.value);
+      await loadCounts();
+      render();
+    });
+
+    const rows = [];
+    for (const t of ['radio1', 'radio2', 'checkbox', 'text']) {
+      const max = state.counts[t] || 0;
+      const numIn = input({ type: 'number', value: String(state.want[t] || 0), min: 0, max });
+      numIn.addEventListener('input', () => {
+        const v = Math.max(0, Math.min(max, Number(numIn.value) || 0));
+        state.want[t] = v;
+        numIn.value = String(v);
+        updateSummary();
+      });
+      rows.push({ type: t, label: QTYPE[t]?.label || t, max, numIn });
+    }
+
+    const totalNode = el('strong');
+    const scoreNode = el('strong');
+    function updateSummary() {
+      const total = Object.values(state.want).reduce((a, b) => a + b, 0);
+      const score = Object.entries(state.want).reduce((sum, [t, n]) => sum + n * (MOCK_VALUE[t] || 0), 0);
+      totalNode.textContent = `${total} 题`;
+      scoreNode.textContent = `${score} 分`;
+      startBtn.disabled = total <= 0;
+    }
+
+    const startBtn = button('开始模拟考试', {
+      variant: 'primary', iconName: 'play', block: true,
+      onClick: async () => {
+        const payload = { subj_id: state.subjId };
+        for (const [t, n] of Object.entries(state.want)) payload[`${t}_count`] = n;
+        const res = await withLoading(startBtn, () => exerciseApi.mockStart(payload));
+        if (!res.ok) {
+          const detail = res.error?.data;
+          notify.error(res.error?.message || '组卷失败');
+          if (Array.isArray(detail) && detail.length) {
+            detail.forEach((d) => notify.warning(`${d.label || d.type}：需要 ${d.need} 题，题库仅 ${d.have} 题`));
+          }
+          return;
+        }
+        notify.success(`已生成 ${res.result.total} 题试卷`);
+        router.navigate(`/exercise/mock/take?exam_id=${res.result.exam_id}`);
+      },
+    });
+
+    const t = table({
+      columns: [
+        { key: 'label', label: '题型' },
+        { key: 'max', label: '题库数量', align: 'right', render: (r) => el('span.muted', { text: String(r.max) }) },
+        { key: 'val', label: '每题分值', align: 'right', render: (r) => el('span', { text: `${MOCK_VALUE[r.type] || 0} 分` }) },
+        { key: 'want', label: '抽取数量', align: 'right', render: (r) => r.numIn },
+      ],
+      rows,
+      emptyText: '',
+    });
+
+    bodySlot.append(card({
+      iconName: 'edit-3',
+      body: el('div.stack', {}, [
+        el('div.form-grid', {}, [field('考试科目', subjSel)]),
+        el('div.table-wrap', {}, [t]),
+        el('div.desc-list', {}, [
+          el('div.dl-row', {}, [el('span.dl-key', { text: '总题数' }), el('span.dl-val', {}, [totalNode])]),
+          el('div.dl-row', {}, [el('span.dl-key', { text: '总分' }), el('span.dl-val', {}, [scoreNode])]),
+        ]),
+        startBtn,
+      ]),
+    }));
+    updateSummary();
+  }
+
+  return root;
+}
+
+/* ============================ 模拟答题 ============================ */
+export function MockTakeView({ router, query }) {
+  const examId = Number(query?.exam_id || 0);
+  const host = el('div.stack');
+
+  if (!examId) {
+    host.append(alertBox('缺少 exam_id 参数', { type: 'danger' }));
+    return host;
+  }
+
+  const runner = createExamRunner({
+    mode: 'mock',
+    title: '模拟考试',
+    exitUrl: '/exercise',
+    loadPaper: (paperId) => exerciseApi.mockPaper({ exam_id: examId, paper_id: paperId }),
+    saveAnswer: (paperId, answer) => exerciseApi.mockSave({ exam_id: examId, paper_id: paperId, stu_key: answer }),
+    submit: () => exerciseApi.mockSubmit({ exam_id: examId }),
+    loadReview: () => exerciseApi.mockOver({ exam_id: examId }),
+    onRetry: () => router.navigate('/exercise/mock'),
+  });
+
+  mount(host, runner.node);
+  runner.start();
+  return host;
+}
+
+/* ============================ 错题回顾 ============================ */
+export function MockReviewView({ router, query }) {
+  const examId = Number(query?.exam_id || 0);
+  const root = el('div.stack');
+  const bodySlot = el('div');
+
+  root.append(el('div.page-head', {}, [
+    el('div', {}, [el('h1.page-title', { text: '错题回顾' }), el('p.page-sub', { text: '只看做错的题，逐题对照正确答案' })]),
+    el('div.page-head-actions', {}, [
+      button('返回', { variant: 'ghost', size: 'sm', iconName: 'arrow-left', onClick: () => router.navigate('/exercise') }),
+    ]),
+  ]), bodySlot);
+
+  (async () => {
+    const res = await withLoading(bodySlot, () => exerciseApi.mockReview({ exam_id: examId }));
+    if (!res.ok) { mount(bodySlot, alertBox(res.error?.message || '加载失败', { type: 'danger' })); return; }
+    const d = res.result;
+    const wrong = d.wrong || [];
+
+    const statSlot = el('div.grid-stats', {}, [
+      stat({ label: '总题数', value: d.total_count, iconName: 'list' }),
+      stat({ label: '答对', value: d.right_count, iconName: 'check-circle', tone: 'success' }),
+      stat({ label: '答错', value: wrong.length, iconName: 'x-circle', tone: 'danger' }),
+      stat({ label: '得分', value: `${fmtScore(d.score)}/${fmtScore(d.total_score)}`, iconName: 'award', tone: 'brand' }),
+    ]);
+
+    if (!wrong.length) {
+      mount(bodySlot, el('div.stack', {}, [
+        statSlot,
+        el('div.card.pad-lg.center', {}, [
+          icon('party-popper', { size: 42 }),
+          el('h3', { text: '全部答对，太棒了！' }),
+          button('再做一套', { variant: 'primary', onClick: () => router.navigate('/exercise/mock') }),
+        ]),
+      ]));
+      return;
+    }
+
+    const listNode = el('div.stack', {}, wrong.map((w) => {
+      const box = el('div.card');
+      box.append(el('div.card-head', {}, [
+        el('div.card-title', {}, [badge(w.quiz_class_name || w.quiz_class, { tone: 'brand' }), el('span', { text: `第 ${w.paper_id} 题` })]),
+      ]));
+      const body = el('div.card-body.stack');
+      body.append(el('div.question-stem', { text: w.quiz_title }));
+      if (w.quiz_pic_name) {
+        const img = el('img.question-pic', { src: `/uploads/pic/${w.quiz_pic_name}`, alt: '题目配图' });
+        img.addEventListener('error', () => img.remove());
+        body.append(img);
+      }
+      const opts = w.quiz_option_list || [];
+      if (opts.length) {
+        const correct = keys(w.quiz_key);
+        const mine = keys(w.stu_key);
+        const list = el('div.option-list');
+        for (const o of opts) {
+          const cls = correct.includes(o.key) ? ' is-correct' : (mine.includes(o.key) ? ' is-wrong' : '');
+          list.append(el('div.option-item' + cls, {}, [
+            el('span.option-key', { text: o.key }),
+            el('span.option-text', { text: o.text }),
+          ]));
+        }
+        body.append(list);
+      }
+      body.append(el('div.explain-answer', {}, [
+        el('span.explain-key', { text: '正确答案：' + (w.quiz_key || '—') }),
+        el('span.explain-mine.muted', { text: '我的答案：' + (w.stu_key || '未作答') }),
+      ]));
+      box.append(body);
+      return box;
+    }));
+
+    mount(bodySlot, el('div.stack', {}, [statSlot, listNode]));
+  })();
+
+  function keys(v) {
+    return String(v || '').toUpperCase().replace(/[^A-Z]/g, '').split('').filter(Boolean);
+  }
+
+  function stat(cfg) {
+    return el('div.stat-card', {}, [
+      el('div.stat-icon', {}, [icon(cfg.iconName, { size: 18 })]),
+      el('div', {}, [el('div.stat-value', { text: String(cfg.value) }), el('div.stat-label', { text: cfg.label })]),
+    ]);
+  }
+
+  return root;
+}

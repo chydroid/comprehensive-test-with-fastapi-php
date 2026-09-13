@@ -21,12 +21,17 @@ abstract class Controller
      * 规则用 | 分隔，支持：required、email、numeric、integer、boolean、
      * min:N、max:N、minlen:N、maxlen:N、in:a,b,c、regex:/pattern/。
      * 非必填且未提供/为空的字段不参与校验、也不出现在返回数组中。
+     *
+     * 取值来源为 query + body 合并（body 优先），故同一套规则对 GET 查询串
+     * 与 POST/PUT JSON 体均生效；显式传值为 null 时表示「不参与校验」，
+     * 便于个别字段（如数组型 stu_key）绕开标量防护自行处理。
      */
     protected function validate(array $rules): array
     {
+        $input = $this->request->all();
         $validated = [];
         foreach ($rules as $field => $rule) {
-            $value = $this->request->input($field);
+            $value = $input[$field] ?? null;
             $parts = array_values(array_filter(
                 array_map('trim', explode('|', (string) $rule)),
                 static fn (string $p): bool => $p !== ''

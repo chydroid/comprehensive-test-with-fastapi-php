@@ -44,6 +44,11 @@ final class Http
         $raw = $body === [] ? '' : json_encode($body, JSON_UNESCAPED_UNICODE);
         \Core\Request::setInputBody($raw);
 
+        // 优雅处理缺少 $_SERVER['HTTP_HOST'] 的 CLI 环境
+        if (!isset($_SERVER['HTTP_HOST'])) {
+            $_SERVER['HTTP_HOST'] = 'localhost';
+        }
+
         ob_start();
         \Core\Response::capture(true);
         try {

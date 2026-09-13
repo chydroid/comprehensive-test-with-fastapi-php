@@ -13,6 +13,9 @@ composer.lock
 !/storage/cache/.gitkeep
 !/storage/logs/.gitkeep
 
+# 临时调试脚本与产物（探针、静态检查、生成的中间文件）
+/temp/
+
 # 上传目录（保留占位）
 /public/uploads/*
 !/public/uploads/.gitkeep

@@ -30,7 +30,7 @@ class HomeController extends BaseController
                 SUM(CASE WHEN quiz_class='radio2'   THEN 1 ELSE 0 END) AS radio2,
                 SUM(CASE WHEN quiz_class='checkbox' THEN 1 ELSE 0 END) AS checkbox,
                 SUM(CASE WHEN quiz_class='text'     THEN 1 ELSE 0 END) AS text,
-                SUM(CASE WHEN quiz_class='longtext' THEN 1 ELSE 0 END) AS longtext,
+                SUM(CASE WHEN quiz_class='longtext' THEN 1 ELSE 0 END) AS `longtext`,
                 COUNT(*) AS total
              FROM `quizlib`"
         ) ?? [];

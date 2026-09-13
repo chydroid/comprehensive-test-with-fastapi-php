@@ -76,12 +76,14 @@ return [
 
     /* ==================== 考生注册 / 登录 ==================== */
     ['POST', '/api/student/register',      [StudentAuthController::class, 'register']],
+    ['GET',  '/api/student/register/options', [StudentAuthController::class, 'registerOptions']],
     ['POST', '/api/student/login',         [StudentAuthController::class, 'login']],
     ['POST', '/api/student/logout',        [StudentAuthController::class, 'logout']],
     ['GET',  '/api/student/me',            [StudentAuthController::class, 'me']],
 
     /* ==================== 考生个人中心 ==================== */
     ['GET',  '/api/student/info',          [StudentCenterController::class, 'info']],
+    ['GET',  '/api/student/options',       [StudentCenterController::class, 'options']],
     ['PUT',  '/api/student/info',          [StudentCenterController::class, 'saveInfo']],
     ['PUT',  '/api/student/password',      [StudentCenterController::class, 'savePwd']],
     ['GET',  '/api/student/scores',        [StudentCenterController::class, 'scores']],
@@ -99,6 +101,7 @@ return [
     /* ==================== 在线练习 ==================== */
     ['GET',  '/api/exercise',              [ExerciseController::class, 'index']],
     ['POST', '/api/exercise',              [ExerciseController::class, 'index']],
+    ['POST', '/api/exercise/answer',       [ExerciseController::class, 'check']],
 
     /* ==================== 模拟考试 ==================== */
     ['GET',  '/api/exercise/mock/config',  [ExerciseExamController::class, 'config']],
@@ -253,4 +256,13 @@ return [
     ['GET', '/api/openapi.json', [\App\Controllers\DocController::class, 'openapi']],
     ['GET', '/api/docs',         [\App\Controllers\DocController::class, 'swagger']],
     ['GET', '/api/metrics',      [\App\Controllers\MetricsController::class, 'metrics']],
+
+    /* ==================== 前端页面（SPA 外壳） ==================== */
+    ['GET', '/',          [\App\Controllers\PageController::class, 'portal']],
+    ['GET', '/portal',    [\App\Controllers\PageController::class, 'portal']],
+    ['GET', '/student',   [\App\Controllers\PageController::class, 'student']],
+    ['GET', '/exam',      [\App\Controllers\PageController::class, 'exam']],
+    ['GET', '/exercise',  [\App\Controllers\PageController::class, 'exercise']],
+    ['GET', '/teacher',   [\App\Controllers\PageController::class, 'teacher']],
+    ['GET', '/admin',     [\App\Controllers\PageController::class, 'admin']],
 ];
