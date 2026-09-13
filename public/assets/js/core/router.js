@@ -14,6 +14,7 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
   let disposer = null;  // 上一个视图的清理函数
   let started = false;
   let compiled = [];
+  let api = null;       // 对外暴露的 router 实例（供 ctx.router 使用）
 
   /** 把 '/students/:id' 编译为正则 */
   function compile(path) {
@@ -34,6 +35,13 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
   function addRoute(route) {
     compiled.push({ ...route, ...compile(route.path) });
   }
+
+  api = {
+    start, stop, navigate, resolve, setRoutes, addRoute,
+    get current() { return current; },
+    /** 重新渲染当前路由（数据刷新后调用） */
+    refresh: handle,
+  };
 
   setRoutes(routes);
 
@@ -98,7 +106,7 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
       : (window.__APP_NAME__ || '在线考试系统');
 
     try {
-      const result = await target.route.view({ params: target.params, query: target.query, router, route: target.route });
+      const result = await target.route.view({ params: target.params, query: target.query, router: api, route: target.route });
 
       // 支持四种返回值：
       //   1) Node              → 直接挂载
@@ -158,10 +166,5 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
     disposer = null;
   }
 
-  return {
-    start, stop, navigate, resolve, setRoutes, addRoute,
-    get current() { return current; },
-    /** 重新渲染当前路由（数据刷新后调用） */
-    refresh: handle,
-  };
+  return api;
 }

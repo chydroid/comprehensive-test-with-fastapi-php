@@ -5,7 +5,7 @@
 import { applyInitialTheme } from '../core/bootstrap.js';
 import { createRouter } from '../core/router.js';
 import { createShell } from '../ui/shell.js';
-import { el, clear } from '../core/dom.js';
+import { appRoot } from '../core/dom.js';
 import { emptyStated, notify } from '../ui/components.js';
 import { studentSession } from '../core/student-session.js';
 
@@ -46,6 +46,7 @@ const VIEWS = {
 };
 
 const outlet = document.createElement('div');
+appRoot().append(outlet);
 const router = createRouter({
   routes: [],
   outlet,
@@ -63,9 +64,8 @@ function renderAuth() {
     router,
     onDone: () => startShell(),
   });
-  const el = appRoot();
-  el.append(page);
   router.setRoutes([
+    { path: '/', view: () => page },
     { path: '/login', view: () => page },
     { path: '/register', view: () => StudentRegisterView({ router }) },
   ]);

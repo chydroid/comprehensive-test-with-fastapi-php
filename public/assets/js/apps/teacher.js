@@ -35,6 +35,7 @@ applyInitialTheme();
 document.title = APP_NAME;
 
 const outlet = document.createElement('div');
+appRoot().append(outlet);
 const router = createRouter({
   routes: [],
   outlet,
@@ -72,9 +73,10 @@ function renderLoginPage() {
       startShell();
     },
   });
-  const el = appRoot();
-  el.append(page);
-  router.setRoutes([{ path: '/login', view: () => page }]);
+  router.setRoutes([
+    { path: '/', view: () => page },
+    { path: '/login', view: () => page },
+  ]);
   router.start();
 }
 

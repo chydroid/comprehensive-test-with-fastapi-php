@@ -25,6 +25,7 @@ applyInitialTheme();
 document.title = '在线练习';
 
 const outlet = document.createElement('div');
+appRoot().append(outlet);
 const router = createRouter({
   routes: [],
   outlet,
@@ -37,11 +38,9 @@ studentSession.installHandlers();
 function renderAuth() {
   if (shell) { shell.destroy(); shell = null; }
   const page = StudentLoginView({ router, onDone: () => startShell() });
-  const el = appRoot();
-  el.append(page);
   router.setRoutes([
-    { path: '/login', view: () => page },
     { path: '/', view: () => page },
+    { path: '/login', view: () => page },
   ]);
   router.start();
 }

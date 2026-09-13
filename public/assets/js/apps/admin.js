@@ -130,8 +130,8 @@ function renderLoginPage() {
     },
   });
 
-  const el = appRoot();
-  el.append(page);
+  const root = appRoot();
+  root.append(page);
 }
 
 /* ============================ 后台外壳 ============================ */
