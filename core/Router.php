@@ -53,27 +53,17 @@ class Router
         $path = $request->path();
         $method = $request->method();
 
-        // 先尝试当前方法精确匹配
-        foreach ($this->routes[$method] ?? [] as $route) {
-            if (preg_match($route['pattern'], $path, $matches)) {
-                $params = array_map(
-                    'urldecode',
-                    array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY)
-                );
-                return [$route['handler'], $params, $route['middleware']];
-            }
+        // 先尝试当前方法匹配（静态路由优先于参数路由，避免 /users/{id} 抢匹配 /users/check-id）
+        $hit = $this->matchInMethod($method, $path);
+        if ($hit !== null) {
+            return $hit;
         }
 
         // HEAD 无专用路由时回退到 GET（HTTP 语义：HEAD 应返回与 GET 相同的头）
-        if ($method === 'HEAD' && isset($this->routes['GET'])) {
-            foreach ($this->routes['GET'] as $route) {
-                if (preg_match($route['pattern'], $path, $matches)) {
-                    $params = array_map(
-                        'urldecode',
-                        array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY)
-                    );
-                    return [$route['handler'], $params, $route['middleware']];
-                }
+        if ($method === 'HEAD') {
+            $hit = $this->matchInMethod('GET', $path);
+            if ($hit !== null) {
+                return $hit;
             }
         }
 
@@ -95,6 +85,45 @@ class Router
         throw new HttpException(404, '路由不存在', 40400);
     }
 
+    /**
+     * 在指定方法的路由集合中查找首个匹配项。
+     * 匹配策略：静态路由（路径中不含 {param}）优先于参数路由，组内保持注册顺序。
+     * 这样 /api/admin/students/check-id 不会被先注册的 /api/admin/students/{id} 抢匹配。
+     *
+     * @return array{0:callable|array,1:array,2:array}|null
+     */
+    private function matchInMethod(string $method, string $path): ?array
+    {
+        $routes = $this->routes[$method] ?? [];
+        // 第一遍：静态路由优先
+        foreach ($routes as $route) {
+            if (strpos($route['path'], '{') !== false) {
+                continue;
+            }
+            if (preg_match($route['pattern'], $path, $matches)) {
+                $params = array_map(
+                    'urldecode',
+                    array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY)
+                );
+                return [$route['handler'], $params, $route['middleware']];
+            }
+        }
+        // 第二遍：参数路由
+        foreach ($routes as $route) {
+            if (strpos($route['path'], '{') === false) {
+                continue;
+            }
+            if (preg_match($route['pattern'], $path, $matches)) {
+                $params = array_map(
+                    'urldecode',
+                    array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY)
+                );
+                return [$route['handler'], $params, $route['middleware']];
+            }
+        }
+        return null;
+    }
+
     /** 列出全部已注册路由（方法 => 路由定义），供 CLI/调试使用 */
     public function all(): array
     {
@@ -105,7 +134,20 @@ class Router
     public function match(string $method, string $path): ?string
     {
         $method = strtoupper($method);
-        foreach ($this->routes[$method] ?? [] as $route) {
+        $routes = $this->routes[$method] ?? [];
+        // 静态路由优先
+        foreach ($routes as $route) {
+            if (strpos($route['path'], '{') !== false) {
+                continue;
+            }
+            if (preg_match($route['pattern'], $path)) {
+                return $route['path'];
+            }
+        }
+        foreach ($routes as $route) {
+            if (strpos($route['path'], '{') === false) {
+                continue;
+            }
             if (preg_match($route['pattern'], $path)) {
                 return $route['path'];
             }
@@ -113,6 +155,17 @@ class Router
         // HEAD 回退到 GET
         if ($method === 'HEAD' && isset($this->routes['GET'])) {
             foreach ($this->routes['GET'] as $route) {
+                if (strpos($route['path'], '{') !== false) {
+                    continue;
+                }
+                if (preg_match($route['pattern'], $path)) {
+                    return $route['path'];
+                }
+            }
+            foreach ($this->routes['GET'] as $route) {
+                if (strpos($route['path'], '{') === false) {
+                    continue;
+                }
                 if (preg_match($route['pattern'], $path)) {
                     return $route['path'];
                 }
