@@ -211,6 +211,11 @@ export function createListView(cfg) {
 
   root.append(head, toolbarWrap, tableSlot, pagerSlot);
 
+  // 启动：构建工具条（搜索/筛选/操作按钮）并立即加载第一页数据。
+  // 缺少这两步时页面只会渲染出页头标题，表格区永远空白。
+  buildToolbar();
+  load();
+
   return {
     root,
     state,
