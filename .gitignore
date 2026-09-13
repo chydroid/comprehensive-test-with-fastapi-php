@@ -1,0 +1,35 @@
+# 环境与密钥
+.env
+.env.local
+*.log
+
+# 依赖（本项目零 Composer 依赖，保留以备扩展）
+/vendor/
+composer.lock
+
+# 运行时产物
+/storage/cache/*
+/storage/logs/*
+!/storage/cache/.gitkeep
+!/storage/logs/.gitkeep
+
+# 上传目录（保留占位）
+/public/uploads/*
+!/public/uploads/.gitkeep
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 大体积二进制与备份
+*.docx
+*.doc
+*.bak
+*.zip
+*.tar.gz
+
+# WorkBuddy 工作区数据
+.workbuddy/
