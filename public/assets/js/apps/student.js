@@ -73,6 +73,14 @@ function renderAuth() {
 }
 
 /* ============================ 外壳 ============================ */
+function renderErrorNode(err, label) {
+  const s = document.createElement('section');
+  s.className = 'alert alert-danger';
+  s.style.margin = 'var(--sp-6)';
+  s.textContent = `「${label || '页面'}」加载失败：${err?.message || err}`;
+  return s;
+}
+
 function startShell() {
   if (!studentSession.isLoggedIn) return renderAuth();
 
@@ -99,29 +107,41 @@ function startShell() {
   const routes = [
     ...NAV.filter((n) => VIEWS[n.key]).map((n) => ({
       path: n.key === 'exams' ? '/' : `/${n.key}`,
-      view: (ctx) => {
+      view: async (ctx) => {
         shell.setActive(n.key);
         shell.setTitle(n.label);
         shell.setActions([]);
-        return VIEWS[n.key]({ router, query: ctx.query, params: ctx.params });
+        try {
+          const node = await VIEWS[n.key]({ router, query: ctx.query, params: ctx.params });
+          shell.setContent(node);
+        } catch (e) {
+          console.error('[student] view render failed:', n.key, e);
+          shell.setContent(renderErrorNode(e, n.label));
+        }
+        // 返回 undefined：视图已自行挂载到 shell.content，勿塞进游离 outlet
+        return undefined;
       },
       meta: { title: n.label },
     })),
     // 模拟考试答题页（独立全屏视图）
     {
       path: '/mock/take',
-      view: (ctx) => {
+      view: async (ctx) => {
         shell.setActive('mock');
         shell.setTitle('模拟考试');
-        return MockTakeView({ router, query: ctx.query });
+        try { shell.setContent(await MockTakeView({ router, query: ctx.query })); }
+        catch (e) { shell.setContent(renderErrorNode(e, '模拟考试')); }
+        return undefined;
       },
     },
     {
       path: '/mock/review',
-      view: (ctx) => {
+      view: async (ctx) => {
         shell.setActive('mock');
         shell.setTitle('错题回顾');
-        return MockReviewView({ router, query: ctx.query });
+        try { shell.setContent(await MockReviewView({ router, query: ctx.query })); }
+        catch (e) { shell.setContent(renderErrorNode(e, '错题回顾')); }
+        return undefined;
       },
     },
   ];

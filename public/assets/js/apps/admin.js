@@ -85,8 +85,14 @@ document.title = APP_NAME;
 
 const router = createRouter({
   routes: [],
-  outlet: document.createElement('div'),  // 外壳接管渲染，此处仅作占位
-  notFound: (t) => emptyStated('页面不存在', { iconName: 'alert-circle', desc: `路径 ${t.path} 无效` }),
+  // 注意：后台由 shell 接管渲染，视图必须挂到 shell.content（可见区域）。
+  // 此处 outlet 仅为占位，guardView 会自行 setContent 到 shell.content 并返回 undefined，
+  // 路由不会再把它塞进这个游离 div。
+  outlet: document.createElement('div'),
+  notFound: (t) => {
+    shell?.setContent?.(emptyStated('页面不存在', { iconName: 'alert-circle', desc: `路径 ${t.path} 无效` }));
+    return undefined;
+  },
 });
 
 let shell = null;
@@ -156,6 +162,7 @@ function startShell() {
     },
     onNavigate: (key) => {
       if (key === 'profile') router.navigate('/profile');
+      else if (key === 'dashboard') router.navigate('/');
       else router.navigate(`/${key}`);
     },
     onLogout: async () => {
@@ -181,19 +188,43 @@ function startShell() {
   router.start();
 }
 
-/** 路由守卫：无权限则渲染 403 提示 */
-function guardView(item, view, ctx) {
-  if (item.perm && !can(item.perm)) {
-    return emptyStated('无权访问', {
-      iconName: 'lock',
-      desc: '当前账号没有访问该模块的权限，请联系超级管理员分配。',
-      action: button('返回仪表盘', { variant: 'secondary', onClick: () => router.navigate('/') }),
-    });
-  }
+/** 视图渲染失败兜底（渲染到可见内容区，避免错误被塞进游离 outlet 而看不见） */
+function renderErrorNode(err, label) {
+  const s = document.createElement('section');
+  s.className = 'alert alert-danger';
+  s.style.margin = 'var(--sp-6)';
+  s.textContent = `「${label || '页面'}」加载失败：${err?.message || err}`;
+  return s;
+}
+
+/**
+ * 路由守卫：
+ * - 无权限 → 渲染 403 提示
+ * - 有权限 → 渲染视图到 shell.content（可见区域）
+ * 关键：返回 undefined，告知 router「视图已自行挂载」，不要再把它塞进游离 outlet。
+ */
+async function guardView(item, view, ctx) {
   shell.setActive(item.key);
   shell.setTitle(item.label);
   shell.setActions([]);
-  return view({ router, can, query: ctx.query, params: ctx.params, shell, session, item });
+
+  if (item.perm && !can(item.perm)) {
+    shell.setContent(emptyStated('无权访问', {
+      iconName: 'lock',
+      desc: '当前账号没有访问该模块的权限，请联系超级管理员分配。',
+      action: button('返回仪表盘', { variant: 'secondary', onClick: () => router.navigate('/') }),
+    }));
+    return undefined;
+  }
+
+  try {
+    const node = await view({ router, can, query: ctx.query, params: ctx.params, shell, session, item });
+    shell.setContent(node);
+  } catch (e) {
+    console.error('[admin] view render failed:', item.key, e);
+    shell.setContent(renderErrorNode(e, item.label));
+  }
+  return undefined;
 }
 
 function ROLE_LABEL(role) {

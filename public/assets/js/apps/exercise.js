@@ -45,6 +45,14 @@ function renderAuth() {
   router.start();
 }
 
+function renderErrorNode(err, label) {
+  const s = document.createElement('section');
+  s.className = 'alert alert-danger';
+  s.style.margin = 'var(--sp-6)';
+  s.textContent = `「${label || '页面'}」加载失败：${err?.message || err}`;
+  return s;
+}
+
 function startShell() {
   if (!studentSession.isLoggedIn) return renderAuth();
 
@@ -68,10 +76,10 @@ function startShell() {
   shell.mount();
 
   router.setRoutes([
-    { path: '/', view: (ctx) => { shell.setActive('exercise'); shell.setTitle('在线练习'); return ExerciseView({ router, query: ctx.query }); } },
-    { path: '/mock', view: (ctx) => { shell.setActive('mock'); shell.setTitle('模拟考试'); return MockSetupView({ router, query: ctx.query }); } },
-    { path: '/mock/take', view: (ctx) => { shell.setActive('mock'); shell.setTitle('模拟考试'); return MockTakeView({ router, query: ctx.query }); } },
-    { path: '/mock/review', view: (ctx) => { shell.setActive('mock'); shell.setTitle('错题回顾'); return MockReviewView({ router, query: ctx.query }); } },
+    { path: '/', view: async (ctx) => { shell.setActive('exercise'); shell.setTitle('在线练习'); try { shell.setContent(await ExerciseView({ router, query: ctx.query })); } catch (e) { shell.setContent(renderErrorNode(e, '在线练习')); } return undefined; } },
+    { path: '/mock', view: async (ctx) => { shell.setActive('mock'); shell.setTitle('模拟考试'); try { shell.setContent(await MockSetupView({ router, query: ctx.query })); } catch (e) { shell.setContent(renderErrorNode(e, '模拟考试')); } return undefined; } },
+    { path: '/mock/take', view: async (ctx) => { shell.setActive('mock'); shell.setTitle('模拟考试'); try { shell.setContent(await MockTakeView({ router, query: ctx.query })); } catch (e) { shell.setContent(renderErrorNode(e, '模拟考试')); } return undefined; } },
+    { path: '/mock/review', view: async (ctx) => { shell.setActive('mock'); shell.setTitle('错题回顾'); try { shell.setContent(await MockReviewView({ router, query: ctx.query })); } catch (e) { shell.setContent(renderErrorNode(e, '错题回顾')); } return undefined; } },
   ]);
   router.start();
 }

@@ -84,6 +84,15 @@ function renderLoginPage() {
   router.start();
 }
 
+/** 视图渲染失败兜底（渲染到可见内容区，避免错误被塞进游离 outlet 而看不见） */
+function renderErrorNode(err, label) {
+  const s = document.createElement('section');
+  s.className = 'alert alert-danger';
+  s.style.margin = 'var(--sp-6)';
+  s.textContent = `「${label || '页面'}」加载失败：${err?.message || err}`;
+  return s;
+}
+
 function startShell() {
   const t = session?.teacher || {};
   shell = createShell({
@@ -108,11 +117,19 @@ function startShell() {
 
   router.setRoutes(NAV.filter((n) => VIEWS[n.key]).map((n) => ({
     path: n.key === 'exams' ? '/' : `/${n.key}`,
-    view: (ctx) => {
+    view: async (ctx) => {
       shell.setActive(n.key);
       shell.setTitle(n.label);
       shell.setActions([]);
-      return VIEWS[n.key]({ router, query: ctx.query, params: ctx.params });
+      try {
+        const node = await VIEWS[n.key]({ router, query: ctx.query, params: ctx.params });
+        shell.setContent(node);
+      } catch (e) {
+        console.error('[teacher] view render failed:', n.key, e);
+        shell.setContent(renderErrorNode(e, n.label));
+      }
+      // 返回 undefined：告知 router 视图已自行挂载到 shell.content，勿塞进游离 outlet
+      return undefined;
     },
     meta: { title: n.label },
   })));
