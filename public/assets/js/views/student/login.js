@@ -26,10 +26,14 @@ export function StudentLoginView({ router, query, onDone }) {
       { name: 'password', label: '密码', type: 'password', placeholder: '请输入密码', autocomplete: 'current-password' },
     ],
     onSubmit: async (values) => {
-      const data = await studentApi.login({ username: values.username, password: values.password });
-      studentSession.accept(data);
-      notify.success(`欢迎回来，${data?.student?.stu_name || ''}`);
-      if (onDone) onDone(); else router.navigate(redirect);
+      try {
+        const data = await studentApi.login({ username: values.username, password: values.password });
+        studentSession.accept(data);
+        notify.success(`欢迎回来，${data?.student?.stu_name || ''}`);
+        if (onDone) onDone(); else router.navigate(redirect);
+      } catch (e) {
+        notify.error(e?.message || '登录失败，请检查账号或密码后重试');
+      }
     },
     extra: [
       el('div.login-extra-row', {}, [

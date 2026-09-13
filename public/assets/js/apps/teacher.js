@@ -66,11 +66,15 @@ function renderLoginPage() {
       { name: 'password', label: '密码', type: 'password', placeholder: '请输入密码', autocomplete: 'current-password' },
     ],
     onSubmit: async (values) => {
-      const data = await teacherApi.login({ username: values.username, password: values.password });
-      if (data?.csrf_token) setCsrfToken(data.csrf_token);
-      session = data;
-      notify.success(`欢迎，${data?.teacher?.tea_name || ''}`);
-      startShell();
+      try {
+        const data = await teacherApi.login({ username: values.username, password: values.password });
+        if (data?.csrf_token) setCsrfToken(data.csrf_token);
+        session = data;
+        notify.success(`欢迎，${data?.teacher?.tea_name || ''}`);
+        startShell();
+      } catch (e) {
+        notify.error(e?.message || '登录失败，请检查账号或密码后重试');
+      }
     },
   });
   router.setRoutes([

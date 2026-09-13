@@ -92,7 +92,9 @@ async function request(method, path, { query, body, headers = {}, raw = false, r
     try { payload = await res.json(); } catch (_) { payload = null; }
   }
 
-  if (res.status === 401) emit('unauthorized', { path });
+  // 登录接口自身的 401 属于「账号/密码错误」，不应触发全局未登录跳转；
+  // 交给调用方 catch 显示真实错误（如「账号或密码不正确」）。
+  if (res.status === 401 && !/\/login$/i.test(path)) emit('unauthorized', { path });
   if (res.status === 403) emit('forbidden', { path, message: payload?.message });
 
   if (!res.ok) {

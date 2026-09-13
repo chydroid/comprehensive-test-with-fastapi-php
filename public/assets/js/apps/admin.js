@@ -122,11 +122,16 @@ function renderLoginPage() {
       { name: 'password', label: '密码', type: 'password', placeholder: '请输入密码', autocomplete: 'current-password' },
     ],
     onSubmit: async (values) => {
-      const data = await adminApi.login({ username: values.username, password: values.password });
-      if (data?.csrf_token) setCsrfToken(data.csrf_token);
-      session = data;
-      notify.success(`欢迎回来，${data?.admin?.username || ''}`);
-      startShell();
+      try {
+        const data = await adminApi.login({ username: values.username, password: values.password });
+        if (data?.csrf_token) setCsrfToken(data.csrf_token);
+        session = data;
+        notify.success(`欢迎回来，${data?.admin?.username || ''}`);
+        startShell();
+      } catch (e) {
+        // 登录失败（账号/密码错误等）：停留在登录页并显示真实错误，不触发全局未登录跳转
+        notify.error(e?.message || '登录失败，请检查账号或密码后重试');
+      }
     },
   });
 
