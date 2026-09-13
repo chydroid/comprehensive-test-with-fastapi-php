@@ -11,6 +11,7 @@ import {
 } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
+import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
 import { fmtDateTime, fmtScore, fmtNumber } from '../../core/format.js';
 
 const EXAM_STATUS = {
@@ -52,6 +53,10 @@ export function TeacherExamsView({ router }) {
     el('div.page-head', {}, [
       el('div', {}, [el('h1.page-title', { text: '考试管理' }), el('p.page-sub', { text: '你负责监考的考试场次' })]),
       el('div.page-head-actions', {}, [
+        button('新增考试', {
+          variant: 'primary', size: 'sm', iconName: 'plus',
+          onClick: () => openExamEditor({ id: null, options: state.options, onSaved: () => load() }),
+        }),
         button('刷新', { variant: 'secondary', size: 'sm', iconName: 'refresh-cw', onClick: () => load() }),
       ]),
     ]),
@@ -84,21 +89,31 @@ export function TeacherExamsView({ router }) {
   function renderTable() {
     const t = table({
       columns: [
-        { key: 'exam_name', label: '考试名称', render: (r) => el('div', {}, [
+        { key: 'exam_name', title: '考试名称', render: (r) => el('div', {}, [
           el('strong', { text: r.exam_name }),
           el('div.muted.small', { text: r.subj_name || '' }),
         ]) },
-        { key: 'exam_status', label: '状态', render: (r) => examStatusBadge(r.exam_status) },
-        { key: 'exam_start', label: '开始', render: (r) => el('span.muted', { text: r.exam_start ? fmtDateTime(r.exam_start) : '—' }) },
-        { key: 'exam_end', label: '结束', render: (r) => el('span.muted', { text: r.exam_end ? fmtDateTime(r.exam_end) : '—' }) },
-        { key: 'exam_score', label: '总分', align: 'right', render: (r) => el('span', { text: fmtScore(r.exam_score) }) },
-        { key: '_acts', label: '操作', align: 'right', render: (r) => el('div.row.gap-xs.end', {}, [
+        { key: 'exam_status', title: '状态', render: (r) => examStatusBadge(r.exam_status) },
+        { key: 'exam_start', title: '开始', render: (r) => el('span.muted', { text: r.exam_start ? fmtDateTime(r.exam_start) : '—' }) },
+        { key: 'exam_end', title: '结束', render: (r) => el('span.muted', { text: r.exam_end ? fmtDateTime(r.exam_end) : '—' }) },
+        { key: 'exam_score', title: '总分', align: 'right', render: (r) => el('span', { text: fmtScore(r.exam_score) }) },
+        { key: '_acts', title: '操作', align: 'right', render: (r) => el('div.row.gap-xs.end', {}, [
           button('监考', { variant: 'secondary', size: 'xs', iconName: 'eye', onClick: () => router.navigate(`/teacher/monitor?exam_id=${r.id}`) }),
           r.exam_status !== 'testing'
             ? button('开考', {
                 variant: 'primary', size: 'xs', iconName: 'play',
                 onClick: () => startExam(r),
               })
+            : null,
+          button('考生', { variant: 'ghost', size: 'xs', iconName: 'users', onClick: () => openExamStudents(r) }),
+          r.exam_status === 'exam' || r.exam_status === 'paper'
+            ? button('编辑', {
+                variant: 'ghost', size: 'xs', iconName: 'edit',
+                onClick: () => openExamEditor({ id: r.id, options: state.options, onSaved: () => load() }),
+              })
+            : null,
+          r.exam_status === 'exam' || r.exam_status === 'paper'
+            ? button('删除', { variant: 'danger', size: 'xs', iconName: 'trash', onClick: () => deleteExam(r, () => load()) })
             : null,
           button('详情', { variant: 'ghost', size: 'xs', iconName: 'info', onClick: () => showDetail(r.id) }),
         ]) },
@@ -266,14 +281,14 @@ export function TeacherMonitorView({ router, query }) {
   function renderTable() {
     const t = table({
       columns: [
-        { key: 'stu_id', label: '准考证号' },
-        { key: 'stu_name', label: '姓名' },
-        { key: 'stu_sex', label: '性别', render: (r) => el('span.muted', { text: r.stu_sex || '—' }) },
-        { key: 'grade_id', label: '单位', render: (r) => el('span.muted', { text: r.grade_id || '—' }) },
-        { key: 'class_id', label: '班级', render: (r) => el('span.muted', { text: r.class_id || '—' }) },
-        { key: 'stu_status', label: '状态', render: (r) => stuStatusBadge(r.stu_status) },
-        { key: 'stu_score', label: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
-        { key: '_acts', label: '操作', align: 'right', render: (r) => el('div.row.gap-xs.end', {}, [
+        { key: 'stu_id', title: '准考证号' },
+        { key: 'stu_name', title: '姓名' },
+        { key: 'stu_sex', title: '性别', render: (r) => el('span.muted', { text: r.stu_sex || '—' }) },
+        { key: 'grade_id', title: '单位', render: (r) => el('span.muted', { text: r.grade_id || '—' }) },
+        { key: 'class_id', title: '班级', render: (r) => el('span.muted', { text: r.class_id || '—' }) },
+        { key: 'stu_status', title: '状态', render: (r) => stuStatusBadge(r.stu_status) },
+        { key: 'stu_score', title: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
+        { key: '_acts', title: '操作', align: 'right', render: (r) => el('div.row.gap-xs.end', {}, [
           r.stu_status === 'locked'
             ? button('解锁', { variant: 'secondary', size: 'xs', iconName: 'unlock', onClick: () => rowAction('unlock', r) })
             : button('锁定', { variant: 'secondary', size: 'xs', iconName: 'lock', onClick: () => rowAction('lock', r) }),
@@ -363,13 +378,13 @@ export function TeacherScoresView({ router, query }) {
     const total = Number(state.exam?.exam_score) || 0;
     const t = table({
       columns: [
-        { key: '_rank', label: '排名', render: (r) => el('span.rank-badge', { text: String(sorted.indexOf(r) + 1) }) },
-        { key: 'stu_id', label: '准考证号' },
-        { key: 'stu_name', label: '姓名' },
-        { key: 'grade_id', label: '单位', render: (r) => el('span.muted', { text: r.grade_id || '—' }) },
-        { key: 'class_id', label: '班级', render: (r) => el('span.muted', { text: r.class_id || '—' }) },
-        { key: 'stu_score', label: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
-        { key: '_rate', label: '得分率', align: 'right', render: (r) => {
+        { key: '_rank', title: '排名', render: (r) => el('span.rank-badge', { text: String(sorted.indexOf(r) + 1) }) },
+        { key: 'stu_id', title: '准考证号' },
+        { key: 'stu_name', title: '姓名' },
+        { key: 'grade_id', title: '单位', render: (r) => el('span.muted', { text: r.grade_id || '—' }) },
+        { key: 'class_id', title: '班级', render: (r) => el('span.muted', { text: r.class_id || '—' }) },
+        { key: 'stu_score', title: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
+        { key: '_rate', title: '得分率', align: 'right', render: (r) => {
           const v = total > 0 ? (Number(r.stu_score) / total) * 100 : 0;
           return el('span.muted', { text: `${v.toFixed(1)}%` });
         } },

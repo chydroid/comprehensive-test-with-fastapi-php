@@ -1,5 +1,5 @@
 /**
- * 门户首页：站点统计、考试入口、公告、功能特性。
+ * 门户首页：站点统计、考试入口、成绩英雄榜、公告、功能特性。
  * 全部数据来自公开接口（无需登录）。
  */
 
@@ -14,35 +14,22 @@ export function PortalView({ router }) {
   const root = el('div.portal');
   const heroSlot = el('div');
   const statsSlot = el('div.portal-stats');
+  const boardSlot = el('div.portal-section');
   const featureSlot = el('div.portal-section');
   const newsSlot = el('div.portal-section');
   const footSlot = el('footer.portal-footer');
 
   root.append(
-    el('nav.portal-nav', {}, [
-      el('div.portal-nav-inner', {}, [
-        el('div.portal-nav-brand', {}, [
-          el('div.brand-mark', {}, [icon('graduation-cap', { size: 20 })]),
-          el('span', { text: '在线考试系统' }),
-        ]),
-        el('div.portal-nav-links', {}, [
-          el('a', { href: '#/portal', text: '首页' }),
-          el('a', { href: '#/exercise', text: '在线练习' }),
-          el('a', { href: '#/student', text: '个人中心' }),
-          el('a', { href: '#/exam', text: '进入考场' }),
-        ]),
-        el('div.row.gap-sm', {}, [
-          button('教师端', { variant: 'ghost', size: 'sm', onClick: () => router.navigate('/teacher') }),
-          button('管理后台', { variant: 'primary', size: 'sm', onClick: () => router.navigate('/admin') }),
-        ]),
-      ]),
-    ]),
+    renderNav({ router, active: 'home' }),
     heroSlot,
     statsSlot,
+    boardSlot,
     featureSlot,
     newsSlot,
     footSlot,
   );
+
+  mount(boardSlot, HeroBoardView({ router, limit: 8, compact: true }));
 
   (async () => {
     const [siteRes, newsRes, helpRes] = await Promise.all([
@@ -54,6 +41,8 @@ export function PortalView({ router }) {
     const site = siteRes.ok ? siteRes.result : null;
     renderHero(site);
     renderStats(site);
+    // 注意：http 层已解包信封，成功时直接返回 data（失败则抛 ApiError），
+    // 因此这里拿到的是业务数据本身，而不是 { ok, result } 包装。
     renderNews(newsRes);
     renderHelp(helpRes);
     renderFooter(site);
@@ -110,7 +99,7 @@ export function PortalView({ router }) {
     mount(featureSlot, el('div', {}, [
       el('div.section-head', {}, [
         el('h2', { text: '核心功能' }),
-        el('p.muted', { text: helpRes?.ok ? helpRes.result.title : '从出题到成绩的完整流程' }),
+        el('p.muted', { text: helpRes?.title || '从出题到成绩的完整流程' }),
       ]),
       el('div.feature-grid', {}, features.map((f) => el('div.feature-card', {}, [
         el('div.feature-icon', {}, [icon(f.icon, { size: 22 })]),
@@ -120,8 +109,8 @@ export function PortalView({ router }) {
     ]));
 
     // 帮助文档块：进页面时若有数据则追加流程说明
-    if (helpRes?.ok && Array.isArray(helpRes.result.blocks)) {
-      featureSlot.append(el('div.portal-section-inner', {}, helpRes.result.blocks.map((b) => el('div.card.help-block', {}, [
+    if (helpRes && Array.isArray(helpRes.blocks)) {
+      featureSlot.append(el('div.portal-section-inner', {}, helpRes.blocks.map((b) => el('div.card.help-block', {}, [
         el('div.card-head', {}, [el('div.card-title', {}, [icon('book-open', { size: 16 }), el('span', { text: b.heading })])]),
         el('div.card-body', {}, el('ol.help-list', {}, (b.items || []).map((t) => el('li', { text: t })))),
       ]))));
@@ -129,7 +118,7 @@ export function PortalView({ router }) {
   }
 
   function renderNews(newsRes) {
-    const list = newsRes?.ok ? (newsRes.result.list || []) : [];
+    const list = Array.isArray(newsRes?.list) ? newsRes.list : [];
     if (!list.length) return;
     mount(newsSlot, el('div', {}, [
       el('div.section-head', {}, [el('h2', { text: '考试公告' })]),
@@ -179,5 +168,129 @@ export function PortalView({ router }) {
     ]));
   }
 
+  return root;
+}
+
+/* ==================================================================== */
+/* 门户导航（首页与英雄榜页共用）                                          */
+/* ==================================================================== */
+
+function renderNav({ router, active = 'home' }) {
+  const link = (href, text, key) => el('a', {
+    href,
+    text,
+    class: active === key ? 'is-active' : null,
+  });
+  return el('nav.portal-nav', {}, [
+    el('div.portal-nav-inner', {}, [
+      el('div.portal-nav-brand', {}, [
+        el('div.brand-mark', {}, [icon('graduation-cap', { size: 20 })]),
+        el('span', { text: '在线考试系统' }),
+      ]),
+      el('div.portal-nav-links', {}, [
+        link('#/portal', '首页', 'home'),
+        link('#/hero', '成绩榜', 'hero'),
+        link('#/exercise', '在线练习', 'exercise'),
+        link('#/student', '个人中心', 'student'),
+        link('#/exam', '进入考场', 'exam'),
+      ]),
+      el('div.row.gap-sm', {}, [
+        button('教师端', { variant: 'ghost', size: 'sm', onClick: () => router.navigate('/teacher') }),
+        button('管理后台', { variant: 'primary', size: 'sm', onClick: () => router.navigate('/admin') }),
+      ]),
+    ]),
+  ]);
+}
+
+/* ==================================================================== */
+/* 成绩英雄榜（GET /api/public/hero）                                     */
+/* ==================================================================== */
+
+/**
+ * 成绩英雄榜：排名 / 单位 / 姓名 / 成绩。
+ * 后端已做姓名脱敏且不返回准考证号，可安全公开展示。
+ */
+export function HeroBoardView({ router, limit = 10, compact = false }) {
+  const root = el('div.hero-board-wrap');
+
+  (async () => {
+    // http 层已解包信封：成功直接返回 data，失败抛错（此处 catch 为 null）
+    const res = await siteApi.hero({ limit }).catch(() => null);
+    const list = Array.isArray(res?.list) ? res.list : [];
+    const exam = res?.exam ?? null;
+
+    if (!list.length) {
+      mount(root, el('div', {}, [
+        el('div.section-head', {}, [
+          el('h2', { text: '成绩英雄榜' }),
+          el('p.muted', { text: '暂无成绩数据' }),
+        ]),
+        el('div.card', {}, el('div.card-body', {}, el('p.muted.text-center', { text: '当前还没有已公布的成绩，先去练习或参加考试吧。' }))),
+      ]));
+      return;
+    }
+
+    const subj = exam?.subj_name ? ` · ${exam.subj_name}` : '';
+    mount(root, el('div', {}, [
+      el('div.section-head', {}, [
+        el('h2', { text: '成绩英雄榜' }),
+        el('p.muted', { text: exam?.exam_name ? `最近一场已结束考试：${exam.exam_name}${subj}` : '全站历史最高分 TOP' }),
+      ]),
+      el('div.card.hero-board', {}, [
+        el('div.hero-board-head', {}, [
+          el('span', { text: '排名' }),
+          el('span', { text: '单位' }),
+          el('span', { text: '姓名' }),
+          el('span.hero-board-score-col', { text: '成绩' }),
+        ]),
+        ...list.map((r) => el('div.hero-board-row', {
+          class: r.rank <= 3 ? `is-top is-top-${r.rank}` : null,
+        }, [
+          el('span.hero-rank', {}, [
+            r.rank <= 3
+              ? icon('award', { size: 14 })
+              : null,
+            el('span', { text: String(r.rank) }),
+          ]),
+          el('span.hero-grade', { text: r.grade_id || '—' }),
+          el('span.hero-name', { text: r.stu_name || '—' }),
+          el('span.hero-score', { text: String(r.stu_score ?? 0) }),
+        ])),
+      ]),
+      compact
+        ? el('div.text-center.mt-4', {}, [
+            button('查看完整榜单', {
+              variant: 'secondary', size: 'sm', iconName: 'bar-chart-2',
+              onClick: () => router.navigate('/hero'),
+            }),
+          ])
+        : null,
+    ]));
+  })();
+
+  return root;
+}
+
+/** 独立英雄榜页（对应旧系统 /hero） */
+export function HeroPageView({ router }) {
+  const root = el('div.portal');
+  const foot = el('footer.portal-footer');
+  root.append(
+    renderNav({ router, active: 'hero' }),
+    el('div.portal-section', {}, [HeroBoardView({ router, limit: 20 })]),
+    foot,
+  );
+  mount(foot, el('div.portal-footer-inner', {}, [
+    el('div', {}, [
+      el('div.portal-footer-brand', {}, [
+        el('div.brand-mark', {}, [icon('graduation-cap', { size: 18 })]),
+        el('span', { text: '成绩公布 · 历届英雄榜' }),
+      ]),
+      el('p.muted', { text: '姓名已做脱敏处理，仅展示单位与成绩。' }),
+    ]),
+    el('div.row.gap-sm', {}, [
+      button('返回首页', { variant: 'ghost', size: 'sm', onClick: () => router.navigate('/portal') }),
+    ]),
+  ]));
   return root;
 }

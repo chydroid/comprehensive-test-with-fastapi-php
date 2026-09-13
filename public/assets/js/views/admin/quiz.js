@@ -217,6 +217,53 @@ export async function QuizView({ router, can }) {
       });
       titleInput.value = values.quiz_title || '';
 
+      /* -------------------- 配图上传 -------------------- */
+      let picName = values.quiz_pic_name || '';
+      const picPreview = el('div.pic-upload-preview');
+      const picNameText = el('span.fs-sm.c-secondary', { text: picName || '未选择图片' });
+      const fileInput = el('input', {
+        type: 'file', accept: 'image/*',
+        style: { display: 'none' },
+      });
+
+      function renderPic(url) {
+        clear(picPreview);
+        if (!url) return;
+        picPreview.append(el('img', {
+          src: url, alt: '配图预览',
+          onerror: function () { clear(picPreview); picPreview.append(el('span.fs-sm.c-danger', { text: '图片加载失败' })); },
+        }));
+      }
+      renderPic(picName ? `/uploads/${picName}` : '');
+
+      fileInput.addEventListener('change', async () => {
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        const fd = new FormData();
+        fd.append('file', file);
+        const { ok, result, error } = await withLoading(null, () => adminApi.uploadPic(fd), { silent: true });
+        if (!ok) { notify.error(error?.message || '图片上传失败'); return; }
+        picName = result?.filename || '';
+        picNameText.textContent = picName || '未选择图片';
+        renderPic(result?.url || `/uploads/${picName}`);
+        notify.success('配图已上传，保存后生效');
+      });
+
+      const picBox = el('div.stack-sm', {}, [
+        el('div.flex.items-center.gap-2.flex-wrap', {}, [
+          button('选择图片', { variant: 'secondary', size: 'sm', iconName: 'upload', onClick: () => fileInput.click() }),
+          button('移除配图', { variant: 'ghost', size: 'sm', iconName: 'trash', onClick: () => {
+            picName = '';
+            picNameText.textContent = '未选择图片';
+            clear(picPreview);
+          } }),
+          picNameText,
+          fileInput,
+        ]),
+        picPreview,
+        el('div.field-hint', { text: '支持 JPG / PNG / GIF / WEBP，大小不超过 2MB；上传后需点击保存才会写入题目。' }),
+      ]);
+
       const keyInput = input({
         name: 'quiz_key', value: values.quiz_key || '',
         placeholder: '填空题答案（多个空用 | 分隔）',
@@ -234,6 +281,7 @@ export async function QuizView({ router, can }) {
         field('科目', subjSelect, { required: true }),
         field('题型', typeSelect, { required: true }),
         el('div.span-2', {}, [field('题干', titleInput, { required: true })]),
+        el('div.span-2', {}, [field('配图（可选）', picBox)]),
         optionWrap,
         keyField,
         field('难度', diffSelect),
@@ -279,6 +327,7 @@ export async function QuizView({ router, can }) {
           quiz_diff: diffSelect.value,
           quiz_writer: writerInput.value.trim(),
           quiz_time: timeInput.value,
+          quiz_pic_name: picName,
           quiz_key: OPTION_TYPES.includes(type) ? collectKey() : keyInput.value.trim(),
         };
 

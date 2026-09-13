@@ -9,7 +9,7 @@ import { el, appRoot } from '../core/dom.js';
 import { emptyStated, button } from '../ui/components.js';
 import { studentSession } from '../core/student-session.js';
 
-import { PortalView } from '../views/portal.js';
+import { PortalView, HeroPageView } from '../views/portal.js';
 import { ExerciseView } from '../views/student/exercise.js';
 import { MockSetupView, MockTakeView, MockReviewView } from '../views/student/mock.js';
 import { StudentLoginView, StudentRegisterView } from '../views/student/login.js';
@@ -25,6 +25,7 @@ const router = createRouter({
   routes: [
     { path: '/', view: () => PortalView({ router }) },
     { path: '/portal', view: () => PortalView({ router }) },
+    { path: '/hero', view: () => HeroPageView({ router }) },
     { path: '/login', view: (ctx) => StudentLoginView({ router, query: ctx.query, onDone: () => router.navigate('/student') }) },
     { path: '/register', view: () => StudentRegisterView({ router }) },
     { path: '/exercise', view: () => guard(() => ExerciseView({ router })) },

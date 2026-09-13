@@ -578,6 +578,38 @@
 .avatar-lg { width: 48px; height: 48px; font-size: var(--fs-lg); }
 .avatar-xl { width: 72px; height: 72px; font-size: var(--fs-2xl); }
 
+/* 可点击上传的头像 */
+.avatar-upload {
+  position: relative;
+  cursor: pointer;
+  transition: box-shadow var(--dur-base), transform var(--dur-base);
+}
+.avatar-upload:hover { transform: translateY(-1px); box-shadow: 0 0 0 3px var(--brand-100); }
+.avatar-upload::after {
+  content: "更换";
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 3px 0;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  text-align: center;
+  opacity: 0;
+  transition: opacity var(--dur-fast);
+}
+.avatar-upload:hover::after { opacity: 1; }
+
+/* 题目配图上传预览 */
+.pic-upload-preview:empty { display: none; }
+.pic-upload-preview img {
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+}
+
 /* ============================ 12. 下拉菜单 ============================ */
 .dropdown { position: relative; display: inline-block; }
 .dropdown-menu {

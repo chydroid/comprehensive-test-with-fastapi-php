@@ -22,24 +22,56 @@ class ScoreController extends BaseController
     {
         $limit = (int) $this->request->query('limit', 10);
         $limit = min(50, max(1, $limit));
+        $examId = (int) $this->request->query('exam_id', 0);
 
-        $rows = Database::fetchAll(
-            "SELECT sc.stu_score, sc.exam_id, st.stu_name, e.exam_name, s.subj_name
-             FROM `stuscore` sc
-             INNER JOIN `stuinfo` st ON st.id = sc.stu_id
-             LEFT JOIN `examinfo` e ON e.id = sc.exam_id
-             LEFT JOIN `subject` s ON s.id = e.subj_id
-             WHERE sc.stu_status = '1' AND sc.stu_score > 0
-             ORDER BY sc.stu_score DESC, sc.id ASC
-             LIMIT $limit"
-        );
+        // 默认取最近一场已结束考试（与旧系统英雄榜口径一致）；没有已结束考试时退化为全站 TOP N
+        if ($examId <= 0) {
+            $row = Database::fetch(
+                "SELECT id FROM `examinfo` WHERE LEFT(exam_status, 4) = 'over' ORDER BY id DESC LIMIT 1"
+            );
+            $examId = (int) ($row['id'] ?? 0);
+        }
 
-        foreach ($rows as &$r) {
-            $r['stu_name'] = self::maskName((string) ($r['stu_name'] ?? ''));
+        $fetch = static function (int $examId, int $limit): array {
+            $where = $examId > 0 ? 'AND sc.exam_id = ' . $examId : '';
+            // stu_status 取值：waiting / online / over / overBak / locked，只有已交卷的才上榜
+            return Database::fetchAll(
+                "SELECT sc.stu_score, sc.exam_id, st.stu_name, st.grade_id, e.exam_name, s.subj_name
+                 FROM `stuscore` sc
+                 INNER JOIN `stuinfo` st ON st.id = sc.stu_id
+                 LEFT JOIN `examinfo` e ON e.id = sc.exam_id
+                 LEFT JOIN `subject` s ON s.id = e.subj_id
+                 WHERE sc.stu_status LIKE 'over%' $where
+                 ORDER BY sc.stu_score DESC, sc.id ASC
+                 LIMIT $limit"
+            );
+        };
+
+        $rows = $fetch($examId, $limit);
+        // 指定/最近那场考试还没有有效成绩时，退化为全站 TOP N，避免榜单空白
+        if ($rows === [] && $examId > 0) {
+            $examId = 0;
+            $rows = $fetch(0, $limit);
+        }
+
+        foreach ($rows as $i => &$r) {
+            $r['rank']      = $i + 1;
+            $r['stu_name']  = self::maskName((string) ($r['stu_name'] ?? ''));
+            $r['grade_id']  = (string) ($r['grade_id'] ?? '');
+            $r['stu_score'] = (int) $r['stu_score'];
         }
         unset($r);
 
-        return $this->ok(['list' => $rows]);
+        $exam = null;
+        if ($examId > 0 && $rows !== [] && (int) $rows[0]['exam_id'] > 0) {
+            $exam = [
+                'id'        => (int) $rows[0]['exam_id'],
+                'exam_name' => (string) ($rows[0]['exam_name'] ?? ''),
+                'subj_name' => (string) ($rows[0]['subj_name'] ?? ''),
+            ];
+        }
+
+        return $this->ok(['list' => $rows, 'exam' => $exam]);
     }
 
     /** 姓名脱敏：保留首尾字，中间以 * 代替（两字名只掩末字） */

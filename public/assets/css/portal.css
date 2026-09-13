@@ -109,6 +109,77 @@
 
 /* 门户头部导航激活态 */
 .portal-nav .brand-link { display: flex; align-items: center; gap: var(--sp-3); color: inherit; }
+.portal-nav-links a.is-active { color: var(--brand-600); font-weight: 600; }
+
+/* ==========================================================================
+   成绩英雄榜
+   ========================================================================== */
+
+.hero-board { overflow: hidden; }
+.hero-board-head,
+.hero-board-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 120px 90px;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.hero-board-head {
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-tertiary);
+  letter-spacing: .04em;
+}
+.hero-board-head .hero-board-score-col,
+.hero-board-row .hero-score { text-align: right; }
+.hero-board-row {
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background-color var(--dur-fast);
+}
+.hero-board-row:last-child { border-bottom: 0; }
+.hero-board-row:hover { background: var(--bg-sunken); }
+
+.hero-rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+.hero-grade {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hero-name { font-weight: 600; }
+.hero-score {
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--brand-600);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 前三名奖牌配色 */
+.hero-board-row.is-top { background: var(--brand-50); }
+.hero-board-row.is-top:hover { background: var(--brand-100); }
+.hero-board-row.is-top .hero-rank { color: var(--warning-600); }
+.hero-board-row.is-top .hero-score { color: var(--warning-600); }
+.hero-board-row.is-top-1 .hero-rank { color: var(--warning-500); }
+.hero-board-row.is-top-1 .hero-name { color: var(--warning-700); }
+
+@media (max-width: 640px) {
+  .hero-board-head,
+  .hero-board-row { grid-template-columns: 56px minmax(0, 1fr) 70px; }
+  .hero-board-head span:nth-child(3),
+  .hero-board-row .hero-grade { display: none; }
+}
 
 /* ==========================================================================
    考试答题界面

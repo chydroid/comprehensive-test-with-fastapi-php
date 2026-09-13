@@ -34,6 +34,7 @@ export const QTYPE = {
  * @param {() => Promise} cfg.loadReview  (可选) 结果/解析数据
  * @param {string} cfg.examEnd          ISO 时间串（可选，用于超时）
  * @param {string} cfg.exitUrl         退出后跳转地址
+ * @param {() => Promise} [cfg.onExit] 退出前的清理钩子（如调用登出接口）
  * @returns {{node, dispose}}
  */
 export function createExamRunner(cfg) {
@@ -337,6 +338,14 @@ export function createExamRunner(cfg) {
     state.timer = setInterval(tick, 1000);
   }
 
+  /**
+   * 退出答题：先执行 onExit 清理钩子（如考场登出），失败也不阻塞跳转。
+   */
+  async function exit() {
+    try { await cfg.onExit?.(); } catch (_) { /* 忽略 */ }
+    location.assign(cfg.exitUrl || '/student');
+  }
+
   function renderResult(data) {
     const area = el('div.result-area.stack');
     if (!data) {
@@ -344,7 +353,7 @@ export function createExamRunner(cfg) {
         el('div', {}, [icon('check-circle', { size: 44 })]),
         el('h2', { text: '已交卷' }),
         el('p.muted', { text: '本次答题已提交。' }),
-        button('返回', { variant: 'primary', onClick: () => location.assign(cfg.exitUrl || '/student') }),
+        button('返回', { variant: 'primary', onClick: () => exit() }),
       ]));
       return area;
     }
@@ -391,7 +400,7 @@ export function createExamRunner(cfg) {
     }
 
     area.append(el('div.row.center.gap-sm', {}, [
-      button('返回', { variant: 'primary', iconName: 'home', onClick: () => location.assign(cfg.exitUrl || '/student') }),
+      button('返回', { variant: 'primary', iconName: 'home', onClick: () => exit() }),
       cfg.onRetry ? button('再练一次', { variant: 'secondary', iconName: 'refresh-cw', onClick: cfg.onRetry }) : null,
     ]));
     return area;
@@ -436,7 +445,7 @@ export function createExamRunner(cfg) {
           icon('alert-circle', { size: 40 }),
           el('h3', { text: '试卷加载失败' }),
           el('p.muted', { text: res.error?.message || '请稍后重试' }),
-          button('返回', { variant: 'primary', onClick: () => location.assign(cfg.exitUrl || '/student') }),
+          button('返回', { variant: 'primary', onClick: () => exit() }),
         ]));
         return;
       }

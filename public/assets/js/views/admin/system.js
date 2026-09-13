@@ -270,15 +270,54 @@ export function ProfileView({ shell, session }) {
     quizOperator: '题库维护', quizAdder: '题库录入',
   };
 
+  /* -------------------- 头像上传 -------------------- */
+  let avatarUrl = admin.avatar || '';
+  const avatarBox = el('div.avatar.avatar-xl.avatar-upload', {
+    title: '点击上传头像',
+    on: { click: () => avatarFile.click() },
+  });
+  const avatarFile = el('input', { type: 'file', accept: 'image/*', style: { display: 'none' } });
+
+  function renderAvatar() {
+    clear(avatarBox);
+    if (avatarUrl) {
+      avatarBox.append(el('img', { src: avatarUrl, alt: '头像' }));
+    } else {
+      avatarBox.textContent = (admin.username || '?').slice(0, 1).toUpperCase();
+      avatarBox.style.background = '';
+    }
+  }
+  renderAvatar();
+
+  avatarFile.addEventListener('change', async () => {
+    const file = avatarFile.files?.[0];
+    if (!file) return;
+    // 两步：先上传到 /uploads 拿到 url，再回填到 admininfo.avatar
+    const fd = new FormData();
+    fd.append('file', file);
+    const up = await withLoading(null, () => adminApi.uploadPic(fd), { silent: true });
+    if (!up.ok) { notify.error(up.error?.message || '头像上传失败'); return; }
+    const url = up.result?.url || '';
+    const saved = await withLoading(null, () => adminApi.uploadAvatar({ avatar: url }), { silent: true });
+    if (!saved.ok) { notify.error(saved.error?.message || '头像保存失败'); return; }
+    avatarUrl = saved.result?.avatar || url;
+    if (session?.admin) session.admin.avatar = avatarUrl;
+    renderAvatar();
+    shell?.updateUser?.({ avatar: avatarUrl });
+    notify.success('头像已更新');
+  });
+
   const infoCard = card({
     title: '基本信息',
     iconName: 'user',
     body: el('div.stack', {}, [
       el('div.flex.items-center.gap-4', {}, [
-        el('div.avatar.avatar-xl', { text: (admin.username || '?').slice(0, 1).toUpperCase() }),
+        avatarBox,
+        avatarFile,
         el('div', {}, [
           el('div.fw-700', { style: { fontSize: 'var(--fs-xl)' }, text: admin.username || '—' }),
           el('div.mt-1', {}, [badge(ROLE_LABELS[admin.admin_power] || admin.admin_power || '—', { tone: 'brand' })]),
+          el('div.fs-xs.c-tertiary.mt-2', { text: '点击左侧头像可上传更换（JPG/PNG，≤2MB）' }),
         ]),
       ]),
       el('hr.divider'),

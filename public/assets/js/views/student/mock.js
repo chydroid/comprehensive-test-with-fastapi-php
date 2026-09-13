@@ -103,10 +103,10 @@ export function MockSetupView({ router }) {
 
     const t = table({
       columns: [
-        { key: 'label', label: '题型' },
-        { key: 'max', label: '题库数量', align: 'right', render: (r) => el('span.muted', { text: String(r.max) }) },
-        { key: 'val', label: '每题分值', align: 'right', render: (r) => el('span', { text: `${MOCK_VALUE[r.type] || 0} 分` }) },
-        { key: 'want', label: '抽取数量', align: 'right', render: (r) => r.numIn },
+        { key: 'label', title: '题型' },
+        { key: 'max', title: '题库数量', align: 'right', render: (r) => el('span.muted', { text: String(r.max) }) },
+        { key: 'val', title: '每题分值', align: 'right', render: (r) => el('span', { text: `${MOCK_VALUE[r.type] || 0} 分` }) },
+        { key: 'want', title: '抽取数量', align: 'right', render: (r) => r.numIn },
       ],
       rows,
       emptyText: '',
@@ -149,6 +149,8 @@ export function MockTakeView({ router, query }) {
     submit: () => exerciseApi.mockSubmit({ exam_id: examId }),
     loadReview: () => exerciseApi.mockOver({ exam_id: examId }),
     onRetry: () => router.navigate('/exercise/mock'),
+    // 退出时通知服务端结束本次模拟（清掉临时状态）
+    onExit: () => exerciseApi.mockLogout({ exam_id: examId }),
   });
 
   mount(host, runner.node);

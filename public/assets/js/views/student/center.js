@@ -52,11 +52,11 @@ export function StudentScoresView() {
     const rows = [...list, ...history].map((r) => ({ ...r, _bak: !list.includes(r) }));
     const t = table({
       columns: [
-        { key: 'exam_name', label: '考试名称', render: (r) => el('span', { text: r.exam_name || `考试 #${r.exam_id}` }) },
-        { key: 'subj_name', label: '科目', render: (r) => el('span.muted', { text: r.subj_name || '—' }) },
-        { key: 'exam_start', label: '考试时间', render: (r) => el('span.muted', { text: r.exam_start ? fmtDateTime(r.exam_start) : '—' }) },
-        { key: 'stu_status', label: '状态', render: (r) => studentStatusBadge(r.stu_status) },
-        { key: 'stu_score', label: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
+        { key: 'exam_name', title: '考试名称', render: (r) => el('span', { text: r.exam_name || `考试 #${r.exam_id}` }) },
+        { key: 'subj_name', title: '科目', render: (r) => el('span.muted', { text: r.subj_name || '—' }) },
+        { key: 'exam_start', title: '考试时间', render: (r) => el('span.muted', { text: r.exam_start ? fmtDateTime(r.exam_start) : '—' }) },
+        { key: 'stu_status', title: '状态', render: (r) => studentStatusBadge(r.stu_status) },
+        { key: 'stu_score', title: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
       ],
       rows,
       emptyText: '还没有考试成绩',

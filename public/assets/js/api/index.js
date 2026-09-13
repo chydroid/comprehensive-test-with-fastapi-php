@@ -8,7 +8,7 @@ import { http, download } from '../core/http.js';
 export const siteApi = {
   site:     () => http.get('/public/site'),
   help:     () => http.get('/public/help'),
-  hero:     () => http.get('/public/hero'),
+  hero:     (params) => http.get('/public/hero', { query: params }),
   subjects: () => http.get('/public/subjects'),
   categories:() => http.get('/public/categories'),
   news:     (params) => http.get('/public/news', { query: params }),
@@ -89,7 +89,8 @@ export const adminApi = {
   login:  (body) => http.post('/admin/login', body),
   logout: () => http.post('/admin/logout'),
   me:     () => http.get('/admin/me'),
-  uploadAvatar: (formData) => http.post('/admin/profile/avatar', formData),
+  // 先由 adminApi.uploadPic 拿到 url，再回填到 admininfo.avatar
+  uploadAvatar: (body) => http.post('/admin/profile/avatar', body),
   updatePassword: (body) => http.put('/admin/profile/password', body),
 
   dashboard: () => http.get('/admin/dashboard'),

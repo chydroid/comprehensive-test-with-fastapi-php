@@ -84,6 +84,8 @@ export function ExamTakeView({ router, query }) {
       const res = await examApi.answer();
       return res;
     },
+    // 退出考场时清除服务端考场会话，防止他人复用该终端直接进入
+    onExit: () => examApi.logout(),
   });
 
   // 启动时先拿第一题，以补全标题与结束时间
