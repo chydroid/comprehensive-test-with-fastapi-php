@@ -91,7 +91,7 @@ export async function QuizView({ router, can }) {
       { key: 'id', title: 'ID', width: '72px', sortable: true,
         render: (r) => el('span.mono.fs-sm.c-tertiary', { text: String(r.id) }) },
       { key: 'quiz_title', title: '题干', render: (r) => el('div', {}, [
-          el('div', { style: { maxWidth: '460px' }, text: r.quiz_title }),
+          el('div', { style: { whiteSpace: 'normal', wordBreak: 'break-word' }, text: r.quiz_title }),
           r.quiz_pic_name ? el('div.fs-xs.c-brand.flex.items-center.gap-1.mt-1', {}, [
             icon('file', { size: 11 }), el('span', { text: '含配图' }),
           ]) : null,
