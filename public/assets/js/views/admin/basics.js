@@ -10,6 +10,7 @@ import { createSimpleCrudView, simpleCols } from './simple-crud.js';
 import { adminApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { fmtDateTime, initials, hashTone } from '../../core/format.js';
+import { passwordHintText } from '../../core/app-settings.js';
 
 const ROLE_LABELS = {
   systemAdmin: '超级管理员',
@@ -166,7 +167,7 @@ export function TeacherView() {
           options: [{ value: '男', label: '男' }, { value: '女', label: '女' }] },
         { name: 'tea_phone', label: '联系电话', maxlength: 30, placeholder: '手机或固话' },
         { name: 'tea_pwd', label: '登录密码', type: 'password', required: !isEdit,
-          placeholder: isEdit ? '留空表示不修改' : '至少 6 位，不能为纯数字', hint: isEdit ? '不修改请留空' : '' },
+          placeholder: isEdit ? '留空表示不修改' : `${passwordHintText()}，不能为纯数字`, hint: isEdit ? '不修改请留空' : '' },
         { name: 'tea_info', label: '备注', type: 'textarea', rows: 3, colSpan: 2 },
       ];
     },
@@ -213,7 +214,7 @@ export function AdminView() {
         { name: 'admin_power', label: '角色', type: 'select', required: true,
           options: Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label })) },
         { name: 'password', label: '登录密码', type: 'password', required: !isEdit, colSpan: 2,
-          placeholder: isEdit ? '留空表示不修改密码' : '至少 6 位，且不能为纯数字',
+          placeholder: isEdit ? '留空表示不修改密码' : `${passwordHintText()}，且不能为纯数字`,
           hint: isEdit ? '出于安全考虑，留空则不修改' : '弱密码会被拒绝（如 admin、123456）' },
       ];
     },

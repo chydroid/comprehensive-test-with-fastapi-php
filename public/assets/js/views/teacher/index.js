@@ -14,6 +14,7 @@ import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
 import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
 import { fmtDateTime, fmtScore, fmtNumber } from '../../core/format.js';
+import { loadAppSettings, appSettingInt, entryWindowText } from '../../core/app-settings.js';
 
 const EXAM_STATUS = {
   testing: { label: '考试中', tone: 'success' },
@@ -47,6 +48,8 @@ export function TeacherExamsView({ router }) {
   const toolbarSlot = el('div');
   const tableSlot = el('div', { style: { position: 'relative', minHeight: '200px' } });
   const pageSlot = el('div');
+  // 入场窗口等文案随后台设置变化，异步取回即可（未就绪时用默认值渲染）
+  void loadAppSettings();
 
   const state = { page: 1, per_page: 20, keyword: '', list: [], total: 0, options: {} };
 
@@ -201,7 +204,7 @@ export function TeacherExamsView({ router }) {
       title: '已开放入场',
       size: 'sm',
       body: el('div.stack', {}, [
-        alertBox(`「${r.exam_name}」已开放入场，请将考场口令告知考生。考生可在开考前 15 分钟内凭此口令进入考场。`, { type: 'success' }),
+        alertBox(`「${r.exam_name}」已开放入场，请将考场口令告知考生。考生${entryWindowText()}。`, { type: 'success' }),
         el('div', {
           style: {
             textAlign: 'center', padding: 'var(--sp-6)',
@@ -305,6 +308,8 @@ export function TeacherMonitorView({ router, query }) {
   );
 
   async function init() {
+    // 自动刷新间隔来自后台设置；取回后再建立轮询
+    await loadAppSettings();
     const res = await withLoading(tableSlot, () => teacherApi.monitor(state.examId ? { exam_id: state.examId } : {}));
     if (!res.ok) return;
     if (!state.examId) {
@@ -382,7 +387,7 @@ export function TeacherMonitorView({ router, query }) {
         ]),
         button('复制', { variant: 'ghost', size: 'sm', iconName: 'copy', onClick: () => copyWithToast(pwd, '考场口令') }),
       ]) : null,
-      el('div.fs-xs.c-tertiary', { text: '流程：开放入场 → 告知考生口令 → 考生在开考前 15 分钟内进场 → 开始出题 → 到点自动开考或手动开考' }),
+      el('div.fs-xs.c-tertiary', { text: `流程：开放入场 → 告知考生口令 → 考生${entryWindowText()} → 开始出题 → 到点自动开考或手动开考` }),
     ].filter(Boolean));
 
     controlSlot.append(card({ iconName: 'shield', title: '考场控制', actions, body }));
@@ -407,7 +412,7 @@ export function TeacherMonitorView({ router, query }) {
     const res = await withLoading(controlSlot, () => teacherApi.openExam(state.examId));
     if (!res.ok) return;
     const pwd = res.result?.exam_pwd || res.result?.pwd || '';
-    showPwdModal('已开放入场', `「${state.exam?.exam_name || ''}」已开放入场，请将考场口令告知考生。考生可在开考前 15 分钟内凭此口令进入考场。`, pwd, () => init());
+    showPwdModal('已开放入场', `「${state.exam?.exam_name || ''}」已开放入场，请将考场口令告知考生。考生${entryWindowText()}。`, pwd, () => init());
   }
 
   async function generatePapers() {
@@ -564,7 +569,7 @@ export function TeacherMonitorView({ router, query }) {
   }
 
   init();
-  state.timer = setInterval(() => { if (state.examId) init(); }, 10000);
+  state.timer = setInterval(() => { if (state.examId) init(); }, appSettingInt('monitor_refresh_seconds', 10) * 1000);
 
   return { node: root, dispose: () => clearInterval(state.timer) };
 }

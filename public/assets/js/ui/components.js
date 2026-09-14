@@ -52,12 +52,17 @@ export function field(label, control, { hint = '', required = false, error = '' 
 export function input({
   name, value = '', placeholder = '', type = 'text', required = false,
   disabled = false, inputmode = '', maxlength = '', autocomplete = '', class: cls = '',
+  min = '', max = '', step = '', suffix = '',
 } = {}) {
-  return el('input', {
+  const node = el('input', {
     class: `input${cls ? ` ${cls}` : ''}`, name, value, placeholder, type, required, disabled,
     inputmode: inputmode || null, maxlength: maxlength || null,
     autocomplete: autocomplete || null,
+    min: min === '' ? null : min, max: max === '' ? null : max, step: step === '' ? null : step,
   });
+  // 单位后缀（如「分钟」「条」）只作展示，复用 input-group 的 addon 样式
+  if (!suffix) return node;
+  return el('div.input-group', {}, [node, el('span.input-addon', { text: suffix })]);
 }
 
 export function textarea({ name, value = '', placeholder = '', rows = 4, disabled = false } = {}) {

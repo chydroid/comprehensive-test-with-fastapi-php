@@ -26,7 +26,7 @@ class GradeController extends BaseController
     /** GET /api/admin/grades */
     public function index(): Response
     {
-        $p = $this->page(50);
+        $p = $this->page();
         $kw = $p['keyword'];
 
         if ($kw !== '') {

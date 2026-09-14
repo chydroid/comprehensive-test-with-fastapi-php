@@ -1,7 +1,7 @@
 /**
  * 考场（正式考试）视图：登录入场 + 等待开考 + 答题（复用 exam-runner）。
  *
- * 流程：入场（准考证号 + 密码 + 考场口令，仅开考前 15 分钟内可入场）
+ * 流程：入场（准考证号 + 密码 + 考场口令，入场窗口由后台「系统设置 → 考试规则」控制）
  *   → 等待室（轮询 /api/exam/status，到点/监考开考后自动进入答题）
  *   → 答题（exam-runner）。
  */
@@ -13,6 +13,9 @@ import { withLoading } from '../../core/bootstrap.js';
 import { examApi } from '../../api/index.js';
 import { createExamRunner } from '../exam-runner.js';
 import { fmtDateTime } from '../../core/format.js';
+import {
+  loadAppSettings, appSettingInt, entryWindowText,
+} from '../../core/app-settings.js';
 
 /**
  * 考场入口：准考证号 + 密码 + 考场口令。
@@ -54,13 +57,17 @@ export function ExamLoginView({ router, query }) {
     router.navigate(`/take?exam_id=${res.result.exam.id}`);
   }
 
+  // 入场窗口文案来自后台设置：先用默认值渲染，取到配置后校正
+  const windowHint = el('p.muted', { text: entryWindowText() });
+  loadAppSettings().then(() => { windowHint.textContent = entryWindowText(); });
+
   root.append(el('div.login-aurora'));
   root.append(el('div.login-panel', {}, [
     el('div.login-brand', {}, [
       el('div.brand-mark', {}, [icon('shield-check', { size: 22 })]),
       el('div', {}, [
         el('h2', { text: '进入考场' }),
-        el('p.muted', { text: '开考前 15 分钟内凭考场口令入场' }),
+        windowHint,
       ]),
     ]),
     form,
@@ -119,12 +126,13 @@ export function ExamTakeView({ router, query }) {
     ]))));
 
     stopPoll();
+    const pollSeconds = Math.max(2, appSettingInt('waiting_poll_seconds', 4));
     pollTimer = setInterval(async () => {
       const r = await examApi.status().catch(() => null);
       if (!r || !r.phase) return;
       if (r.phase === 'answering') { stopPoll(); startRunner(); }
       else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }
-    }, 4000);
+    }, pollSeconds * 1000);
   }
 
   function renderClosed(data) {

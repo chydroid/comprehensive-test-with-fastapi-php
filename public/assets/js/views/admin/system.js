@@ -7,17 +7,29 @@ import { icon } from '../../core/icons.js';
 import {
   button, badge, card, openModal, confirmDialog, notify, alertBox,
   table, descList, emptyStated, field, input, textarea, select, codeBlock,
+  tabs, switchToggle,
 } from '../../ui/components.js';
 import { adminApi, exerciseApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
+import { invalidateAppSettings, loadAppSettings, appSettingInt, passwordHintText } from '../../core/app-settings.js';
 import { fmtNumber, fmtDateTime } from '../../core/format.js';
 
-/* ============================ 站点配置 ============================ */
+/* ============================ 系统设置 ============================ */
+
+/**
+ * 站点信息 + 运行参数。
+ *
+ * 运行参数（考试规则 / 安全策略 / 界面与体验）完全由后端 App\Services\Setting
+ * 的 schema 驱动：分组、类型、取值范围、单位与帮助文案都随 /api/admin/settings
+ * 下发，前端只负责渲染——后端新增一个设置项时这里无需同步改代码。
+ */
 export function ConfigView() {
   const root = el('div.stack');
-  const formSlot = el('div');
+  const tabSlot = el('div');
+  const bodySlot = el('div');
 
-  const FIELDS = [
+  /** 站点展示信息（与运行参数分开维护，键名不重叠） */
+  const SITE_FIELDS = [
     { name: 'site_title', label: '站点标题', placeholder: '如：网上理论考核系统', maxlength: 100, colSpan: 2 },
     { name: 'copyright', label: '版权信息', placeholder: '如：XX 海事局 版权所有', maxlength: 255, colSpan: 2 },
     { name: 'icp', label: '备案号', placeholder: '如：京 ICP 备 12345678 号', maxlength: 100 },
@@ -27,76 +39,210 @@ export function ConfigView() {
       placeholder: '用于首页与搜索引擎展示的站点简介' },
   ];
 
-  const controls = {};
+  const state = {
+    tab: 'site',
+    site: null,       // 站点信息当前值（用于「是否有改动」比较）
+    siteCtl: {},      // 站点信息控件
+    meta: null,       // /api/admin/settings 的 {groups, fields}
+    metaError: '',
+  };
 
-  async function load() {
-    mount(formSlot, el('div.stack-sm', {}, [
+  function skeletonBlock() {
+    return el('div.card', {}, el('div.card-body.stack-sm', {}, [
       el('div.skeleton.skeleton-title'),
       el('div.skeleton.skeleton-text'),
       el('div.skeleton.skeleton-text'),
+      el('div.skeleton.skeleton-text'),
     ]));
-    try {
-      const data = await adminApi.config();
-      renderForm(data || {});
-    } catch (e) {
-      mount(formSlot, alertBox(e?.message || '配置加载失败', { type: 'danger' }));
-    }
   }
 
-  function renderForm(values) {
-    const form = el('div.form-grid');
-    for (const f of FIELDS) {
-      let ctl;
-      if (f.type === 'textarea') {
-        ctl = textarea({ name: f.name, value: values[f.name] ?? '', placeholder: f.placeholder || '', rows: f.rows || 4 });
-      } else {
-        ctl = input({ name: f.name, value: values[f.name] ?? '', placeholder: f.placeholder || '', maxlength: f.maxlength || '' });
+  function renderTabs() {
+    const items = [{ key: 'site', label: '站点信息' }];
+    for (const [key, g] of Object.entries(state.meta?.groups || {})) {
+      items.push({ key, label: g.label });
+    }
+    mount(tabSlot, tabs(items, state.tab, (k) => { state.tab = k; renderTabs(); render(); }));
+  }
+
+  function render() {
+    if (state.tab === 'site') { renderSite(); return; }
+    renderGroup(state.tab);
+  }
+
+  /* -------------------- 站点信息 -------------------- */
+
+  async function renderSite() {
+    mount(bodySlot, skeletonBlock());
+    if (!state.site) {
+      try {
+        state.site = (await adminApi.config()) || {};
+      } catch (e) {
+        mount(bodySlot, alertBox(e?.message || '配置加载失败', { type: 'danger' }));
+        return;
       }
-      controls[f.name] = ctl;
+    }
+
+    const values = state.site;
+    const form = el('div.form-grid');
+    state.siteCtl = {};
+    for (const f of SITE_FIELDS) {
+      const ctl = f.type === 'textarea'
+        ? textarea({ name: f.name, value: values[f.name] ?? '', placeholder: f.placeholder || '', rows: f.rows || 4 })
+        : input({ name: f.name, value: values[f.name] ?? '', placeholder: f.placeholder || '', maxlength: f.maxlength || '' });
+      state.siteCtl[f.name] = ctl;
       const wrap = field(f.label, ctl);
       if (f.colSpan === 2) wrap.classList.add('span-2');
       form.append(wrap);
     }
 
-    const saveBtn = button('保存配置', { variant: 'primary', iconName: 'save' });
-    const resetBtn = button('重置', { variant: 'secondary', iconName: 'refresh', onClick: () => load() });
-
+    const saveBtn = button('保存站点信息', { variant: 'primary', iconName: 'save' });
     saveBtn.addEventListener('click', async () => {
       const payload = {};
-      for (const f of FIELDS) payload[f.name] = controls[f.name].value.trim();
-
+      for (const f of SITE_FIELDS) payload[f.name] = state.siteCtl[f.name].value.trim();
       const changed = Object.entries(payload).filter(([k, v]) => v !== (values[k] ?? ''));
       if (!changed.length) { notify.info('配置没有变化'); return; }
 
       const { ok, error } = await withLoading(saveBtn, () => adminApi.saveConfig(payload), { silent: true });
       if (ok) {
-        notify.success('配置已保存');
-        load();
+        notify.success('站点信息已保存');
+        state.site = null;
+        renderSite();
       } else {
         notify.error(error?.message || '保存失败');
       }
     });
 
-    clear(formSlot);
-    formSlot.append(card({
+    mount(bodySlot, card({
       title: '站点信息',
       iconName: 'settings',
-      body: form,
+      body: el('div.stack', {}, [
+        el('div.page-desc', { text: '以下信息会展示在前台门户、考生端页脚等位置' }),
+        form,
+      ]),
+      footer: el('div.flex.justify-end.gap-2', {}, [
+        button('重新加载', { variant: 'secondary', iconName: 'refresh', onClick: () => { state.site = null; renderSite(); } }),
+        saveBtn,
+      ]),
+    }));
+  }
+
+  /* -------------------- 运行参数（schema 驱动） -------------------- */
+
+  async function ensureMeta() {
+    if (state.meta) return true;
+    try {
+      state.meta = await adminApi.settings();
+      state.metaError = '';
+    } catch (e) {
+      state.meta = { groups: {}, fields: [] };
+      state.metaError = e?.message || '设置加载失败';
+    }
+    renderTabs();
+    return state.metaError === '';
+  }
+
+  async function renderGroup(key) {
+    mount(bodySlot, skeletonBlock());
+    if (!(await ensureMeta())) {
+      mount(bodySlot, alertBox(state.metaError, { type: 'danger' }));
+      return;
+    }
+
+    const group = state.meta.groups?.[key] || { label: key, desc: '' };
+    const fields = (state.meta.fields || []).filter((f) => f.group === key);
+    if (!fields.length) {
+      mount(bodySlot, emptyStated('该分组暂无设置项', { iconName: 'sliders' }));
+      return;
+    }
+
+    const ctl = {};
+    const form = el('div.form-grid');
+    for (const f of fields) {
+      let node;
+      if (f.type === 'bool') {
+        // 传入 name 以便与其它表单控件一致地按字段名寻址
+        const sw = switchToggle('', { name: f.key, checked: Number(f.value) === 1 });
+        node = el('div.flex.items-center', { style: { height: '38px' } }, [sw]);
+        ctl[f.key] = { type: 'bool', input: sw.querySelector('input') };
+      } else {
+        node = input({
+          name: f.key, type: 'number', value: String(f.value),
+          min: f.min ?? '', max: f.max ?? '', step: 1, suffix: f.unit || '',
+        });
+        ctl[f.key] = { type: 'int', input: node.querySelector('input'), field: f };
+      }
+      form.append(field(f.label, node, { hint: f.hint }));
+    }
+
+    const saveBtn = button('保存设置', { variant: 'primary', iconName: 'save' });
+    saveBtn.addEventListener('click', async () => {
+      const payload = {};
+      for (const f of fields) {
+        const c = ctl[f.key];
+        if (c.type === 'bool') { payload[f.key] = c.input.checked ? 1 : 0; continue; }
+
+        const raw = String(c.input.value).trim();
+        const n = Number(raw);
+        if (raw === '' || !Number.isFinite(n)) { notify.error(`「${f.label}」请填写数字`); c.input.focus(); return; }
+        if (f.min !== null && f.max !== null && (n < f.min || n > f.max)) {
+          notify.error(`「${f.label}」需在 ${f.min}–${f.max} 之间`);
+          c.input.focus();
+          return;
+        }
+        payload[f.key] = Math.trunc(n);
+      }
+
+      const { ok, error } = await withLoading(saveBtn, () => adminApi.saveSettings(payload), { silent: true });
+      if (ok) {
+        notify.success('设置已保存，即时生效');
+        state.meta = null;            // 重新拉取（可能已被规范化）
+        invalidateAppSettings();      // 让本客户端的公开参数缓存失效
+        renderTabs();
+        renderGroup(key);
+      } else {
+        notify.error(error?.message || '保存失败');
+      }
+    });
+
+    const resetBtn = button('恢复默认', { variant: 'secondary', iconName: 'refresh', onClick: () => {
+      for (const f of fields) {
+        const c = ctl[f.key];
+        if (c.type === 'bool') c.input.checked = Number(f.default) === 1;
+        else c.input.value = String(f.default);
+      }
+      notify.info('已填入默认值，确认后请点击保存');
+    } });
+
+    mount(bodySlot, card({
+      title: group.label,
+      iconName: 'sliders',
+      body: el('div.stack', {}, [
+        group.desc ? el('div.page-desc', { text: group.desc }) : null,
+        form,
+        alertBox('设置保存后立即生效，无需重启服务。', { type: 'info' }),
+      ].filter(Boolean)),
       footer: el('div.flex.justify-end.gap-2', {}, [resetBtn, saveBtn]),
     }));
   }
 
+  /* -------------------- 启动 -------------------- */
+
   root.append(
     el('div.page-head', {}, [
       el('div', {}, [
-        el('h2.page-title', { text: '站点配置' }),
-        el('div.page-desc', { text: '以下信息会展示在前台门户、考生端页脚等位置' }),
+        el('h2.page-title', { text: '系统设置' }),
+        el('div.page-desc', { text: '站点展示信息与运行参数（入场窗口、限流、分页等）' }),
       ]),
     ]),
-    formSlot,
+    tabSlot,
+    bodySlot,
   );
 
-  load();
+  renderTabs();
+  render();
+  // 后台补拉设置分组，用于渲染其余标签页
+  ensureMeta().then(() => { if (state.tab !== 'site') render(); });
+
   return root;
 }
 
@@ -332,7 +478,9 @@ export function ProfileView({ shell, session }) {
 
   /* 改密 */
   const oldPwd = input({ type: 'password', name: 'old_password', placeholder: '请输入当前密码', autocomplete: 'current-password' });
-  const newPwd = input({ type: 'password', name: 'new_password', placeholder: '至少 6 位，不能为纯数字', autocomplete: 'new-password' });
+  const newPwd = input({ type: 'password', name: 'new_password', placeholder: `${passwordHintText()}，不能为纯数字`, autocomplete: 'new-password' });
+  // 设置可能稍后到达：就绪后校正提示文案
+  loadAppSettings().then(() => { newPwd.placeholder = `${passwordHintText()}，不能为纯数字`; });
   const confirmPwd = input({ type: 'password', name: 'confirm_password', placeholder: '请再次输入新密码', autocomplete: 'new-password' });
   const pwdErr = el('div');
 
@@ -340,7 +488,7 @@ export function ProfileView({ shell, session }) {
   savePwdBtn.addEventListener('click', async () => {
     clear(pwdErr);
     if (!oldPwd.value) { pwdErr.append(alertBox('请输入当前密码', { type: 'warning' })); return; }
-    if (newPwd.value.length < 6) { pwdErr.append(alertBox('新密码至少 6 位', { type: 'warning' })); return; }
+    if (newPwd.value.length < appSettingInt('password_min_length', 6)) { pwdErr.append(alertBox(`新密码${passwordHintText()}`, { type: 'warning' })); return; }
     if (newPwd.value !== confirmPwd.value) { pwdErr.append(alertBox('两次输入的新密码不一致', { type: 'warning' })); return; }
 
     const { ok, error } = await withLoading(savePwdBtn, () => adminApi.updatePassword({

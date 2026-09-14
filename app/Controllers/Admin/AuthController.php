@@ -91,7 +91,7 @@ class AuthController extends BaseController
         $sess = $this->authAdmin();
         $in = $this->validate([
             'old_password' => 'required|maxlen:64',
-            'new_password' => 'required|minlen:6|maxlen:64',
+            'new_password' => \App\Services\Password::rule(),
         ]);
 
         $admins = new Admin();

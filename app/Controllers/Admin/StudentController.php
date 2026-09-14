@@ -137,7 +137,9 @@ class StudentController extends BaseController
     public function save(): Response
     {
         $in = $this->validate([
-            'id'       => 'required|maxlen:20',
+            // stuinfo.id 为 int 列，非数字准考证号若放行会以 SQL 报错形式 500（并泄露 SQL），
+            // 故与考生自助注册保持一致，在此按纯数字校验。
+            'id'       => 'required|regex:/^\d{1,20}$/',
             'stu_name' => 'required|maxlen:50',
             'password' => 'maxlen:64',
             'stu_sex'  => 'maxlen:10',

@@ -10,6 +10,7 @@ use App\Models\StuScore;
 use App\Services\AuthSession;
 use App\Services\ExamEngine;
 use App\Services\Password;
+use App\Services\Setting;
 use Core\Database;
 use Core\HttpException;
 use Core\Response;
@@ -87,11 +88,19 @@ class ExamController extends BaseController
             $now = time();
             $opens = Exam::entryOpensAt($exam);
             $closes = Exam::entryClosesAt($exam);
+            $lead = Setting::int('exam_entry_lead_minutes', 15);
+            $late = Setting::int('exam_entry_late_minutes', 0);
             if ($opens !== null && $now < $opens) {
-                throw new HttpException(403, '入场尚未开始：开考前 15 分钟才可进入考场', 40305);
+                $msg = $lead > 0
+                    ? "入场尚未开始：开考前 {$lead} 分钟才可进入考场"
+                    : '入场尚未开始，请稍候';
+                throw new HttpException(403, $msg, 40305);
             }
             if ($closes !== null && $now >= $closes) {
-                throw new HttpException(403, '考试已开始，无法进入考场', 40306);
+                $msg = $late > 0
+                    ? "迟到入场宽限（开考后 {$late} 分钟）已过，无法进入考场"
+                    : '考试已开始，无法进入考场';
+                throw new HttpException(403, $msg, 40306);
             }
         }
 
@@ -168,6 +177,8 @@ class ExamController extends BaseController
         return $this->ok([
             'phase'       => $phase,
             'paper_ready' => $paperReady,
+            'score_visible' => Setting::bool('exam_show_score_immediately', true),
+            'allow_view_answer' => Setting::bool('exam_allow_view_answer', true),
             'exam'        => $exam === null ? null : [
                 'id'          => (int) $exam['id'],
                 'exam_name'   => $exam['exam_name'],
@@ -337,10 +348,13 @@ class ExamController extends BaseController
         }
 
         $got = ExamEngine::autoGrade($examId, $stuId);
+        // 后台可关闭「交卷后立即显示成绩」：关闭时不下发分数，避免考中泄题或攀比
+        $visible = Setting::bool('exam_show_score_immediately', true);
         return $this->ok([
-            'submitted' => true,
-            'score'     => $got,
-            'exam_score'=> (int) (new Exam())->find($examId)['exam_score'],
+            'submitted'     => true,
+            'score'         => $visible ? $got : null,
+            'score_visible' => $visible,
+            'exam_score'    => $visible ? (int) (new Exam())->find($examId)['exam_score'] : null,
         ], '交卷成功');
     }
 
@@ -353,13 +367,15 @@ class ExamController extends BaseController
 
         $score = (new StuScore())->findOne($examId, $stuId);
         $exam = (new Exam())->find($examId);
+        $visible = Setting::bool('exam_show_score_immediately', true);
 
         return $this->ok([
-            'submitted'  => $score !== null && str_starts_with((string) $score['stu_status'], 'over'),
-            'score'      => (int) ($score['stu_score'] ?? 0),
-            'exam_score' => (int) ($exam['exam_score'] ?? 0),
-            'exam_name'  => $exam['exam_name'] ?? '',
-            'stu_name'   => $sess['stu_name'] ?? '',
+            'submitted'     => $score !== null && str_starts_with((string) $score['stu_status'], 'over'),
+            'score'         => $visible ? (int) ($score['stu_score'] ?? 0) : null,
+            'exam_score'    => $visible ? (int) ($exam['exam_score'] ?? 0) : null,
+            'score_visible' => $visible,
+            'exam_name'     => $exam['exam_name'] ?? '',
+            'stu_name'      => $sess['stu_name'] ?? '',
         ]);
     }
 
@@ -381,6 +397,10 @@ class ExamController extends BaseController
 
         if (!$submitted && !$examOver) {
             throw new HttpException(403, '考试尚未结束，不能查看答案', 40305);
+        }
+        // 后台可关闭「交卷后可查看答案解析」，用于需要复用同批题目的多场考试
+        if (!Setting::bool('exam_allow_view_answer', true)) {
+            throw new HttpException(403, '本场考试暂不开放答案解析查看', 40307);
         }
 
         $papers = ExamEngine::paperWithAnswers($examId, $stuId);

@@ -31,7 +31,7 @@ class TeacherController extends BaseController
     /** GET /api/admin/teachers */
     public function index(): Response
     {
-        $p = $this->page(50);
+        $p = $this->page();
         $kw = $p['keyword'];
 
         if ($kw !== '') {
@@ -76,7 +76,7 @@ class TeacherController extends BaseController
     {
         $in = $this->validate([
             'tea_name' => 'required|maxlen:50',
-            'password' => 'required|minlen:6|maxlen:64',
+            'password' => \App\Services\Password::rule(),
         ]);
         $name = trim((string) $in['tea_name']);
 

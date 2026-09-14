@@ -73,6 +73,7 @@ class SessionAuthMiddleware implements Middleware
         ['/api/admin/admins',     'admin', 'admin.manage'],
         ['/api/admin/system',     'admin', 'system.manage'],
         ['/api/admin/config',     'admin', 'system.config'],
+        ['/api/admin/settings',   'admin', 'system.config'],
         ['/api/admin/dashboard',  'admin', 'dashboard.view'],
 
         ['/api/admin/subjects',   'admin', 'subject.view'],
@@ -113,6 +114,8 @@ class SessionAuthMiddleware implements Middleware
         'POST /api/admin/scores/backup'         => 'score.backup',
         'GET /api/admin/scores/export'          => 'score.export',
         'POST /api/admin/students/import'       => 'student.import',
+        'PUT /api/admin/config'                 => 'system.config',
+        'PUT /api/admin/settings'               => 'system.config',
     ];
 
     /** 只读权限点 → 写入权限点前缀映射（quiz.view → quiz） */

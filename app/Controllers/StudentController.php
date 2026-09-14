@@ -79,7 +79,7 @@ class StudentController extends BaseController
         $sess = $this->authStudent();
         $in = $this->validate([
             'old_pwd' => 'required|maxlen:64',
-            'new_pwd' => 'required|minlen:6|maxlen:64',
+            'new_pwd' => \App\Services\Password::rule(),
             'new_pwd2'=> 'required|maxlen:64',
         ]);
         if ($in['new_pwd'] !== $in['new_pwd2']) {

@@ -12,6 +12,21 @@ namespace App\Services;
  */
 final class Password
 {
+    /** 密码最小长度的兜底默认值（实际取值见后台「系统设置 → 安全策略」） */
+    public const DEFAULT_MIN_LENGTH = 6;
+
+    /** 最小长度：读取后台设置，随配置实时生效 */
+    public static function minLength(): int
+    {
+        return max(1, Setting::int('password_min_length', self::DEFAULT_MIN_LENGTH));
+    }
+
+    /** 校验规则片段：'required|minlen:N|maxlen:64'，供各控制器复用 */
+    public static function rule(bool $required = true): string
+    {
+        return ($required ? 'required|' : '') . 'minlen:' . self::minLength() . '|maxlen:64';
+    }
+
     /** 生成哈希（bcrypt） */
     public static function hash(string $plain): string
     {
@@ -52,7 +67,7 @@ final class Password
     public static function isWeak(string $plain, string $account = ''): bool
     {
         $len = function_exists('mb_strlen') ? mb_strlen($plain) : strlen($plain);
-        if ($len < 6) {
+        if ($len < self::minLength()) {
             return true;
         }
         $weak = ['123456', '1234567', '12345678', '123456789', '000000', '111111',

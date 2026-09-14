@@ -13,6 +13,7 @@ import {
 import { createListView, openFormModal, confirmDelete } from '../../ui/crud.js';
 import { adminApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
+import { entryWindowText, loadAppSettings } from '../../core/app-settings.js';
 import { fmtDate, fmtDateTime, fmtScore, fmtNumber, normalizeTime, today, nowTime } from '../../core/format.js';
 import { QUIZ_TYPE_LABELS } from './quiz.js';
 
@@ -36,6 +37,8 @@ export function statusBadge(s) {
 
 export async function ExamView({ router, can }) {
   const refCache = { subjects: [], categories: [], classes: [] };
+  // 入场窗口等文案由后台设置决定，先取回以保证提示准确（失败时用默认值）
+  await loadAppSettings();
 
   const loadRefs = async () => {
     if (refCache.subjects.length) return refCache;
@@ -341,7 +344,7 @@ export async function ExamView({ router, can }) {
     const ok = await confirmDialog(
       pwdReady
         ? '重新生成口令后原口令立即失效，已进入考场的考生需重新输入新口令。确定继续？'
-        : `确定开放「${row.exam_name}」的入场吗？开放后考生可在开考前 15 分钟内凭口令进入考场。`,
+        : `确定开放「${row.exam_name}」的入场吗？开放后考生${entryWindowText()}。`,
       {
         title: pwdReady ? '重新生成口令' : '开放入场',
         confirmText: pwdReady ? '重新生成' : '开放入场',
@@ -358,7 +361,7 @@ export async function ExamView({ router, can }) {
       title: '已开放入场',
       size: 'sm',
       body: el('div.stack', {}, [
-        alertBox(`「${row.exam_name}」已开放入场。考生可在开考前 15 分钟内，用准考证号 + 以下口令进入考场。`, { type: 'success' }),
+        alertBox(`「${row.exam_name}」已开放入场。考生${entryWindowText()}，用准考证号 + 以下口令入场。`, { type: 'success' }),
         el('div', {
           style: {
             textAlign: 'center', padding: 'var(--sp-6)',

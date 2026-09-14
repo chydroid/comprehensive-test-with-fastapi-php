@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Middlewares;
 
+use App\Services\Setting;
 use Core\Middleware;
 use Core\Request;
 use Core\Response;
@@ -17,12 +18,15 @@ use Core\Redis;
  * 配置为 redis 但 phpredis 不可用时自动降级 file 并记警告，避免服务不可用。
  *
  * 登录类接口（路径以 /login 结尾）使用更严格的独立配额，防暴力破解。
+ *
+ * 阈值来源：优先读取后台「系统设置 → 安全策略」（siteconfig 表），
+ * 读不到时回落到 config 文件中的 rate_limit.*，最后使用内置默认值。
+ * 因此运维调整限流强度无需改代码或重启。
  */
 class RateLimitMiddleware implements Middleware
 {
-    /** 登录接口专属配额（比全局更严） */
-    private const LOGIN_MAX = 10;
-    private const LOGIN_WINDOW = 300;
+    /** 登录接口专属配额的兜底值（后台设置缺失时使用） */
+    private const DEFAULT_LOGIN_MAX = 10;
 
     private string $driver;
 
@@ -33,14 +37,27 @@ class RateLimitMiddleware implements Middleware
 
     public function handle(Request $request, callable $next): Response
     {
-        $cfg = (array) config('rate_limit', []);
-        if (!($cfg['enabled'] ?? false)) {
+        // 总开关：管理员显式配置过则以后台设置为准，否则沿用 config 文件
+        $enabled = Setting::stored('rate_limit_enabled') === null
+            ? (bool) config('rate_limit.enabled', false)
+            : Setting::bool('rate_limit_enabled');
+
+        if (!$enabled) {
             return $next($request);
         }
 
+        $cfg = (array) config('rate_limit', []);
         $isLogin = str_ends_with($request->path(), '/login');
-        $window = $isLogin ? self::LOGIN_WINDOW : (int) ($cfg['window_seconds'] ?? 60);
-        $max = $isLogin ? self::LOGIN_MAX : (int) ($cfg['max_requests'] ?? 60);
+
+        if ($isLogin) {
+            // 登录接口配额（后台按分钟配置，窗口至少 1 分钟）
+            $window = max(60, Setting::int('login_window_minutes', 5) * 60);
+            $max = max(1, Setting::int('login_max_attempts', self::DEFAULT_LOGIN_MAX));
+        } else {
+            $window = max(1, Setting::int('rate_limit_window_seconds', (int) ($cfg['window_seconds'] ?? 60)));
+            $max = max(1, Setting::int('rate_limit_max_requests', (int) ($cfg['max_requests'] ?? 60)));
+        }
+
         $rawKey = md5($request->ip() . '|' . $request->path());
 
         $count = $this->driver === 'redis' && Redis::available()

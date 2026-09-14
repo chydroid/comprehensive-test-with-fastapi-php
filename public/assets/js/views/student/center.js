@@ -12,6 +12,7 @@ import {
 import { withLoading } from '../../core/bootstrap.js';
 import { studentApi } from '../../api/index.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtDate } from '../../core/format.js';
+import { passwordHintText, appSettingInt } from '../../core/app-settings.js';
 
 /** 考场状态 → 文案/色调 */
 export const STU_STATUS = {
@@ -105,7 +106,7 @@ export function StudentExamsView({ router }) {
         el('div.fs-sm.c-secondary.mt-1', {
           text: answering
             ? '点击「继续答题」回到答题界面。'
-            : '请在开考前 15 分钟内凭考场口令入场；口令请向监考教师索取。',
+            : (target.hint || '请凭考场口令入场，口令请向监考教师索取。'),
         }),
       ]),
       button(answering ? '继续答题' : '进入考场', { variant: 'primary', iconName: 'log-in', onClick: () => enterExam(target) }),
@@ -164,7 +165,8 @@ export function StudentExamsView({ router }) {
   }
 
   function hintOf(e, state) {
-    if (state === 'open') return `开考前 15 分钟内可凭考场口令入场（开考后不可进入）。`;
+    // 服务端已按后台「考试规则」生成说明文案（含入场窗口分钟数），优先使用
+    if (e.hint) return e.hint;
     if (state === 'upcoming') return e.entry_opens_at ? `入场将于 ${fmtDateTime(e.entry_opens_at)} 开放。` : '尚未到入场时间。';
     if (state === 'closed' && !e.pwd_ready) return '考场尚未开放入场，请等待监考教师开放。';
     if (state === 'closed') return '考试已开始或已结束，无法进入考场。';
@@ -267,7 +269,7 @@ export function StudentPasswordView() {
 
   const form = el('form', { class: 'form-grid', on: { submit: (ev) => { ev.preventDefault(); submit(); } } }, [
     field('当前密码', oldIn, { required: true }),
-    field('新密码', newIn, { required: true, hint: '至少 6 位，建议字母 + 数字组合' }),
+    field('新密码', newIn, { required: true, hint: `${passwordHintText()}，建议字母 + 数字组合` }),
     field('确认新密码', reIn, { required: true }),
     errSlot,
     el('div.form-actions', {}, [button('确认修改', { variant: 'primary', type: 'submit', iconName: 'key' })]),
@@ -275,8 +277,8 @@ export function StudentPasswordView() {
 
   async function submit() {
     clear(errSlot);
-    if (newIn.value.length < 6) {
-      errSlot.append(el('div.alert.alert-danger', {}, [el('span', { text: '新密码至少 6 位' })]));
+    if (newIn.value.length < appSettingInt('password_min_length', 6)) {
+      errSlot.append(el('div.alert.alert-danger', {}, [el('span', { text: `新密码${passwordHintText()}` })]));
       return;
     }
     if (newIn.value !== reIn.value) {

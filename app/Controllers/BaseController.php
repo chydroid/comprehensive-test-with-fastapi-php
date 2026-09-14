@@ -56,8 +56,16 @@ abstract class BaseController extends \Core\Controller
      * 统一分页参数解析
      * @return array{page:int, per_page:int, offset:int, keyword:string}
      */
-    protected function page(int $defaultPerPage = 20, int $maxPerPage = 100): array
+    /**
+     * 解析分页参数。
+     *
+     * @param int|null $defaultPerPage 未指定时取后台「系统设置 → 列表默认每页条数」
+     * @param int      $maxPerPage     单页上限，防止客户端请求过大分页拖垮数据库
+     */
+    protected function page(?int $defaultPerPage = null, int $maxPerPage = 100): array
     {
+        $defaultPerPage ??= \App\Services\Setting::int('page_size_default', 20);
+        $defaultPerPage = min($maxPerPage, max(1, $defaultPerPage));
         $page = max(1, (int) $this->request->query('page', 1));
         $perPage = (int) $this->request->query('per_page', $defaultPerPage);
         $perPage = min($maxPerPage, max(1, $perPage));

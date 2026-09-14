@@ -11,6 +11,7 @@ import {
   copyWithToast,
 } from '../../ui/components.js';
 import { adminApi } from '../../api/index.js';
+import { loadAppSettings, appSettingInt, entryWindowText } from '../../core/app-settings.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtRelative, fmtTime, initials, hashTone } from '../../core/format.js';
 import { statusBadge } from './exam.js';
@@ -54,10 +55,15 @@ export async function MonitorView({ router, query }) {
   let roster = [];
   let currentExam = null;
   let frameSummary = null;
+  // 自动刷新间隔（毫秒）：来自后台「界面与体验 → 监考页面自动刷新间隔」
+  let refreshMs = 10_000;
 
   /* ============================ 初始化 ============================ */
   async function init() {
     mount(tableSlot, skeletonRows(6, 5));
+    // 运行参数只需拉一次；失败时沿用默认间隔
+    await loadAppSettings();
+    refreshMs = Math.max(3, appSettingInt('monitor_refresh_seconds', 10)) * 1000;
     try {
       const data = await adminApi.monitor(examId ? { exam_id: examId } : {});
       renderFrame(data);
@@ -196,7 +202,7 @@ export async function MonitorView({ router, query }) {
       ]),
       pwdReady ? pwdBlock(pwd) : null,
       el('div.fs-xs.c-tertiary', {
-        text: '流程：开放入场 → 告知考生口令 → 考生在开考前 15 分钟内进场 → 开始出题 → 到点自动开考或手动开考',
+        text: `流程：开放入场 → 告知考生口令 → 考生${entryWindowText()} → 开始出题 → 到点自动开考或手动开考`,
       }),
     ].filter(Boolean));
 
@@ -419,7 +425,7 @@ export async function MonitorView({ router, query }) {
           renderTable();
         }
       } catch (_) { /* 静默失败，等待下次 */ }
-    }, 10_000);
+    }, refreshMs);
   }
 
   function reload() { clearInterval(timer); init(); }

@@ -67,6 +67,7 @@ return [
 
     /* ==================== 前台公开 ==================== */
     ['GET', '/api/public/site',      [HomeController::class, 'site']],
+    ['GET', '/api/public/settings',  [HomeController::class, 'settings']],
     ['GET', '/api/public/help',      [HomeController::class, 'help']],
     ['GET', '/api/public/news',      [PublicNewsController::class, 'index']],
     ['GET', '/api/public/news/{id}', [PublicNewsController::class, 'show']],
@@ -247,6 +248,10 @@ return [
     /* ---------- 站点配置（systemAdmin） ---------- */
     ['GET',  '/api/admin/config',          [ConfigController::class, 'index']],
     ['PUT',  '/api/admin/config',          [ConfigController::class, 'update']],
+
+    /* ---------- 系统参数（systemAdmin，schema 驱动） ---------- */
+    ['GET',  '/api/admin/settings',        [ConfigController::class, 'settings']],
+    ['PUT',  '/api/admin/settings',        [ConfigController::class, 'updateSettings']],
 
     /* ---------- 上传 ---------- */
     ['POST', '/api/admin/upload/pic',      [UploadController::class, 'picUpload']],

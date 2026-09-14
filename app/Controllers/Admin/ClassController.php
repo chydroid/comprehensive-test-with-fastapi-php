@@ -26,7 +26,7 @@ class ClassController extends BaseController
     /** GET /api/admin/classes */
     public function index(): Response
     {
-        $p = $this->page(50);
+        $p = $this->page();
         $kw = $p['keyword'];
 
         if ($kw !== '') {

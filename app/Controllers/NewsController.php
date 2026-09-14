@@ -16,7 +16,7 @@ class NewsController extends BaseController
     /** GET /api/public/news —— 公告列表（分页） */
     public function index(): Response
     {
-        $p = $this->page(20, 50);
+        $p = $this->page(null, 50);
         $model = new ExamNews();
         $result = $model->paginate($p['page'], $p['per_page']);
         return $this->ok($result);

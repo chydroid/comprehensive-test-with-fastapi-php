@@ -30,7 +30,7 @@ class SubjectController extends BaseController
     /** GET /api/admin/subjects */
     public function index(): Response
     {
-        $p = $this->page(50);
+        $p = $this->page();
         $kw = $p['keyword'];
 
         if ($kw !== '') {

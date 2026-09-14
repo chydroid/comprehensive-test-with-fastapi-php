@@ -53,7 +53,7 @@ const NAV = [
 
   { key: 'news',     label: '考试公告', icon: 'bell',      perm: 'news.view', group: 'system' },
   { key: 'admins',   label: '管理员',   icon: 'shield',    perm: 'admin.manage', group: 'system' },
-  { key: 'config',   label: '站点配置', icon: 'settings',  perm: 'system.config', group: 'system' },
+  { key: 'config',   label: '系统设置', icon: 'settings',  perm: 'system.config', group: 'system' },
   { key: 'system',   label: '系统维护', icon: 'sliders',   perm: 'system.manage', group: 'system' },
 
   { key: 'profile',  label: '个人设置', icon: 'user',      group: 'system', hidden: true },

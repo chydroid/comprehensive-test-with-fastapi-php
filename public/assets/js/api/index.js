@@ -7,6 +7,8 @@ import { http, download } from '../core/http.js';
 /* ============================ 通用 / 门户 ============================ */
 export const siteApi = {
   site:     () => http.get('/public/site'),
+  // 运行参数（入场窗口、轮询间隔等），供各端渲染准确文案与节奏
+  settings: () => http.get('/public/settings'),
   help:     () => http.get('/public/help'),
   hero:     (params) => http.get('/public/hero', { query: params }),
   subjects: () => http.get('/public/subjects'),
@@ -181,6 +183,10 @@ export const adminApi = {
 
   config:    () => http.get('/admin/config'),
   saveConfig:(body) => http.put('/admin/config', body),
+
+  // 系统参数（schema 驱动：分组 / 类型 / 范围随响应下发）
+  settings:     () => http.get('/admin/settings'),
+  saveSettings: (body) => http.put('/admin/settings', body),
   uploadPic: (formData) => http.post('/admin/upload/pic', formData),
 
   system:        () => http.get('/admin/system'),

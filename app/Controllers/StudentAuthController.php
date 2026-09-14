@@ -28,7 +28,7 @@ class StudentAuthController extends BaseController
         $in = $this->validate([
             'stu_id'   => 'required|regex:/^\d{1,20}$/',
             'stu_name' => 'required|maxlen:50',
-            'password' => 'required|minlen:6|maxlen:64',
+            'password' => \App\Services\Password::rule(),
             'stu_sex'  => 'maxlen:10',
             'grade_id' => 'maxlen:100',
             'class_id' => 'maxlen:100',

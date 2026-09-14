@@ -9,6 +9,7 @@ import { button, field, input, select, notify } from '../../ui/components.js';
 import { studentApi } from '../../api/index.js';
 import { studentSession } from '../../core/student-session.js';
 import { withLoading } from '../../core/bootstrap.js';
+import { passwordHintText, appSettingInt, loadAppSettings } from '../../core/app-settings.js';
 
 /**
  * @param {{router, query?, onDone?:Function}} cfg
@@ -61,7 +62,8 @@ export function StudentRegisterView({ router }) {
   const sexSel = select([{ value: '男', label: '男' }, { value: '女', label: '女' }], { name: 'stu_sex', value: '男' });
   const gradeSel = select([], { name: 'grade_id', placeholder: '加载中…' });
   const classSel = select([], { name: 'class_id', placeholder: '加载中…' });
-  const pwdIn = input({ name: 'password', type: 'password', required: true, autocomplete: 'new-password', placeholder: '至少 6 位' });
+  const pwdIn = input({ name: 'password', type: 'password', required: true, autocomplete: 'new-password', placeholder: passwordHintText() });
+  loadAppSettings().then(() => { pwdIn.placeholder = passwordHintText(); });
   const pwd2In = input({ name: 'confirm', type: 'password', required: true, autocomplete: 'new-password', placeholder: '再次输入密码' });
 
   const submitBtn = button('注 册', { variant: 'primary', type: 'submit', block: true, size: 'lg' });
@@ -99,8 +101,8 @@ export function StudentRegisterView({ router }) {
       errSlot.append(el('div.alert.alert-danger', {}, [el('span', { text: '准考证号必须为数字' })]));
       return;
     }
-    if (pwdIn.value.length < 6) {
-      errSlot.append(el('div.alert.alert-danger', {}, [el('span', { text: '密码至少 6 位' })]));
+    if (pwdIn.value.length < appSettingInt('password_min_length', 6)) {
+      errSlot.append(el('div.alert.alert-danger', {}, [el('span', { text: `密码${passwordHintText()}` })]));
       return;
     }
     if (pwdIn.value !== pwd2In.value) {

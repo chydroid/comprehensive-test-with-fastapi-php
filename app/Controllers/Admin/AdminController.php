@@ -33,7 +33,7 @@ class AdminController extends BaseController
     /** GET /api/admin/admins */
     public function index(): Response
     {
-        $p = $this->page(50);
+        $p = $this->page();
         $kw = $p['keyword'];
 
         if ($kw !== '') {
@@ -86,7 +86,7 @@ class AdminController extends BaseController
     {
         $in = $this->validate([
             'username'    => 'required|maxlen:50',
-            'password'    => 'required|minlen:6|maxlen:64',
+            'password'    => \App\Services\Password::rule(),
             'admin_power' => 'required|in:' . implode(',', Admin::ROLES),
         ]);
         $username = trim((string) $in['username']);

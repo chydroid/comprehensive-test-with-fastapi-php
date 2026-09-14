@@ -50,6 +50,19 @@ class HomeController extends BaseController
         ]);
     }
 
+    /**
+     * GET /api/public/settings —— 客户端可见的运行参数（无鉴权）
+     *
+     * 只下发 Setting::publicSubset() 中标记 public 的项（入场窗口、口令位数、
+     * 轮询间隔等），供考生端/考场/监考页渲染准确文案与轮询节奏，
+     * 避免把「开考前 15 分钟」之类的参数在多个前端里各写死一遍。
+     * 安全策略类参数（限流阈值等）不在其中，不会泄露。
+     */
+    public function settings(): Response
+    {
+        return $this->ok(\App\Services\Setting::publicSubset());
+    }
+
     /** GET /api/public/help —— 帮助页静态内容 */
     public function help(): Response
     {
