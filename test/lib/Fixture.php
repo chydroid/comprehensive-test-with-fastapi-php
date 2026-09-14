@@ -16,6 +16,8 @@ final class Fixture
     public const STU_A  = '9000001';
     public const STU_B  = '9000002';
     public const PWD    = 'testPwd123';
+    /** 夹具考生所在班级（= 考试的 stu_class，供 generateForClass 匹配） */
+    public const CLASS_ID = self::PREFIX . '班';
 
     public static function selfTestWithPwd(): string
     {
@@ -28,9 +30,10 @@ final class Fixture
      * - 组卷参数取「每题型中难度 1 题」，保证必然有题
      * - 排入考生 A/B，并写入 stuscore（含考场口令）
      *
+     * @param array $overrides 覆盖 examinfo 字段（如 exam_status / exam_pwd / exam_start）
      * @return array{exam_id:int, stu_a:string, stu_b:string, exam_pwd:string}|null
      */
-    public static function createExam(): ?array
+    public static function createExam(array $overrides = []): ?array
     {
         // 选出一个「四种题型在同一难度下都有题」的科目+难度组合，
         // 保证组卷不会因缺题而产生警告。
@@ -62,17 +65,25 @@ final class Fixture
             'exam_class'       => self::PREFIX,
             'exam_category_id' => 0,
             'subj_id'          => $subjId,
-            'exam_start'       => date('Y-m-d H:i:s'),
-            'exam_end'         => date('Y-m-d H:i:s', time() + 3600),
+            // 默认：5 分钟后开考 —— 入场窗口（开考前 15 分钟）此刻已开启
+            'exam_start'       => date('Y-m-d H:i:s', time() + 300),
+            'exam_end'         => date('Y-m-d H:i:s', time() + 3900),
             'exam_tea'         => 'auto',
-            'stu_class'        => self::PREFIX . '班',
-            'exam_status'      => 'testing',
-            'exam_pwd'         => random_int(100000, 999999),
+            'stu_class'        => self::CLASS_ID,
+            'exam_status'      => 'exam',
+            'exam_pwd'         => (string) random_int(100000, 999999),
             'exam_score'       => 20,
         ];
         foreach (['radio1', 'radio2', 'checkbox', 'text'] as $type) {
             $params["{$type}_{$field}_sum"] = 1;
             $params["{$type}_val"] = 5;
+        }
+
+        // 覆盖项只允许 examinfo 上的字段
+        foreach ($overrides as $k => $v) {
+            if (array_key_exists($k, $params)) {
+                $params[$k] = $v;
+            }
         }
 
         $cols = array_keys($params);
@@ -81,24 +92,24 @@ final class Fixture
         \Core\Database::query($sql, array_values($params));
         $examId = \Core\Database::lastInsertId();
 
-        // 确保测试考生存在
+        // 确保测试考生存在（班级与考试 stu_class 对齐，使 generateForClass 能匹配到）
         foreach ([self::STU_A => '自动测试甲', self::STU_B => '自动测试乙'] as $id => $name) {
             $exists = \Core\Database::fetch('SELECT id FROM `stuinfo` WHERE id = ?', [$id]);
             if ($exists === null) {
                 \Core\Database::query(
                     'INSERT INTO `stuinfo` (id, stu_name, stu_pwd, stu_sex, grade_id, class_id)
                      VALUES (?, ?, ?, ?, ?, ?)',
-                    [$id, $name, \App\Services\Password::hash(self::PWD), '男', '1', '1']
+                    [$id, $name, \App\Services\Password::hash(self::PWD), '男', '1', self::CLASS_ID]
                 );
             } else {
                 \Core\Database::query(
-                    'UPDATE `stuinfo` SET stu_pwd = ? WHERE id = ?',
-                    [\App\Services\Password::hash(self::PWD), $id]
+                    'UPDATE `stuinfo` SET stu_pwd = ?, class_id = ? WHERE id = ?',
+                    [\App\Services\Password::hash(self::PWD), self::CLASS_ID, $id]
                 );
             }
         }
 
-        // 排卷：为考生 A 创建 stuscore（含考场口令），B 仅建成绩行用于教师端测试
+        // 排卷：为考生 A/B 创建 stuscore（含考场口令）
         $pwd = (string) $params['exam_pwd'];
         foreach ([self::STU_A, self::STU_B] as $id) {
             \Core\Database::query(

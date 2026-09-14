@@ -8,6 +8,7 @@ import { icon } from '../../core/icons.js';
 import {
   button, badge, card, openModal, confirmDialog, notify, alertBox,
   table, descList, tabs, segmented, emptyStated, field, input, select, checkbox,
+  copyWithToast,
 } from '../../ui/components.js';
 import { createListView, openFormModal, confirmDelete } from '../../ui/crud.js';
 import { adminApi } from '../../api/index.js';
@@ -111,19 +112,29 @@ export async function ExamView({ router, can }) {
     fetch: (params) => adminApi.exams(params),
 
     rowActions: (row) => {
+      const st = String(row.exam_status || '');
+      const notTesting = st === 'exam' || st === 'paper';
+      const pwdReady = !!(row.exam_pwd && String(row.exam_pwd) !== '0');
+
       const btns = [
         button('', { variant: 'ghost', size: 'sm', iconName: 'eye', title: '详情', onClick: () => openDetail(row) }),
         button('', { variant: 'ghost', size: 'sm', iconName: 'edit', title: '编辑', onClick: () => openEditor(row.id) }),
       ];
-      if (row.exam_status === 'exam') {
-        btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'sparkles', title: '生成试卷',
-          onClick: () => openGenerate(row) }));
-        btns.push(button('', { variant: 'primary', size: 'sm', iconName: 'play', title: '启动考试',
+      if (notTesting) {
+        btns.push(button('', {
+          variant: pwdReady ? 'ghost' : 'primary', size: 'sm', iconName: 'login',
+          title: pwdReady ? '重新生成口令' : '开放入场', onClick: () => doOpen(row),
+        }));
+        if (st === 'exam') {
+          btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'sparkles', title: '出题',
+            onClick: () => openGenerate(row) }));
+        }
+        btns.push(button('', { variant: 'primary', size: 'sm', iconName: 'play', title: '开考',
           onClick: () => doStart(row) }));
       }
-      btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'eye', title: '监考',
+      btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'monitor', title: '监考',
         onClick: () => router.navigate(`/monitor?exam_id=${row.id}`) }));
-      if (['exam', 'paper'].includes(row.exam_status)) {
+      if (notTesting) {
         btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'trash', title: '删除',
           onClick: () => doDelete(row) }));
       }
@@ -324,7 +335,51 @@ export async function ExamView({ router, can }) {
     });
   }
 
-  /* ============================ 生成试卷 ============================ */
+  /* ============================ 开放入场 ============================ */
+  async function doOpen(row) {
+    const pwdReady = !!(row.exam_pwd && String(row.exam_pwd) !== '0');
+    const ok = await confirmDialog(
+      pwdReady
+        ? '重新生成口令后原口令立即失效，已进入考场的考生需重新输入新口令。确定继续？'
+        : `确定开放「${row.exam_name}」的入场吗？开放后考生可在开考前 15 分钟内凭口令进入考场。`,
+      {
+        title: pwdReady ? '重新生成口令' : '开放入场',
+        confirmText: pwdReady ? '重新生成' : '开放入场',
+        tone: 'warning',
+      },
+    );
+    if (!ok) return;
+
+    const { ok: done, error, result } = await withLoading(null, () => adminApi.openExam(row.id), { silent: true });
+    if (!done) { notify.error(error?.message || '开放入场失败'); return; }
+    const pwd = result?.exam_pwd ?? result?.pwd ?? '';
+    notify.success(result?.message || '已开放入场');
+    openModal({
+      title: '已开放入场',
+      size: 'sm',
+      body: el('div.stack', {}, [
+        alertBox(`「${row.exam_name}」已开放入场。考生可在开考前 15 分钟内，用准考证号 + 以下口令进入考场。`, { type: 'success' }),
+        el('div', {
+          style: {
+            textAlign: 'center', padding: 'var(--sp-6)',
+            background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-md)',
+          },
+        }, [
+          el('div.fs-sm.c-secondary.mb-2', { text: '考场口令' }),
+          el('div.mono.fw-700', {
+            style: { fontSize: 'var(--fs-4xl)', letterSpacing: '.12em', color: 'var(--brand-600)' },
+            text: String(pwd || '—'),
+          }),
+        ]),
+        button('复制口令', { variant: 'secondary', iconName: 'copy', block: true,
+          onClick: () => copyWithToast(pwd, '考场口令') }),
+      ]),
+    });
+    list.load();
+  }
+
+  /* ============================ 生成试卷（出题） ============================ */
   async function openGenerate(row) {
     const detail = await adminApi.exam(row.id).catch(() => null);
     const studentCount = Number(detail?.stock?.student_count ?? 0);
@@ -378,11 +433,11 @@ export async function ExamView({ router, can }) {
     });
   }
 
-  /* ============================ 启动考试 ============================ */
+  /* ============================ 启动考试（开考） ============================ */
   async function doStart(row) {
-    const ok = await confirmDialog(`确定启动考试「${row.exam_name}」吗？`, {
-      title: '启动考试', confirmText: '启动', tone: 'warning',
-      detail: '启动后会生成 6 位考试口令，考生凭准考证号 + 口令进入考场。',
+    const ok = await confirmDialog(`确定开始考试「${row.exam_name}」吗？`, {
+      title: '开始考试', confirmText: '立即开考', tone: 'warning',
+      detail: '开考后考生将无法再进入考场，已在场的考生立即进入答题界面。',
     });
     if (!ok) return;
 

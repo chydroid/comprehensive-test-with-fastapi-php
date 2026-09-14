@@ -40,6 +40,9 @@ class MonitorController extends BaseController
             $rows = [];
             foreach ((new Exam())->adminList(['status' => ''], 0, 200)['data'] as $e) {
                 if (in_array((string) $e['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER, Exam::STATUS_TESTING], true)) {
+                    // 到点惰性自动开考
+                    Exam::autoStartIfDue((int) $e['id']);
+                    $e['exam_status']    = (string) ((new Exam())->find((int) $e['id'])['exam_status'] ?? $e['exam_status']);
                     $e['status_summary'] = (new Exam())->statusSummary((int) $e['id']);
                     $rows[] = $e;
                 }
@@ -48,6 +51,7 @@ class MonitorController extends BaseController
         }
 
         $this->assertExam($examId);
+        Exam::autoStartIfDue($examId);
         $data = $this->service->roster(
             $examId,
             (string) $this->request->query('orderby', 'stuid'),

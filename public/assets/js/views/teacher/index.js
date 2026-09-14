@@ -8,6 +8,7 @@ import { icon } from '../../core/icons.js';
 import {
   button, card, badge, table, field, input, notify, emptyStated,
   segmented, pagination, alertBox, openModal, statCard, descList,
+  copyWithToast,
 } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
@@ -97,26 +98,37 @@ export function TeacherExamsView({ router }) {
         { key: 'exam_start', title: '开始', render: (r) => el('span.muted', { text: r.exam_start ? fmtDateTime(r.exam_start) : '—' }) },
         { key: 'exam_end', title: '结束', render: (r) => el('span.muted', { text: r.exam_end ? fmtDateTime(r.exam_end) : '—' }) },
         { key: 'exam_score', title: '总分', align: 'right', render: (r) => el('span', { text: fmtScore(r.exam_score) }) },
-        { key: '_acts', title: '操作', align: 'right', render: (r) => el('div.row.gap-xs.end', {}, [
-          button('监考', { variant: 'secondary', size: 'xs', iconName: 'eye', onClick: () => router.navigate(`/teacher/monitor?exam_id=${r.id}`) }),
-          r.exam_status !== 'testing'
-            ? button('开考', {
-                variant: 'primary', size: 'xs', iconName: 'play',
-                onClick: () => startExam(r),
-              })
-            : null,
-          button('考生', { variant: 'ghost', size: 'xs', iconName: 'users', onClick: () => openExamStudents(r) }),
-          r.exam_status === 'exam' || r.exam_status === 'paper'
-            ? button('编辑', {
-                variant: 'ghost', size: 'xs', iconName: 'edit',
-                onClick: () => openExamEditor({ id: r.id, options: state.options, onSaved: () => load() }),
-              })
-            : null,
-          r.exam_status === 'exam' || r.exam_status === 'paper'
-            ? button('删除', { variant: 'danger', size: 'xs', iconName: 'trash', onClick: () => deleteExam(r, () => load()) })
-            : null,
-          button('详情', { variant: 'ghost', size: 'xs', iconName: 'info', onClick: () => showDetail(r.id) }),
-        ]) },
+        { key: '_acts', title: '操作', align: 'right', render: (r) => {
+          const st = String(r.exam_status || '');
+          const notTesting = st === 'exam' || st === 'paper';
+          const pwdReady = !!(r.exam_pwd && String(r.exam_pwd) !== '0');
+          return el('div.row.gap-xs.end', {}, [
+            button('监考', { variant: 'secondary', size: 'xs', iconName: 'eye', onClick: () => router.navigate(`/teacher/monitor?exam_id=${r.id}`) }),
+            notTesting
+              ? button(pwdReady ? '重置口令' : '开放入场', {
+                  variant: pwdReady ? 'ghost' : 'secondary', size: 'xs', iconName: 'login',
+                  onClick: () => openForEntry(r),
+                })
+              : null,
+            st === 'exam'
+              ? button('出题', { variant: 'secondary', size: 'xs', iconName: 'sparkles', onClick: () => generatePapers(r) })
+              : null,
+            notTesting
+              ? button('开考', { variant: 'primary', size: 'xs', iconName: 'play', onClick: () => startExam(r) })
+              : null,
+            button('考生', { variant: 'ghost', size: 'xs', iconName: 'users', onClick: () => openExamStudents(r) }),
+            notTesting
+              ? button('编辑', {
+                  variant: 'ghost', size: 'xs', iconName: 'edit',
+                  onClick: () => openExamEditor({ id: r.id, options: state.options, onSaved: () => load() }),
+                })
+              : null,
+            notTesting
+              ? button('删除', { variant: 'danger', size: 'xs', iconName: 'trash', onClick: () => deleteExam(r, () => load()) })
+              : null,
+            button('详情', { variant: 'ghost', size: 'xs', iconName: 'info', onClick: () => showDetail(r.id) }),
+          ]);
+        } },
       ],
       rows: state.list,
       emptyText: '暂无你负责的考试',
@@ -125,6 +137,19 @@ export function TeacherExamsView({ router }) {
   }
 
   async function startExam(r) {
+    const ok = await new Promise((resolve) => {
+      openModal({
+        title: '确认开考',
+        size: 'sm',
+        body: el('p', { text: `确定立即开始「${r.exam_name}」吗？开考后考生将无法再进入考场。` }),
+        footer: el('div.row.gap-sm', {}, [
+          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
+          button('立即开考', { variant: 'primary', onClick: () => resolve(true) }),
+        ]),
+      });
+    });
+    if (!ok) return;
+
     const res = await withLoading(tableSlot, () => teacherApi.startExam(r.id));
     if (!res.ok) return;
     const pwd = res.result?.exam_pwd || res.result?.pwd || '';
@@ -133,10 +158,93 @@ export function TeacherExamsView({ router }) {
       size: 'sm',
       body: el('div.stack', {}, [
         el('p', { text: `「${r.exam_name}」已开考，请将考场口令告知考生：` }),
-        el('div.pwd-display', { text: String(pwd || '—') }),
+        el('div', {
+          style: {
+            textAlign: 'center', padding: 'var(--sp-6)',
+            background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-md)',
+          },
+        }, [
+          el('div.fs-sm.c-secondary.mb-2', { text: '考场口令' }),
+          el('div.mono.fw-700', {
+            style: { fontSize: 'var(--fs-4xl)', letterSpacing: '.12em', color: 'var(--brand-600)' },
+            text: String(pwd || '—'),
+          }),
+        ]),
       ]),
       footer: button('知道了', { variant: 'primary', onClick: () => document.body.querySelector('.modal-backdrop')?.click() }),
     });
+    load();
+  }
+
+  /** 开放入场：生成考场口令，状态保持未开考 */
+  async function openForEntry(r) {
+    const pwdReady = !!(r.exam_pwd && String(r.exam_pwd) !== '0');
+    if (pwdReady) {
+      const ok = await new Promise((resolve) => {
+        openModal({
+          title: '重新生成口令',
+          size: 'sm',
+          body: el('p', { text: '重新生成后原口令立即失效，已进入考场的考生需重新输入新口令。确定继续？' }),
+          footer: el('div.row.gap-sm', {}, [
+            button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
+            button('重新生成', { variant: 'warning', onClick: () => resolve(true) }),
+          ]),
+        });
+      });
+      if (!ok) return;
+    }
+    const res = await withLoading(tableSlot, () => teacherApi.openExam(r.id));
+    if (!res.ok) return;
+    const pwd = res.result?.exam_pwd || res.result?.pwd || '';
+    openModal({
+      title: '已开放入场',
+      size: 'sm',
+      body: el('div.stack', {}, [
+        alertBox(`「${r.exam_name}」已开放入场，请将考场口令告知考生。考生可在开考前 15 分钟内凭此口令进入考场。`, { type: 'success' }),
+        el('div', {
+          style: {
+            textAlign: 'center', padding: 'var(--sp-6)',
+            background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-md)',
+          },
+        }, [
+          el('div.fs-sm.c-secondary.mb-2', { text: '考场口令' }),
+          el('div.mono.fw-700', {
+            style: { fontSize: 'var(--fs-4xl)', letterSpacing: '.12em', color: 'var(--brand-600)' },
+            text: String(pwd || '—'),
+          }),
+        ]),
+        button('复制口令', { variant: 'secondary', iconName: 'copy', block: true,
+          onClick: () => copyWithToast(pwd, '考场口令') }),
+      ]),
+      footer: button('知道了', { variant: 'primary', onClick: () => document.body.querySelector('.modal-backdrop')?.click() }),
+    });
+    load();
+  }
+
+  /** 出题：为参考班级每位考生随机生成一套试卷 */
+  async function generatePapers(r) {
+    const ok = await new Promise((resolve) => {
+      openModal({
+        title: '开始出题',
+        size: 'sm',
+        body: el('p', { text: `将为本场考试每位考生随机生成一套试卷（已生成的不会被覆盖）。确定开始出题？` }),
+        footer: el('div.row.gap-sm', {}, [
+          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
+          button('开始出题', { variant: 'primary', onClick: () => resolve(true) }),
+        ]),
+      });
+    });
+    if (!ok) return;
+
+    const res = await withLoading(tableSlot, () => teacherApi.generatePapers(r.id, {}));
+    if (!res.ok) return;
+    const d = res.result || {};
+    notify.success(`出题完成：生成 ${d.generated ?? 0} 份${d.skipped ? `，跳过 ${d.skipped} 份` : ''}`);
+    if (Array.isArray(d.warnings) && d.warnings.length) {
+      notify.warning(d.warnings.map((w) => `${w.label || w.type}${w.diff_label || ''} 需 ${w.need} 题、库存 ${w.have}`).join('；'));
+    }
     load();
   }
 
@@ -180,6 +288,7 @@ export function TeacherMonitorView({ router, query }) {
   const root = el('div.stack');
   const pickerSlot = el('div');
   const statsSlot = el('div.grid-stats');
+  const controlSlot = el('div');
   const toolbarSlot = el('div');
   const tableSlot = el('div', { style: { position: 'relative', minHeight: '220px' } });
 
@@ -187,12 +296,12 @@ export function TeacherMonitorView({ router, query }) {
 
   root.append(
     el('div.page-head', {}, [
-      el('div', {}, [el('h1.page-title', { text: '监考中心' }), el('p.page-sub', { text: '实时掌握考场状态，可锁定、强制交卷' })]),
+      el('div', {}, [el('h1.page-title', { text: '监考中心' }), el('p.page-sub', { text: '实时掌握考场状态，可开放入场、出题、开考与锁定' })]),
       el('div.page-head-actions', {}, [
         button('刷新', { variant: 'secondary', size: 'sm', iconName: 'refresh-cw', onClick: () => init() }),
       ]),
     ]),
-    pickerSlot, statsSlot, toolbarSlot, tableSlot,
+    pickerSlot, statsSlot, controlSlot, toolbarSlot, tableSlot,
   );
 
   async function init() {
@@ -205,7 +314,7 @@ export function TeacherMonitorView({ router, query }) {
         state.examId = state.exams[0].id;
         return init();
       }
-      clear(statsSlot); clear(toolbarSlot);
+      clear(statsSlot); clear(controlSlot); clear(toolbarSlot);
       mount(tableSlot, emptyStated('暂无需要监考的考试', { iconName: 'shield' }));
       return;
     }
@@ -218,8 +327,155 @@ export function TeacherMonitorView({ router, query }) {
     }
     renderPicker();
     renderStats();
+    renderControl();
     renderToolbar();
     renderTable();
+  }
+
+  /* ---------- 考场控制：开放入场 / 出题 / 开考 ---------- */
+  function renderControl() {
+    clear(controlSlot);
+    const exam = state.exam;
+    if (!exam) return;
+
+    const status = String(exam.exam_status || '');
+    const pwd = String(exam.exam_pwd || '') === '0' ? '' : String(exam.exam_pwd || '');
+    const pwdReady = pwd !== '';
+    const over = status.startsWith('over');
+    const notTesting = !over && status !== 'testing';
+
+    const actions = [];
+    if (notTesting) {
+      actions.push(button(pwdReady ? '重新生成口令' : '开放入场', {
+        variant: pwdReady ? 'secondary' : 'primary', size: 'sm', iconName: 'login',
+        onClick: () => openForEntry(),
+      }));
+      if (status === 'exam') {
+        actions.push(button('开始出题', { variant: 'primary', size: 'sm', iconName: 'sparkles', onClick: () => generatePapers() }));
+      }
+      actions.push(button('开考', { variant: 'primary', size: 'sm', iconName: 'play', onClick: () => startExam() }));
+    }
+
+    const hint = over ? '考试已结束，不再接受入场'
+      : status === 'testing' ? '考试进行中，考生正在作答'
+      : status === 'paper' ? '已出题完毕，等待开考（到达开考时间将自动开考）'
+      : pwdReady ? '入场已开放，等待监考出题'
+      : '尚未开放入场，考生暂时无法进入考场';
+
+    const body = el('div.stack', {}, [
+      el('div.flex.items-center.gap-3.flex-wrap', {}, [
+        examStatusBadge(status),
+        el('span.fs-sm.c-secondary', { text: hint }),
+      ]),
+      pwdReady ? el('div.flex.items-center.gap-4.flex-wrap', {
+        style: {
+          padding: 'var(--sp-3) var(--sp-4)', background: 'var(--bg-sunken)',
+          border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)',
+        },
+      }, [
+        el('div', {}, [
+          el('div.fs-xs.c-tertiary', { text: '考场口令' }),
+          el('div.mono.fw-700', {
+            style: { fontSize: 'var(--fs-2xl)', letterSpacing: '.12em', color: 'var(--brand-600)' },
+            text: pwd,
+          }),
+        ]),
+        button('复制', { variant: 'ghost', size: 'sm', iconName: 'copy', onClick: () => copyWithToast(pwd, '考场口令') }),
+      ]) : null,
+      el('div.fs-xs.c-tertiary', { text: '流程：开放入场 → 告知考生口令 → 考生在开考前 15 分钟内进场 → 开始出题 → 到点自动开考或手动开考' }),
+    ].filter(Boolean));
+
+    controlSlot.append(card({ iconName: 'shield', title: '考场控制', actions, body }));
+  }
+
+  async function openForEntry() {
+    const pwdReady = !!state.exam?.exam_pwd && String(state.exam.exam_pwd) !== '0';
+    if (pwdReady) {
+      const ok = await new Promise((resolve) => {
+        openModal({
+          title: '重新生成口令',
+          size: 'sm',
+          body: el('p', { text: '重新生成后原口令立即失效，已进入考场的考生需重新输入新口令。确定继续？' }),
+          footer: el('div.row.gap-sm', {}, [
+            button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
+            button('重新生成', { variant: 'warning', onClick: () => resolve(true) }),
+          ]),
+        });
+      });
+      if (!ok) return;
+    }
+    const res = await withLoading(controlSlot, () => teacherApi.openExam(state.examId));
+    if (!res.ok) return;
+    const pwd = res.result?.exam_pwd || res.result?.pwd || '';
+    showPwdModal('已开放入场', `「${state.exam?.exam_name || ''}」已开放入场，请将考场口令告知考生。考生可在开考前 15 分钟内凭此口令进入考场。`, pwd, () => init());
+  }
+
+  async function generatePapers() {
+    const ok = await new Promise((resolve) => {
+      openModal({
+        title: '开始出题',
+        size: 'sm',
+        body: el('p', { text: '将为本场考试每位考生随机生成一套试卷（已生成的不会被覆盖）。确定开始出题？' }),
+        footer: el('div.row.gap-sm', {}, [
+          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
+          button('开始出题', { variant: 'primary', onClick: () => resolve(true) }),
+        ]),
+      });
+    });
+    if (!ok) return;
+    const res = await withLoading(controlSlot, () => teacherApi.generatePapers(state.examId, {}));
+    if (!res.ok) return;
+    const d = res.result || {};
+    notify.success(`出题完成：生成 ${d.generated ?? 0} 份${d.skipped ? `，跳过 ${d.skipped} 份` : ''}`);
+    if (Array.isArray(d.warnings) && d.warnings.length) {
+      notify.warning(d.warnings.map((w) => `${w.label || w.type}${w.diff_label || ''} 需 ${w.need} 题、库存 ${w.have}`).join('；'));
+    }
+    init();
+  }
+
+  async function startExam() {
+    const ok = await new Promise((resolve) => {
+      openModal({
+        title: '确认开考',
+        size: 'sm',
+        body: el('p', { text: '确定立即开考吗？开考后考生将无法再入场，且立即进入答题界面。' }),
+        footer: el('div.row.gap-sm', {}, [
+          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
+          button('立即开考', { variant: 'primary', onClick: () => resolve(true) }),
+        ]),
+      });
+    });
+    if (!ok) return;
+    const res = await withLoading(controlSlot, () => teacherApi.startExam(state.examId));
+    if (!res.ok) return;
+    const pwd = res.result?.exam_pwd || res.result?.pwd || '';
+    showPwdModal('考试已开始', `「${state.exam?.exam_name || ''}」已开考，请将考场口令告知考生：`, pwd, () => init());
+  }
+
+  function showPwdModal(title, message, pwd, after) {
+    openModal({
+      title,
+      size: 'sm',
+      body: el('div.stack', {}, [
+        alertBox(message, { type: 'success' }),
+        el('div', {
+          style: {
+            textAlign: 'center', padding: 'var(--sp-6)',
+            background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-md)',
+          },
+        }, [
+          el('div.fs-sm.c-secondary.mb-2', { text: '考场口令' }),
+          el('div.mono.fw-700', {
+            style: { fontSize: 'var(--fs-4xl)', letterSpacing: '.12em', color: 'var(--brand-600)' },
+            text: String(pwd || '—'),
+          }),
+        ]),
+        button('复制口令', { variant: 'secondary', iconName: 'copy', block: true,
+          onClick: () => copyWithToast(pwd, '考场口令') }),
+      ]),
+      footer: button('知道了', { variant: 'primary', onClick: () => { document.body.querySelector('.modal-backdrop')?.click(); after?.(); } }),
+    });
   }
 
   function renderPicker() {
@@ -253,7 +509,7 @@ export function TeacherMonitorView({ router, query }) {
         button('全部锁定', { variant: 'secondary', size: 'sm', iconName: 'lock', onClick: () => bulk('lockAll') }),
         button('全部解锁', { variant: 'secondary', size: 'sm', iconName: 'unlock', onClick: () => bulk('unlockAll') }),
         button('全员交卷', { variant: 'warning', size: 'sm', iconName: 'send', onClick: () => bulk('submitAll') }),
-        button('结束考试', { variant: 'danger', size: 'sm', iconName: 'power', onClick: () => bulk('overAll', true) }),
+        button('结束考试', { variant: 'danger', size: 'sm', iconName: 'stop', onClick: () => bulk('overAll', true) }),
       ]),
     ]));
   }

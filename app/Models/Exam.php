@@ -120,12 +120,19 @@ class Exam extends Model
     }
 
     /**
-     * 启动考试：生成 6 位考场口令，写入考试与已建成绩记录。
+     * 启动考试（开考）：状态置为进行中(testing)。
+     * 若已由「开放入场」生成过考场口令，则**沿用**该口令（避免开考时口令突变，
+     * 让已凭口令入场的考生与仍在入场窗口外等待的考生失去一致性）；
+     * 否则临时生成一个。
      * @return string 考场口令
      */
     public function start(int $id): string
     {
-        $pwd = (string) random_int(100000, 999999);
+        $exam = $this->find($id);
+        $pwd = (string) ($exam['exam_pwd'] ?? '');
+        if ($pwd === '' || $pwd === '0') {
+            $pwd = (string) random_int(100000, 999999);
+        }
         \Core\Database::query(
             "UPDATE `examinfo` SET exam_status = 'testing', exam_pwd = ? WHERE id = ?",
             [$pwd, $id]
@@ -135,6 +142,145 @@ class Exam extends Model
             [$pwd, $id]
         );
         return $pwd;
+    }
+
+    /* ==================================================================
+     * 入场窗口 / 开放入场 / 惰性自动开考
+     * 流程：开放入场(生成口令,保持未开考) → 考生凭口令在「开考前 15 分钟内」入场
+     *       → 监考出题(排卷) → 到点惰性自动开考 或 手动开考 → 考生作答
+     * ================================================================== */
+
+    /** 入场提前量：开考前 15 分钟开放入场 */
+    public const ENTRY_LEAD_SECONDS = 900;
+
+    /** 入场窗口开启时间戳（开考前 15 分钟） */
+    public static function entryOpensAt(array $exam): ?int
+    {
+        $start = strtotime((string) ($exam['exam_start'] ?? ''));
+        return $start === false ? null : $start - self::ENTRY_LEAD_SECONDS;
+    }
+
+    /** 入场窗口关闭时间戳（= 开考时间，开考后不可入场） */
+    public static function entryClosesAt(array $exam): ?int
+    {
+        $start = strtotime((string) ($exam['exam_start'] ?? ''));
+        return $start === false ? null : $start;
+    }
+
+    /** 是否已「开放入场」（存在有效考场口令） */
+    public static function isOpenForEntry(array $exam): bool
+    {
+        $pwd = (string) ($exam['exam_pwd'] ?? '');
+        return $pwd !== '' && $pwd !== '0';
+    }
+
+    /**
+     * 惰性自动开考：已出题(paper) 且到达开考时间 → 置为进行中(testing)。
+     * 本系统无常驻定时任务，故在考生/监考访问时顺带触发（幂等）。
+     * @return bool 本次是否发生了状态推进
+     */
+    public static function autoStartIfDue(int $examId): bool
+    {
+        $exam = (new self())->find($examId);
+        if ($exam === null || (string) $exam['exam_status'] !== self::STATUS_PAPER) {
+            return false;
+        }
+        $start = strtotime((string) ($exam['exam_start'] ?? ''));
+        if ($start === false || time() < $start) {
+            return false;
+        }
+        \Core\Database::query(
+            "UPDATE `examinfo` SET exam_status = 'testing' WHERE id = ? AND exam_status = 'paper'",
+            [$examId]
+        );
+        return true;
+    }
+
+    /**
+     * 开放入场：生成 6 位考场口令，状态保持「未开考」。
+     * 开放入场后考生才能凭口令在入场窗口内进场。
+     * @return string 新的考场口令
+     */
+    public function openForEntry(int $id): string
+    {
+        $pwd = (string) random_int(100000, 999999);
+        \Core\Database::query(
+            "UPDATE `examinfo` SET exam_pwd = ? WHERE id = ?",
+            [$pwd, $id]
+        );
+        \Core\Database::query(
+            "UPDATE `stuscore` SET stu_pwd = ? WHERE exam_id = ?",
+            [$pwd, $id]
+        );
+        return $pwd;
+    }
+
+    /**
+     * 计算某考生对某场考试的入场状态（供考生端展示与前端按钮控制）。
+     *
+     * state 取值：
+     *   submitted  已交卷
+     *   answering  已开考且考生在考场内（可继续作答）
+     *   in_room    未开考但考生已进入考场（等待室）
+     *   open       可入场（窗口内 + 已开放入场）
+     *   upcoming   未到入场时间（开考前 15 分钟才开放）
+     *   closed     不可入场（未开放入场 / 已开考未入场 / 已结束）
+     *
+     * @param array      $exam  examinfo 行
+     * @param array|null $score stuscore 行（可能不存在）
+     */
+    public static function entryState(array $exam, ?array $score): array
+    {
+        $status    = (string) ($exam['exam_status'] ?? '');
+        $stuStatus = (string) ($score['stu_status'] ?? '');
+        $opens     = self::entryOpensAt($exam);
+        $closes    = self::entryClosesAt($exam);
+        $pwdReady  = self::isOpenForEntry($exam);
+        $now       = time();
+
+        $base = [
+            'needs_pwd'       => true,
+            'in_room'         => false,
+            'entry_opens_at'  => $opens !== null ? date('Y-m-d H:i:s', $opens) : null,
+            'entry_closes_at' => $closes !== null ? date('Y-m-d H:i:s', $closes) : null,
+            'pwd_ready'       => $pwdReady,
+            'state'           => 'closed',
+            'can_enter'       => false,
+        ];
+
+        // 已交卷
+        if ($stuStatus !== '' && str_starts_with($stuStatus, 'over')) {
+            return array_merge($base, ['state' => 'submitted']);
+        }
+        // 整场已结束
+        if (str_starts_with($status, 'over')) {
+            return array_merge($base, ['state' => 'closed']);
+        }
+
+        $inRoom = in_array($stuStatus, ['online', 'locked'], true);
+        $base['in_room'] = $inRoom;
+
+        // 已开考：在场内可继续，场外不可再进
+        if ($status === self::STATUS_TESTING) {
+            return $inRoom
+                ? array_merge($base, ['state' => 'answering', 'can_enter' => true])
+                : array_merge($base, ['state' => 'closed']);
+        }
+
+        // 未开考（exam / paper）
+        if ($inRoom) {
+            return array_merge($base, ['state' => 'in_room', 'can_enter' => true]);
+        }
+        if ($closes !== null && $now >= $closes) {
+            return array_merge($base, ['state' => 'closed']);
+        }
+        if ($opens !== null && $now < $opens) {
+            return array_merge($base, ['state' => 'upcoming']);
+        }
+        if (!$pwdReady) {
+            return array_merge($base, ['state' => 'closed']);
+        }
+        return array_merge($base, ['state' => 'open', 'can_enter' => true]);
     }
 
     /** 考生状态汇总：用于监控页与仪表盘 */

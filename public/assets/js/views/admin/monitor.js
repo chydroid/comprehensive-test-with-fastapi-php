@@ -8,6 +8,7 @@ import { icon } from '../../core/icons.js';
 import {
   button, badge, card, openModal, confirmDialog, notify, alertBox,
   table, descList, emptyStated, segmented, skeletonRows, field, input,
+  copyWithToast,
 } from '../../ui/components.js';
 import { adminApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
@@ -40,10 +41,11 @@ export async function MonitorView({ router, query }) {
   const headSlot = el('div.page-head');
   const examPickerSlot = el('div');
   const statsSlot = el('div.grid-stats');
+  const controlSlot = el('div');
   const toolbarSlot = el('div');
   const tableSlot = el('div', { style: { position: 'relative', minHeight: '200px' } });
 
-  root.append(headSlot, examPickerSlot, statsSlot, toolbarSlot, tableSlot);
+  root.append(headSlot, examPickerSlot, statsSlot, controlSlot, toolbarSlot, tableSlot);
 
   let examId = Number(query?.exam_id) || 0;
   let activeExams = [];
@@ -68,11 +70,15 @@ export async function MonitorView({ router, query }) {
     activeExams = data?.exams || data?.active_exams || [];
     roster = data?.list || data?.roster || data?.students || [];
     currentExam = data?.exam || activeExams.find((e) => Number(e.id) === examId) || null;
+    // 通过 URL 直接进入某场考试时，接口只返回该场（不带 exams），
+    // 回填进选择器，避免误报「当前没有进行中的考试」。
+    if (!activeExams.length && currentExam) activeExams = [currentExam];
     frameSummary = data?.summary || null;
 
     renderHead();
     renderPicker();
     renderStats();
+    renderControl();
     renderTable();
     setupAutoRefresh();
   }
@@ -150,6 +156,143 @@ export async function MonitorView({ router, query }) {
       if (k in out) out[k]++;
     }
     return out;
+  }
+
+  /* ======================== 考场控制（开放入场 / 出题 / 开考） ======================== */
+  function examStatus() { return String(currentExam?.exam_status ?? ''); }
+  function examPwd() { const p = String(currentExam?.exam_pwd ?? ''); return p === '0' ? '' : p; }
+
+  function renderControl() {
+    clear(controlSlot);
+    if (!examId || !currentExam) return;
+
+    const status = examStatus();
+    const pwd = examPwd();
+    const pwdReady = pwd !== '';
+    const over = status.startsWith('over');
+    const testable = !over && status !== 'testing';   // 尚未开考
+
+    const actions = [];
+    if (testable) {
+      actions.push(button(pwdReady ? '重新生成口令' : '开放入场', {
+        variant: pwdReady ? 'secondary' : 'primary', size: 'sm', iconName: 'login',
+        onClick: () => doOpen(pwdReady),
+      }));
+      if (status === 'exam') {
+        actions.push(button('开始出题', {
+          variant: 'primary', size: 'sm', iconName: 'sparkles',
+          onClick: () => doGeneratePapers(),
+        }));
+      }
+      actions.push(button('开考', {
+        variant: 'primary', size: 'sm', iconName: 'play', onClick: () => doStart(),
+      }));
+    }
+
+    const body = el('div.stack', {}, [
+      el('div.flex.items-center.gap-3.flex-wrap', {}, [
+        statusBadge(status),
+        el('span.fs-sm.c-secondary', { text: controlHint(status, pwdReady) }),
+      ]),
+      pwdReady ? pwdBlock(pwd) : null,
+      el('div.fs-xs.c-tertiary', {
+        text: '流程：开放入场 → 告知考生口令 → 考生在开考前 15 分钟内进场 → 开始出题 → 到点自动开考或手动开考',
+      }),
+    ].filter(Boolean));
+
+    controlSlot.append(card({ iconName: 'shield', title: '考场控制', actions, body }));
+  }
+
+  function controlHint(status, pwdReady) {
+    if (status.startsWith('over')) return '考试已结束，不再接受入场';
+    if (status === 'testing') return '考试进行中，考生正在作答';
+    if (status === 'paper') return '已出题完毕，等待开考（到达开考时间将自动开考）';
+    if (pwdReady) return '入场已开放，等待监考出题';
+    return '尚未开放入场，考生暂时无法进入考场';
+  }
+
+  function pwdBlock(pwd) {
+    return el('div.flex.items-center.gap-4.flex-wrap', {
+      style: {
+        padding: 'var(--sp-3) var(--sp-4)', background: 'var(--bg-sunken)',
+        border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)',
+      },
+    }, [
+      el('div', {}, [
+        el('div.fs-xs.c-tertiary', { text: '考场口令' }),
+        el('div.mono.fw-700', {
+          style: { fontSize: 'var(--fs-2xl)', letterSpacing: '.12em', color: 'var(--brand-600)' },
+          text: pwd,
+        }),
+      ]),
+      button('复制', { variant: 'ghost', size: 'sm', iconName: 'copy',
+        onClick: () => copyWithToast(pwd, '考场口令') }),
+    ]);
+  }
+
+  async function doOpen(regenerate) {
+    if (regenerate) {
+      const ok = await confirmDialog('重新生成口令后，原口令立即失效，已进入考场的考生需重新输入新口令。确定继续？', {
+        title: '重新生成口令', confirmText: '生成', tone: 'warning',
+      });
+      if (!ok) return;
+    }
+    const { ok: done, error, result } = await withLoading(null, () => adminApi.openExam(examId), { silent: true });
+    if (!done) { notify.error(error?.message || '开放入场失败'); return; }
+    notify.success(result?.message || '已开放入场');
+    showPwdModal(result?.exam_pwd ?? result?.pwd ?? '', '已开放入场');
+    reload();
+  }
+
+  async function doGeneratePapers() {
+    const ok = await confirmDialog('将为本场考试每位考生随机生成一套试卷（已生成的不会覆盖）。确定开始出题？', {
+      title: '开始出题', confirmText: '开始出题', tone: 'warning',
+      detail: '出题完成后考试状态变为「已组卷」，等待开考。',
+    });
+    if (!ok) return;
+    const { ok: done, error, result } = await withLoading(null, () => adminApi.generatePapers(examId, {}), { silent: true });
+    if (!done) { notify.error(error?.message || '出题失败'); return; }
+    const r = result || {};
+    notify.success(`出题完成：生成 ${r.generated ?? r.count ?? 0} 份${r.skipped ? `，跳过 ${r.skipped} 份` : ''}`);
+    if (r.warnings?.length) notify.warning(r.warnings.join('；'));
+    reload();
+  }
+
+  async function doStart() {
+    const ok = await confirmDialog('确定立即开考吗？开考后考生将无法再入场，且立即进入答题界面。', {
+      title: '开始考试', confirmText: '立即开考', tone: 'warning',
+    });
+    if (!ok) return;
+    const { ok: done, error, result } = await withLoading(null, () => adminApi.startExam(examId), { silent: true });
+    if (!done) { notify.error(error?.message || '开考失败'); return; }
+    notify.success('考试已开始');
+    reload();
+  }
+
+  function showPwdModal(pwd, title) {
+    if (!pwd) return;
+    openModal({
+      title,
+      size: 'sm',
+      body: el('div.stack', {}, [
+        alertBox('请将考场口令告知考生，考试结束前请勿泄露。', { type: 'success' }),
+        el('div', {
+          style: {
+            textAlign: 'center', padding: 'var(--sp-6)',
+            background: 'var(--bg-sunken)', border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-md)',
+          },
+        }, [
+          el('div.fs-sm.c-secondary.mb-2', { text: '考场口令' }),
+          el('div.mono.fw-700', {
+            style: { fontSize: 'var(--fs-4xl)', letterSpacing: '.12em', color: 'var(--brand-600)' },
+            text: String(pwd),
+          }),
+        ]),
+        button('复制口令', { variant: 'secondary', iconName: 'copy', block: true,
+          onClick: () => copyWithToast(pwd, '考场口令') }),
+      ]),
+    });
   }
 
   function renderTable() {
@@ -260,11 +403,19 @@ export async function MonitorView({ router, query }) {
       try {
         const data = await adminApi.monitor(examId ? { exam_id: examId } : {});
         const newRoster = data?.roster || data?.students || data?.list || [];
-        // 仅在数据有变化时重绘，避免打断用户操作
-        if (JSON.stringify(newRoster) !== JSON.stringify(roster)) {
+        const newExam = data?.exam || null;
+        const sig = (v) => JSON.stringify(v);
+        // 名单、考试状态、口令任一变化即重绘（公式/状态由监考端或惰性开考推进）
+        const changed = sig(newRoster) !== sig(roster)
+          || String(newExam?.exam_status ?? '') !== String(currentExam?.exam_status ?? '')
+          || String(newExam?.exam_pwd ?? '') !== String(currentExam?.exam_pwd ?? '');
+        if (changed) {
           roster = newRoster;
           activeExams = data?.exams || data?.active_exams || activeExams;
+          if (newExam) currentExam = newExam;
+          frameSummary = data?.summary || frameSummary;
           renderStats();
+          renderControl();
           renderTable();
         }
       } catch (_) { /* 静默失败，等待下次 */ }

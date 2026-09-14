@@ -49,6 +49,8 @@ class TeacherMonitorController extends BaseController
                 [$teaName]
             );
             foreach ($exams as &$e) {
+                Exam::autoStartIfDue((int) $e['id']);
+                $e['exam_status']    = (string) ((new Exam())->find((int) $e['id'])['exam_status'] ?? $e['exam_status']);
                 $e['status_summary'] = (new Exam())->statusSummary((int) $e['id']);
             }
             unset($e);
@@ -56,6 +58,7 @@ class TeacherMonitorController extends BaseController
         }
 
         $this->assertOwnExam($examId, $teaName);
+        Exam::autoStartIfDue($examId);
         $data = $this->service->roster(
             $examId,
             (string) $this->request->query('orderby', 'stuid'),

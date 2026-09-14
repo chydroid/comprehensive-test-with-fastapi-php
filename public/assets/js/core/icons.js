@@ -76,6 +76,29 @@ const PATHS = {
   keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8" stroke-linecap="round"/>',
   sparkles: '<path d="m12 3 1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3Z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/>',
   box: '<path d="m21 8-9-5-9 5 9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+
+  // 别名 / 补充（与 Lucide 命名保持一致，避免误用占位方框）
+  'refresh-cw': '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 21v-6h6" stroke-linecap="round" stroke-linejoin="round"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6" stroke-linecap="round" stroke-linejoin="round"/>',
+  'alert-triangle': '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01" stroke-linecap="round"/>',
+  'shield-check': '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/>',
+  'user-plus': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6" stroke-linecap="round"/>',
+  'book-open': '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2Z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7Z"/>',
+  'graduation-cap': '<path d="M22 9 12 4 2 9l10 5 10-5Z"/><path d="M6 11.5V17c0 1.5 2.7 3 6 3s6-1.5 6-3v-5.5"/><path d="M22 9v5" stroke-linecap="round"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13" stroke-linecap="round"/><path d="M3 6h.01M3 12h.01M3 18h.01" stroke-linecap="round"/>',
+  'party-popper': '<path d="M5.8 11 4 21l10-1.8Z"/><path d="M14 4.5c1.5-.5 3.5 0 4.5 1s1.5 3 1 4.5"/><path d="M13 8c.8-.3 1.8 0 2.3.6s.6 1.5.3 2.3"/><path d="M15.5 2.5 17 4M19.5 6.5 21 8M12.5 6 14 7.5" stroke-linecap="round"/>',
+  'edit-3': '<path d="M12 20h9" stroke-linecap="round"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  'arrow-left': '<path d="M19 12H5M11 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/>',
+  'chevron-left': '<path d="m15 18-6-6 6-6" stroke-linecap="round" stroke-linejoin="round"/>',
+  'log-in': '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5M15 12H3" stroke-linecap="round" stroke-linejoin="round"/>',
+  'trending-up': '<path d="m22 7-8.5 8.5-5-5L2 17" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 7h6v6" stroke-linecap="round" stroke-linejoin="round"/>',
+  'trending-down': '<path d="m22 17-8.5-8.5-5 5L2 7" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 17h6v-6" stroke-linecap="round" stroke-linejoin="round"/>',
+  'bar-chart-2': '<path d="M18 20V10M12 20V4M6 20v-6" stroke-linecap="round"/>',
+  'help-circle': '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.4-1 .9-1 1.7v.5" stroke-linecap="round"/><path d="M12 17h.01" stroke-linecap="round"/>',
+  home: '<path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 21v-8h6v8"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.8 12.2 9-9M17 4.5 20 7.5M14.5 7 17 9.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  shuffle: '<path d="M16 3h5v5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20 21 3" stroke-linecap="round"/><path d="M21 16v5h-5" stroke-linecap="round" stroke-linejoin="round"/><path d="m15 15 6 6M4 4l5 5" stroke-linecap="round"/>',
 };
 
 /**

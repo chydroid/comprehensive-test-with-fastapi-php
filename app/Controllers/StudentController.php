@@ -145,13 +145,38 @@ class StudentController extends BaseController
         ]);
     }
 
-    /** GET /api/student/exams —— 我的待考考试 */
+    /**
+     * GET /api/student/exams —— 我的待考考试
+     * 每场附带入场状态（entry_state/can_enter/入场时间/是否已开放入场），
+     * 并顺带触发惰性自动开考。
+     */
     public function exams(): Response
     {
         $sess = $this->authStudent();
-        return $this->ok([
-            'list' => Exam::pendingForStudent((string) $sess['id'], (string) ($sess['class_id'] ?? '')),
-        ]);
+        $stuId = (string) $sess['id'];
+        $list = Exam::pendingForStudent($stuId, (string) ($sess['class_id'] ?? ''));
+
+        $examModel = new Exam();
+        foreach ($list as &$e) {
+            // 到点自动开考（惰性）
+            Exam::autoStartIfDue((int) $e['id']);
+
+            // 取最新考试状态（autoStart 可能刚推进状态）
+            $fresh = $examModel->find((int) $e['id']);
+            if ($fresh !== null) {
+                $e['exam_status'] = $fresh['exam_status'];
+                $e['exam_pwd']    = $fresh['exam_pwd'] ?? '';
+            }
+
+            // pendingForStudent 已 LEFT JOIN stuscore，直接据此判定入场状态
+            $score = ($e['stu_status'] ?? null) !== null
+                ? ['stu_status' => $e['stu_status'], 'stu_score' => $e['stu_score'] ?? 0]
+                : null;
+            $e = array_merge($e, Exam::entryState($e, $score));
+        }
+        unset($e);
+
+        return $this->ok(['list' => $list]);
     }
 
     /** GET /api/student/options —— 修改资料页的下拉数据 */

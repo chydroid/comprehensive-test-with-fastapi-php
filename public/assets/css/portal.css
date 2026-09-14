@@ -107,6 +107,19 @@
 }
 .exam-meta-item { display: flex; align-items: center; gap: 5px; }
 
+/* 考生中心：可入场 / 已在场的醒目提示条 */
+.exam-notice {
+  border: 1px solid var(--brand-200);
+  background: var(--brand-50);
+}
+.exam-notice-icon {
+  width: 44px; height: 44px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--brand-100);
+  color: var(--brand-600);
+}
+
 /* 门户头部导航激活态 */
 .portal-nav .brand-link { display: flex; align-items: center; gap: var(--sp-3); color: inherit; }
 .portal-nav-links a.is-active { color: var(--brand-600); font-weight: 600; }

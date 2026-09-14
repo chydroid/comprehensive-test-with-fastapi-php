@@ -34,6 +34,7 @@ export const studentApi = {
 /* ============================ 考场（正式考试） ============================ */
 export const examApi = {
   login:  (body) => http.post('/exam/login', body),
+  status: () => http.get('/exam/status'),
   logout: () => http.post('/exam/logout'),
   paper:  (params) => http.get('/exam/paper', { query: params }),
   save:   (body) => http.post('/exam/paper/save', body),
@@ -77,6 +78,8 @@ export const teacherApi = {
   updateExam:   (id, body) => http.put(`/teacher/exams/${id}`, body),
   deleteExam:   (id) => http.del(`/teacher/exams/${id}`),
   startExam:    (id) => http.post(`/teacher/exams/${id}/start`),
+  openExam:     (id) => http.post(`/teacher/exams/${id}/open`),
+  generatePapers: (id, body) => http.post(`/teacher/exams/${id}/generate`, body),
   examStudents: (id, params) => http.get(`/teacher/exams/${id}/students`, { query: params }),
   examQuizCount:(id, params) => http.get(`/teacher/exams/${id}/quiz-count`, { query: params }),
 
@@ -129,6 +132,7 @@ export const adminApi = {
   updateExam:   (id, body) => http.put(`/admin/exams/${id}`, body),
   deleteExam:   (id) => http.del(`/admin/exams/${id}`),
   startExam:    (id) => http.post(`/admin/exams/${id}/start`),
+  openExam:     (id) => http.post(`/admin/exams/${id}/open`),
   generatePapers: (id, body) => http.post(`/admin/exams/${id}/generate`, body),
   examQuizCount:(id, params) => http.get(`/admin/exams/${id}/quiz-count`, { query: params }),
 

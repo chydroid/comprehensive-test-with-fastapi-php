@@ -560,6 +560,44 @@ export function descList(rows) {
   return dl;
 }
 
+/**
+ * 复制文本到剪贴板（优先 Clipboard API，失败降级 execCommand）。
+ * @returns {Promise<boolean>} 是否复制成功
+ */
+export async function copyText(text) {
+  const value = String(text ?? '');
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch (_) { /* 降级 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.opacity = '0';
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** 复制文本并给出提示 */
+export async function copyWithToast(text, label = '内容') {
+  const ok = await copyText(text);
+  if (ok) notify.success(`${label}已复制到剪贴板`);
+  else notify.warning('复制失败，请手动记录');
+  return ok;
+}
+
 /** 只读展示块 */
 export function codeBlock(text) {
   return el('pre', {

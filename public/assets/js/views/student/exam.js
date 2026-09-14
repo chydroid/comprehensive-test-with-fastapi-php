@@ -1,5 +1,9 @@
 /**
- * 考场（正式考试）视图：登录入场 + 答题（复用 exam-runner）。
+ * 考场（正式考试）视图：登录入场 + 等待开考 + 答题（复用 exam-runner）。
+ *
+ * 流程：入场（准考证号 + 密码 + 考场口令，仅开考前 15 分钟内可入场）
+ *   → 等待室（轮询 /api/exam/status，到点/监考开考后自动进入答题）
+ *   → 答题（exam-runner）。
  */
 
 import { el, clear, mount } from '../../core/dom.js';
@@ -8,6 +12,7 @@ import { button, card, field, input, notify, alertBox } from '../../ui/component
 import { withLoading } from '../../core/bootstrap.js';
 import { examApi } from '../../api/index.js';
 import { createExamRunner } from '../exam-runner.js';
+import { fmtDateTime } from '../../core/format.js';
 
 /**
  * 考场入口：准考证号 + 密码 + 考场口令。
@@ -46,7 +51,7 @@ export function ExamLoginView({ router, query }) {
     const warn = (res.result.warnings || []).filter(Boolean);
     if (warn.length) warn.forEach((w) => notify.warning(String(w)));
     notify.success(`欢迎你，${res.result.stu_name}`);
-    router.navigate(`/exam/take?exam_id=${res.result.exam.id}`);
+    router.navigate(`/take?exam_id=${res.result.exam.id}`);
   }
 
   root.append(el('div.login-aurora'));
@@ -55,55 +60,113 @@ export function ExamLoginView({ router, query }) {
       el('div.brand-mark', {}, [icon('shield-check', { size: 22 })]),
       el('div', {}, [
         el('h2', { text: '进入考场' }),
-        el('p.muted', { text: '请确认考试信息后凭考场口令入场' }),
+        el('p.muted', { text: '开考前 15 分钟内凭考场口令入场' }),
       ]),
     ]),
     form,
     el('div.login-foot', {}, [
-      button('返回个人中心', { variant: 'link', size: 'sm', iconName: 'arrow-left', onClick: () => router.navigate('/student') }),
+      button('返回个人中心', { variant: 'link', size: 'sm', iconName: 'arrow-left', onClick: () => location.assign('/student') }),
     ]),
   ]));
+
+  // 已入场（会话有效）→ 直接回到考场，避免重复登录
+  (async () => {
+    const st = await examApi.status().catch(() => null);
+    if (st && st.phase) router.navigate(`/take?exam_id=${examIdIn.value || ''}`);
+  })();
+
   return root;
 }
 
-/* ============================ 答题中 ============================ */
+/* ============================ 等待室 + 答题中 ============================ */
 export function ExamTakeView({ router, query }) {
   const examId = Number(query?.exam_id || 0);
-
-  const runner = createExamRunner({
-    mode: 'exam',
-    title: '正式考试',
-    exitUrl: '/student',
-    loadPaper: async (paperId) => {
-      const res = await examApi.paper({ paper_id: paperId });
-      return res;
-    },
-    saveAnswer: async (paperId, answer) => examApi.save({ paper_id: paperId, stu_key: answer }),
-    submit: async () => examApi.submit({}),
-    loadReview: async () => {
-      const res = await examApi.answer();
-      return res;
-    },
-    // 退出考场时清除服务端考场会话，防止他人复用该终端直接进入
-    onExit: () => examApi.logout(),
-  });
-
-  // 启动时先拿第一题，以补全标题与结束时间
   const host = el('div.stack');
-  (async () => {
-    const res = await examApi.paper({ paper_id: 1 }).catch(() => null);
-    if (res && res.exam_end) runner.examEnd = res.exam_end;
-    mount(host, runner.node);
-    runner.start();
-  })();
 
-  window.addEventListener('beforeunload', (e) => {
-    if (!runner.getState().finished) {
-      e.preventDefault();
-      e.returnValue = '';
+  let runner = null;
+  let pollTimer = null;
+  let started = false;
+  let beforeUnload = null;
+
+  const stopPoll = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
+
+  const onBeforeUnload = (e) => {
+    // 仅在答题进行中阻止误关闭；等待室与已结束不拦截
+    if (runner && !runner.getState().finished) { e.preventDefault(); e.returnValue = ''; }
+  };
+
+  async function boot() {
+    // 注意：http 层已解包信封——成功直接返回 data，失败抛错
+    const data = await examApi.status().catch(() => null);
+    if (!data || !data.phase) {
+      // 未入场 / 会话失效 → 回考场入口
+      router.navigate('/');
+      return;
     }
-  });
+    if (data.phase === 'answering') { startRunner(); return; }
+    if (data.phase === 'submitted' || data.phase === 'closed') { renderClosed(data); return; }
+    renderWaiting(data.exam);
+  }
+
+  function renderWaiting(exam) {
+    mount(host, el('div', {}, el('div.card', {}, el('div.card-body.text-center', {}, [
+      el('div.mb-2', {}, [icon('clock', { size: 34 })]),
+      el('h2', { text: exam?.exam_name || '考场' }),
+      el('p.muted.mt-1', { text: '你已进入考场，正在等待开考…' }),
+      el('p.fs-sm.c-secondary', { text: exam?.exam_start ? `开考时间：${fmtDateTime(exam.exam_start)}` : '' }),
+      el('p.fs-sm.c-secondary.mt-1', { text: '开考后本页会自动进入答题界面，请保持本页开启。' }),
+      el('div.mt-3', {}, [button('刷新状态', { variant: 'secondary', size: 'sm', iconName: 'refresh-cw', onClick: () => boot() })]),
+    ]))));
+
+    stopPoll();
+    pollTimer = setInterval(async () => {
+      const r = await examApi.status().catch(() => null);
+      if (!r || !r.phase) return;
+      if (r.phase === 'answering') { stopPoll(); startRunner(); }
+      else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }
+    }, 4000);
+  }
+
+  function renderClosed(data) {
+    stopPoll();
+    mount(host, el('div', {}, el('div.card', {}, el('div.card-body.text-center', {}, [
+      el('div.mb-2', {}, [icon('check-circle', { size: 34 })]),
+      el('h2', { text: data?.exam?.exam_name || '考试' }),
+      el('p.muted.mt-1', { text: data?.phase === 'submitted' ? '你已交卷，本场考试结束。' : '本场考试已结束。' }),
+      el('div.mt-3', {}, [button('返回个人中心', { variant: 'primary', iconName: 'arrow-left', onClick: () => location.assign('/student') })]),
+    ]))));
+  }
+
+  function startRunner() {
+    if (started) return;
+    started = true;
+    stopPoll();
+
+    runner = createExamRunner({
+      mode: 'exam',
+      title: '正式考试',
+      exitUrl: '/student',
+      loadPaper: async (paperId) => examApi.paper({ paper_id: paperId }),
+      saveAnswer: async (paperId, answer) => examApi.save({ paper_id: paperId, stu_key: answer }),
+      submit: async () => examApi.submit({}),
+      loadReview: async () => examApi.answer(),
+      onExit: () => examApi.logout(),
+    });
+
+    (async () => {
+      const res = await examApi.paper({ paper_id: 1 }).catch(() => null);
+      if (res && res.exam_end) runner.examEnd = res.exam_end;
+      mount(host, runner.node);
+      runner.start();
+    })();
+  }
+
+  beforeUnload = onBeforeUnload;
+  window.addEventListener('beforeunload', beforeUnload);
 
   void examId;
-  return host;
+  boot();
+
+  // 视图卸载时清理轮询与事件
+  return { node: host, dispose: () => { stopPoll(); window.removeEventListener('beforeunload', beforeUnload); } };
 }

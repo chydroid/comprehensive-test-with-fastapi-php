@@ -234,7 +234,29 @@ class ExamController extends BaseController
     }
 
     /**
-     * POST /api/admin/exams/{id}/generate —— 为参考班级的全部考生预生成试卷
+     * POST /api/admin/exams/{id}/open —— 开放入场：生成考场口令，状态保持「未开考」。
+     * 开放入场后考生才能在「开考前 15 分钟内」凭口令进入考场（等待室）。
+     */
+    public function open(): Response
+    {
+        $id = $this->idParam();
+        $row = $this->model->detail($id);
+        if ($row === null) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+        if (str_starts_with((string) $row['exam_status'], 'over')) {
+            throw new HttpException(409, '已结束的考试不能开放入场', 40901);
+        }
+        if ((string) $row['exam_status'] === Exam::STATUS_TESTING) {
+            throw new HttpException(409, '该考试已开考，无需再开放入场', 40902);
+        }
+
+        $pwd = $this->model->openForEntry($id);
+        return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "已开放入场，考场口令：{$pwd}");
+    }
+
+    /**
+     * POST /api/admin/exams/{id}/generate —— 出题：为参考班级的全部考生预生成随机试卷
      */
     public function generatePapers(): Response
     {
@@ -243,57 +265,36 @@ class ExamController extends BaseController
         if ($exam === null) {
             throw new HttpException(404, '考试不存在', 40400);
         }
-        if ((string) $exam['exam_status'] !== Exam::STATUS_EXAM
-            && (string) $exam['exam_status'] !== Exam::STATUS_PAPER) {
-            throw new HttpException(409, '只能为未开考的考试排卷', 40901);
+        if (!in_array((string) $exam['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER], true)) {
+            throw new HttpException(409, '只能为未开考的考试出题', 40901);
         }
-
         $stuClass = trim((string) ($exam['stu_class'] ?? ''));
         if ($stuClass === '') {
-            throw new HttpException(400, '该考试未设置参考班级，无法排卷', 40000);
+            throw new HttpException(400, '该考试未设置参考班级，无法出题', 40000);
         }
 
-        $classIds = array_values(array_filter(array_map('trim', explode(',', $stuClass)), static fn ($v) => $v !== ''));
-        $students = (new Student())->byClassIds($classIds);
-        if ($students === []) {
+        $result = ExamEngine::generateForClass($id, $exam);
+
+        if ($result['students'] === 0) {
             throw new HttpException(400, '该班级下没有考生，请先导入考生信息', 40003);
         }
 
-        $generated = 0;
-        $skipped = 0;
-        $warnings = [];
-        foreach ($students as $stu) {
-            $result = ExamEngine::generatePaper($id, (string) $stu['id']);
-            if ($result['generated']) {
-                $generated++;
-            } else {
-                $skipped++;
-            }
-            foreach ($result['warnings'] as $w) {
-                $key = $w['type'] . '_' . $w['diff'];
-                $warnings[$key] = [
-                    'type' => $w['type'],
-                    'label' => Quiz::TYPE_LABELS[$w['type']] ?? $w['type'],
-                    'diff' => $w['diff'],
-                    'diff_label' => Quiz::DIFF_LABELS[$w['diff']] ?? $w['diff'],
-                    'need' => $w['need'],
-                    'have' => $w['have'],
-                ];
-            }
-        }
-
-        // 有考生已生成试卷 → 状态推进到 paper
-        if ($generated > 0) {
-            $this->model->update($id, ['exam_status' => Exam::STATUS_PAPER]);
-        }
+        $warnings = array_map(static fn (array $w): array => [
+            'type'       => $w['type'],
+            'label'      => Quiz::TYPE_LABELS[$w['type']] ?? $w['type'],
+            'diff'       => $w['diff'],
+            'diff_label' => Quiz::DIFF_LABELS[$w['diff']] ?? $w['diff'],
+            'need'       => $w['need'],
+            'have'       => $w['have'],
+        ], $result['warnings']);
 
         return $this->ok([
-            'exam_id'         => $id,
-            'student_total'   => count($students),
-            'generated'       => $generated,
-            'skipped'         => $skipped,
-            'warnings'        => array_values($warnings),
-        ], "排卷完成：新生成 {$generated} 份，跳过（已有试卷）{$skipped} 份");
+            'exam_id'       => $id,
+            'student_total' => $result['students'],
+            'generated'     => $result['generated'],
+            'skipped'       => $result['skipped'],
+            'warnings'      => array_values($warnings),
+        ], "出题完成：新生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
     }
 
     /* ------------------------------------------------------------------ */

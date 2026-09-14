@@ -16,7 +16,7 @@ use Core\Redis;
  * - file（默认）：文件缓存计数，零依赖，适合中小流量
  * 配置为 redis 但 phpredis 不可用时自动降级 file 并记警告，避免服务不可用。
  *
- * 登录类接口（/api/*/login）使用更严格的独立配额，防暴力破解。
+ * 登录类接口（路径以 /login 结尾）使用更严格的独立配额，防暴力破解。
  */
 class RateLimitMiddleware implements Middleware
 {

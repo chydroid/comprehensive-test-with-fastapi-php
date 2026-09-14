@@ -70,16 +70,18 @@ export function StudentScoresView() {
 /* ============================ 待考考试 ============================ */
 export function StudentExamsView({ router }) {
   const root = el('div.stack');
+  const promptSlot = el('div');
   const listSlot = el('div');
   root.append(el('div.page-head', {}, [
     el('div', {}, [el('h1.page-title', { text: '我的考试' }), el('p.page-sub', { text: '已分配给你的考试场次' })]),
     el('div.page-head-actions', {}, [button('刷新', { variant: 'secondary', size: 'sm', iconName: 'refresh-cw', onClick: () => reload() })]),
-  ]), listSlot);
+  ]), promptSlot, listSlot);
 
   async function reload() {
     const res = await withLoading(listSlot, () => studentApi.exams());
     if (!res.ok) return;
     const list = res.result.list || [];
+    renderPrompt(list);
     if (!list.length) {
       mount(listSlot, emptyStated('暂无可参加的考试', { iconName: 'calendar', desc: '请等待管理员编排考试后通知' }));
       return;
@@ -87,7 +89,37 @@ export function StudentExamsView({ router }) {
     mount(listSlot, el('div.grid-2', {}, list.map((e) => examCard(e))));
   }
 
+  /** 登录后若存在可进入/已在场的考试，顶部给出醒目的进入提示 */
+  function renderPrompt(list) {
+    clear(promptSlot);
+    const target = list.find((e) => e.state === 'answering')
+      || list.find((e) => e.state === 'in_room')
+      || list.find((e) => e.state === 'open');
+    if (!target) return;
+
+    const answering = target.state === 'answering';
+    promptSlot.append(el('div.card.exam-notice', {}, el('div.card-body.flex.items-center.gap-4', {}, [
+      el('div.exam-notice-icon', {}, [icon('bell', { size: 22 })]),
+      el('div', { style: { flex: '1' } }, [
+        el('div.fw-700', { text: answering ? `《${target.exam_name}》已开考，你已在考场中` : `你有一场考试可以进入：《${target.exam_name}》` }),
+        el('div.fs-sm.c-secondary.mt-1', {
+          text: answering
+            ? '点击「继续答题」回到答题界面。'
+            : '请在开考前 15 分钟内凭考场口令入场；口令请向监考教师索取。',
+        }),
+      ]),
+      button(answering ? '继续答题' : '进入考场', { variant: 'primary', iconName: 'log-in', onClick: () => enterExam(target) }),
+    ])));
+    notify.info(answering ? `《${target.exam_name}》已开考` : `你有一场考试可以进入：${target.exam_name}`);
+  }
+
+  function enterExam(e) {
+    // 正式考试是独立入口页（/exam），通过 hash query 预填考试编号
+    location.assign(`/exam#/?exam_id=${e.id}`);
+  }
+
   function examCard(e) {
+    const state = e.state || 'closed';
     const active = e.exam_status === 'testing';
     return el('div.card.exam-card', {}, [
       el('div.exam-card-head', {}, [
@@ -98,28 +130,64 @@ export function StudentExamsView({ router }) {
             e.category_name ? badge(e.category_name) : null,
           ]),
         ]),
-        active ? badge('进行中', { tone: 'success', dot: true, pulse: true }) : badge(statusText(e.exam_status)),
+        active ? badge('进行中', { tone: 'success', dot: true, pulse: true }) : badge(stateLabel(state, e), { tone: stateTone(state) }),
       ]),
       el('div.exam-card-meta.desc-list', {}, [
         dlRow('开始时间', e.exam_start ? fmtDateTime(e.exam_start) : '—'),
         dlRow('结束时间', e.exam_end ? fmtDateTime(e.exam_end) : '—'),
         dlRow('总分', `${fmtScore(e.exam_score)} 分`),
-        dlRow('我的状态', e.stu_status ? (STU_STATUS[e.stu_status]?.label || e.stu_status) : '未开始'),
+        dlRow('入场开放', e.entry_opens_at ? fmtDateTime(e.entry_opens_at) : '—'),
+        dlRow('我的状态', e.stu_status ? (STU_STATUS[e.stu_status]?.label || e.stu_status) : '未入场'),
       ]),
-      el('div.exam-card-foot', {}, [
-        active
-          ? button('进入考场', { variant: 'primary', iconName: 'log-in', block: true, onClick: () => router.navigate(`/exam?exam_id=${e.id}`) })
-          : button('未开始', { variant: 'secondary', block: true, disabled: true }),
-      ]),
+      el('div.exam-card-foot', {}, [footAction(e, state)]),
+      hintOf(e, state) ? el('div.fs-xs.c-secondary.mt-2', { text: hintOf(e, state) }) : null,
     ]);
+  }
+
+  function footAction(e, state) {
+    if (state === 'open') {
+      return button('进入考场', { variant: 'primary', iconName: 'log-in', block: true, onClick: () => enterExam(e) });
+    }
+    if (state === 'in_room') {
+      return button('返回考场（等待开考）', { variant: 'primary', iconName: 'log-in', block: true, onClick: () => enterExam(e) });
+    }
+    if (state === 'answering') {
+      return button('继续答题', { variant: 'primary', iconName: 'edit-3', block: true, onClick: () => enterExam(e) });
+    }
+    if (state === 'upcoming') {
+      return button('未到入场时间', { variant: 'secondary', block: true, disabled: true });
+    }
+    if (state === 'submitted') {
+      return button('已交卷', { variant: 'secondary', block: true, disabled: true });
+    }
+    return button('不可入场', { variant: 'secondary', block: true, disabled: true });
+  }
+
+  function hintOf(e, state) {
+    if (state === 'open') return `开考前 15 分钟内可凭考场口令入场（开考后不可进入）。`;
+    if (state === 'upcoming') return e.entry_opens_at ? `入场将于 ${fmtDateTime(e.entry_opens_at)} 开放。` : '尚未到入场时间。';
+    if (state === 'closed' && !e.pwd_ready) return '考场尚未开放入场，请等待监考教师开放。';
+    if (state === 'closed') return '考试已开始或已结束，无法进入考场。';
+    return '';
+  }
+
+  function stateLabel(state, e) {
+    return ({
+      open: '可入场',
+      in_room: '等待开考',
+      answering: '答题中',
+      upcoming: '未到入场时间',
+      closed: e && !e.pwd_ready ? '未开放' : '不可入场',
+      submitted: '已交卷',
+    })[state] || '—';
+  }
+
+  function stateTone(state) {
+    return ({ open: 'success', in_room: 'info', answering: 'success', upcoming: '', closed: 'warning', submitted: 'info' })[state] || '';
   }
 
   function dlRow(k, v) {
     return el('div.dl-row', {}, [el('span.dl-key', { text: k }), el('span.dl-val', { text: typeof v === 'string' ? v : String(v) })]);
-  }
-
-  function statusText(s) {
-    return ({ exam: '已编排', paper: '已组卷', over: '已结束', overBak: '已结束' })[s] || s || '—';
   }
 
   reload();

@@ -28,23 +28,35 @@ class ExamController extends BaseController
 {
     private const SESS_EXAM = 'exam_session';
 
-    /** POST /api/exam/login —— 凭准考证号 + 密码 + 考场口令进入考试 */
+    /**
+     * POST /api/exam/login —— 凭准考证号 + 密码 + 考场口令进入考场
+     *
+     * 入场规则（与需求一致）：
+     *  - 必须已由监考「开放入场」（存在考场口令）；
+     *  - 口令正确；
+     *  - 处于入场窗口：开考前 15 分钟内；开考后不再放行；
+     *  - 已在本场考试内（online/locked）的考生可随时凭账号密码回到考场（续考）。
+     * 入场本身不组卷——组卷由监考「出题」统一完成。
+     */
     public function login(): Response
     {
         $in = $this->validate([
             'exam_id'  => 'required|integer',
             'stu_id'   => 'required|maxlen:20',
             'password' => 'required|maxlen:64',
-            'exam_pwd' => 'required|maxlen:20',
+            'exam_pwd' => 'maxlen:20',
         ]);
         $examId = (int) $in['exam_id'];
+
+        // 到点则惰性自动开考（无需常驻定时任务）
+        Exam::autoStartIfDue($examId);
 
         $exam = (new Exam())->find($examId);
         if ($exam === null) {
             throw new HttpException(404, '考试不存在', 40400);
         }
-        if ($exam['exam_status'] !== Exam::STATUS_TESTING) {
-            throw new HttpException(400, '该考试尚未开始或已结束', 40000);
+        if (str_starts_with((string) $exam['exam_status'], 'over')) {
+            throw new HttpException(400, '该考试已结束', 40000);
         }
 
         // 校验考生凭据
@@ -53,37 +65,45 @@ class ExamController extends BaseController
             throw new HttpException(401, '准考证号或密码不正确', 40101);
         }
 
-        // 必须已被排入本场考试
-        $score = (new StuScore())->findOne($examId, (string) $in['stu_id']);
+        $scores = new StuScore();
+        $score = $scores->findOne($examId, (string) $in['stu_id']);
+        $stuStatus = (string) ($score['stu_status'] ?? '');
+
+        // 已交卷 → 不允许再进
+        if ($stuStatus !== '' && str_starts_with($stuStatus, 'over')) {
+            throw new HttpException(409, '本场考试你已交卷', 40901);
+        }
+
+        $inRoom = $score !== null && in_array($stuStatus, ['online', 'locked'], true);
+
+        if (!$inRoom) {
+            // 首次入场：需已开放入场 + 口令正确 + 处于入场窗口
+            if (!Exam::isOpenForEntry($exam)) {
+                throw new HttpException(403, '考场尚未开放入场，请向监考教师确认', 40302);
+            }
+            if ((string) ($in['exam_pwd'] ?? '') === '' || (string) $exam['exam_pwd'] !== (string) $in['exam_pwd']) {
+                throw new HttpException(403, '考场口令不正确，请向监考教师确认', 40303);
+            }
+            $now = time();
+            $opens = Exam::entryOpensAt($exam);
+            $closes = Exam::entryClosesAt($exam);
+            if ($opens !== null && $now < $opens) {
+                throw new HttpException(403, '入场尚未开始：开考前 15 分钟才可进入考场', 40305);
+            }
+            if ($closes !== null && $now >= $closes) {
+                throw new HttpException(403, '考试已开始，无法进入考场', 40306);
+            }
+        }
+
+        // 确保成绩记录存在（供状态管理；不组卷）
         if ($score === null) {
-            throw new HttpException(403, '你未被分配到本场考试', 40302);
+            ExamEngine::createScore($examId, (string) $in['stu_id'], (string) ($exam['exam_pwd'] ?? ''));
         }
 
-        // 考场口令（对比 stuscore.stu_pwd 快照）
-        if ((string) ($score['stu_pwd'] ?? '') === '' || (string) $score['stu_pwd'] !== $in['exam_pwd']) {
-            throw new HttpException(403, '考场密码不正确，请向监考教师确认', 40303);
+        // 标记「在考场」；被锁定的考生保持锁定
+        if ($stuStatus !== 'locked') {
+            $scores->updateStatus($examId, (string) $in['stu_id'], 'online');
         }
-
-        $status = (string) ($score['stu_status'] ?? '');
-
-        // 被监考教师锁定 → 拒绝入场
-        if ($status === 'locked') {
-            throw new HttpException(403, '你已被监考教师锁定，暂时不能进入', 40304);
-        }
-
-        // 已交卷但考试仍在进行 → 重置为可作答，让考生重新进入（与旧系统一致）
-        if (str_starts_with($status, 'over')) {
-            (new StuScore())->update($score['id'], ['stu_status' => 'online']);
-            Database::query(
-                "UPDATE `stupaper` SET quiz_status = 0, stu_key = ''
-                 WHERE exam_id = ? AND stu_id = ?",
-                [$examId, $in['stu_id']]
-            );
-        }
-
-        // 组卷（幂等）+ 标记在线
-        $result = ExamEngine::generatePaper($examId, (string) $in['stu_id']);
-        (new StuScore())->update($score['id'], ['stu_status' => 'online']);
 
         sess_set(self::SESS_EXAM, [
             'exam_id'  => $examId,
@@ -92,16 +112,73 @@ class ExamController extends BaseController
             'login_at' => time(),
         ]);
 
+        $phase = (string) $exam['exam_status'] === Exam::STATUS_TESTING ? 'answering' : 'waiting';
+
         return $this->ok([
             'exam' => [
                 'id'          => (int) $exam['id'],
                 'exam_name'   => $exam['exam_name'],
+                'exam_start'  => $exam['exam_start'],
                 'exam_end'    => $exam['exam_end'],
                 'exam_score'  => (int) $exam['exam_score'],
+                'exam_status' => $exam['exam_status'],
             ],
-            'stu_name'  => $student['stu_name'],
-            'warnings'  => $result['warnings'],
+            'stu_name' => $student['stu_name'],
+            'phase'    => $phase,
+            'warnings' => [],
         ], '进入考场成功');
+    }
+
+    /**
+     * GET /api/exam/status —— 等待室与答题页轮询用：返回本场考试当前阶段。
+     * 顺带触发惰性自动开考与超时自动交卷。
+     */
+    public function status(): Response
+    {
+        $sess = $this->examSession();
+        $examId = (int) $sess['exam_id'];
+        $stuId = (string) $sess['stu_id'];
+
+        Exam::autoStartIfDue($examId);
+
+        $exam = (new Exam())->find($examId);
+        $scores = new StuScore();
+        $score = $scores->findOne($examId, $stuId);
+
+        // 到结束时间 → 自动交卷
+        if ($exam !== null && (string) $exam['exam_status'] === Exam::STATUS_TESTING
+            && $score !== null && !str_starts_with((string) $score['stu_status'], 'over')) {
+            $end = strtotime((string) $exam['exam_end']);
+            if ($end !== false && time() > $end) {
+                ExamEngine::autoGrade($examId, $stuId);
+                $score = $scores->findOne($examId, $stuId);
+            }
+        }
+
+        $phase = $this->phaseOf($exam, $score);
+
+        $paperReady = false;
+        if ($exam !== null && in_array((string) $exam['exam_status'], [Exam::STATUS_PAPER, Exam::STATUS_TESTING], true)) {
+            $paperReady = (int) (Database::fetch(
+                'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ? AND stu_id = ?',
+                [$examId, $stuId]
+            )['c'] ?? 0) > 0;
+        }
+
+        return $this->ok([
+            'phase'       => $phase,
+            'paper_ready' => $paperReady,
+            'exam'        => $exam === null ? null : [
+                'id'          => (int) $exam['id'],
+                'exam_name'   => $exam['exam_name'],
+                'exam_start'  => $exam['exam_start'],
+                'exam_end'    => $exam['exam_end'],
+                'exam_score'  => (int) $exam['exam_score'],
+                'exam_status' => $exam['exam_status'],
+            ],
+            'stu_name'   => $sess['stu_name'] ?? '',
+            'server_ts'  => time(),
+        ]);
     }
 
     /** POST /api/exam/logout */
@@ -132,7 +209,17 @@ class ExamController extends BaseController
         if ($status === 'locked') {
             throw new HttpException(403, '你已被监考教师锁定，暂时不能作答', 40304);
         }
-        $this->guardExamTime($examId, $stuId);
+
+        // 未开考不得取题（考生可在等待室轮询 /status）
+        Exam::autoStartIfDue($examId);
+        $exam = (new Exam())->find($examId);
+        if ($exam === null || (string) $exam['exam_status'] !== Exam::STATUS_TESTING) {
+            throw new HttpException(409, '考试尚未开始，请稍候', 40903);
+        }
+        // 超时 → 已自动交卷
+        if ($this->guardExamTime($examId, $stuId)) {
+            throw new HttpException(409, '考试时间已到，已自动交卷', 40901);
+        }
 
         // 心跳：保持在线状态，供监考端统计
         (new StuScore())->update($score['id'], ['stu_status' => 'online']);
@@ -328,6 +415,26 @@ class ExamController extends BaseController
     }
 
     /* ------------------------------------------------------------------ */
+
+    /**
+     * 本场考试对当前考生的阶段：
+     *   submitted 已交卷 / answering 答题中 / waiting 等待开考 / closed 已结束
+     */
+    private function phaseOf(?array $exam, ?array $score): string
+    {
+        if ($exam === null) {
+            return 'closed';
+        }
+        $stuStatus = (string) ($score['stu_status'] ?? '');
+        if ($stuStatus !== '' && str_starts_with($stuStatus, 'over')) {
+            return 'submitted';
+        }
+        $examStatus = (string) $exam['exam_status'];
+        if (str_starts_with($examStatus, 'over')) {
+            return 'closed';
+        }
+        return $examStatus === Exam::STATUS_TESTING ? 'answering' : 'waiting';
+    }
 
     /** 读取考试会话，未登录抛 401 */
     private function examSession(): array

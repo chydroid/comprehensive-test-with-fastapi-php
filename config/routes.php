@@ -91,6 +91,7 @@ return [
 
     /* ==================== 正式考试 ==================== */
     ['POST', '/api/exam/login',            [StudentExamController::class, 'login']],
+    ['GET',  '/api/exam/status',           [StudentExamController::class, 'status']],
     ['POST', '/api/exam/logout',           [StudentExamController::class, 'logout']],
     ['GET',  '/api/exam/paper',            [StudentExamController::class, 'paper']],
     ['POST', '/api/exam/paper/save',       [StudentExamController::class, 'savePaper']],
@@ -132,6 +133,8 @@ return [
     ['POST', '/api/teacher/exams',         [TeacherExamController::class, 'save']],
     ['PUT',  '/api/teacher/exams/{id}',    [TeacherExamController::class, 'update']],
     ['POST', '/api/teacher/exams/{id}/start', [TeacherExamController::class, 'start']],
+    ['POST', '/api/teacher/exams/{id}/open', [TeacherExamController::class, 'open']],
+    ['POST', '/api/teacher/exams/{id}/generate', [TeacherExamController::class, 'generatePapers']],
     ['DELETE', '/api/teacher/exams/{id}',  [TeacherExamController::class, 'delete']],
     ['GET',  '/api/teacher/exams/{id}/students', [TeacherExamController::class, 'students']],
     ['GET',  '/api/teacher/exams/{id}/quiz-count', [TeacherExamController::class, 'checkQuizCount']],
@@ -188,6 +191,7 @@ return [
     ['DELETE', '/api/admin/exams/{id}',    [ExamController::class, 'delete']],
     ['GET',    '/api/admin/exams/{id}/quiz-count', [ExamController::class, 'checkQuizCount']],
     ['POST',   '/api/admin/exams/{id}/start', [ExamController::class, 'start']],
+    ['POST',   '/api/admin/exams/{id}/open', [ExamController::class, 'open']],
     ['POST',   '/api/admin/exams/{id}/generate', [ExamController::class, 'generatePapers']],
 
     /* ---------- 考试类别管理 ---------- */

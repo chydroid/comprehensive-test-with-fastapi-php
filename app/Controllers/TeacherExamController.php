@@ -192,7 +192,68 @@ class TeacherExamController extends BaseController
         }
 
         $pwd = $this->model->start($id);
-        return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "考试已启动，考场口令：{$pwd}");
+        return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "考试已开考，考场口令：{$pwd}");
+    }
+
+    /**
+     * POST /api/teacher/exams/{id}/open —— 开放入场：生成考场口令（状态保持未开考）
+     */
+    public function open(): Response
+    {
+        $id = $this->idParam();
+        $row = $this->model->detail($id);
+        if ($row === null) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+        if (str_starts_with((string) $row['exam_status'], 'over')) {
+            throw new HttpException(409, '已结束的考试不能开放入场', 40901);
+        }
+        if ((string) $row['exam_status'] === Exam::STATUS_TESTING) {
+            throw new HttpException(409, '该考试已开考，无需再开放入场', 40902);
+        }
+
+        $pwd = $this->model->openForEntry($id);
+        return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "已开放入场，考场口令：{$pwd}");
+    }
+
+    /**
+     * POST /api/teacher/exams/{id}/generate —— 出题：为参考班级全部考生生成随机试卷
+     */
+    public function generatePapers(): Response
+    {
+        $id = $this->idParam();
+        $exam = $this->model->detail($id);
+        if ($exam === null) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+        if (!in_array((string) $exam['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER], true)) {
+            throw new HttpException(409, '只能为未开考的考试出题', 40901);
+        }
+        if (trim((string) ($exam['stu_class'] ?? '')) === '') {
+            throw new HttpException(400, '该考试未设置参考班级，无法出题', 40000);
+        }
+
+        $result = ExamEngine::generateForClass($id, $exam);
+        if ($result['students'] === 0) {
+            throw new HttpException(400, '该班级下没有考生，请先导入考生信息', 40003);
+        }
+
+        $warnings = array_map(static fn (array $w): array => [
+            'type'       => $w['type'],
+            'label'      => Quiz::TYPE_LABELS[$w['type']] ?? $w['type'],
+            'diff'       => $w['diff'],
+            'diff_label' => Quiz::DIFF_LABELS[$w['diff']] ?? $w['diff'],
+            'need'       => $w['need'],
+            'have'       => $w['have'],
+        ], $result['warnings']);
+
+        return $this->ok([
+            'exam_id'       => $id,
+            'student_total' => $result['students'],
+            'generated'     => $result['generated'],
+            'skipped'       => $result['skipped'],
+            'warnings'      => array_values($warnings),
+        ], "出题完成：新生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
     }
 
     /** DELETE /api/teacher/exams/{id} */

@@ -115,6 +115,55 @@ final class ExamEngine
     }
 
     /**
+     * 出题：为考试参考班级的全部考生批量生成随机试卷，并把考试状态推进为「已排卷」。
+     * 供监考/管理员「出题」动作调用（管理端与教师端共用一份实现）。
+     *
+     * 状态推进内聚在此处，避免各控制器各写一份而逐渐分叉。
+     *
+     * @param array $exam examinfo 行（用于取 stu_class 与组卷参数）
+     * @return array{students:int, generated:int, skipped:int, warnings:array<int,array{type:string,diff:string,need:int,have:int}>}
+     */
+    public static function generateForClass(int $examId, array $exam): array
+    {
+        $classIds = array_values(array_filter(
+            array_map('trim', explode(',', (string) ($exam['stu_class'] ?? ''))),
+            static fn (string $v): bool => $v !== ''
+        ));
+
+        $students = $classIds === [] ? [] : (new \App\Models\Student())->byClassIds($classIds);
+
+        $generated = 0;
+        $skipped = 0;
+        $warnings = [];
+        foreach ($students as $stu) {
+            $r = self::generatePaper($examId, (string) $stu['id']);
+            if ($r['generated']) {
+                $generated++;
+            } else {
+                $skipped++;
+            }
+            foreach ($r['warnings'] as $w) {
+                $warnings[$w['type'] . '_' . $w['diff']] = $w;
+            }
+        }
+
+        // 有试卷产生即视为「已出题」；未开考的考试推进为「已排卷」
+        if ($generated > 0 && (string) ($exam['exam_status'] ?? '') === Exam::STATUS_EXAM) {
+            Database::query(
+                "UPDATE `examinfo` SET exam_status = 'paper' WHERE id = ? AND exam_status = 'exam'",
+                [$examId]
+            );
+        }
+
+        return [
+            'students'  => count($students),
+            'generated' => $generated,
+            'skipped'   => $skipped,
+            'warnings'  => array_values($warnings),
+        ];
+    }
+
+    /**
      * 创建模拟考试记录（exam_class = '模拟考试'，exam_status = 'testing'）。
      * 与正式考试的区分完全依赖 exam_class，因此监控/成绩等模块可据此排除模拟考试。
      */

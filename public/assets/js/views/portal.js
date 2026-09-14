@@ -62,7 +62,7 @@ export function PortalView({ router }) {
           text: `覆盖题库管理、智能组卷、考场监考与成绩分析的完整闭环，已收录 ${fmtNumber(total)} 道题目、支撑 ${fmtNumber(exams)} 场考试。`,
         }),
         el('div.hero-actions', {}, [
-          button('进入考场', { variant: 'primary', size: 'lg', iconName: 'log-in', onClick: () => router.navigate('/exam') }),
+          button('进入考场', { variant: 'primary', size: 'lg', iconName: 'log-in', onClick: () => location.assign('/exam') }),
           button('开始练习', { variant: 'secondary', size: 'lg', iconName: 'edit-3', onClick: () => router.navigate('/exercise') }),
         ]),
       ]),
@@ -191,12 +191,13 @@ function renderNav({ router, active = 'home' }) {
         link('#/portal', '首页', 'home'),
         link('#/hero', '成绩榜', 'hero'),
         link('#/exercise', '在线练习', 'exercise'),
-        link('#/student', '个人中心', 'student'),
-        link('#/exam', '进入考场', 'exam'),
+        // 「注册登陆」跨端跳转到考生端：已登录由考生端直接进入个人中心，未登录显示注册/登录页
+        el('a', { href: '/student', text: '注册登陆', class: active === 'auth' ? 'is-active' : null }),
+        el('a', { href: '/exam', text: '进入考场', class: active === 'exam' ? 'is-active' : null }),
       ]),
       el('div.row.gap-sm', {}, [
-        button('教师端', { variant: 'ghost', size: 'sm', onClick: () => router.navigate('/teacher') }),
-        button('管理后台', { variant: 'primary', size: 'sm', onClick: () => router.navigate('/admin') }),
+        button('教师端', { variant: 'ghost', size: 'sm', onClick: () => location.assign('/teacher') }),
+        button('管理后台', { variant: 'primary', size: 'sm', onClick: () => location.assign('/admin') }),
       ]),
     ]),
   ]);

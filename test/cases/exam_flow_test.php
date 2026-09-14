@@ -5,13 +5,21 @@ declare(strict_types=1);
 /**
  * 正式考试全流程测试（考生端）—— 自包含夹具，不依赖库中既有业务数据。
  *
+ * 生命周期（与需求一致）：
+ *   开放入场（生成口令，状态仍为未开考）
+ *     → 考生在「开考前 15 分钟内」凭口令入场（标记 online，不出题）
+ *     → 监考出题（为每位考生随机组卷，状态 paper）
+ *     → 到点惰性自动开考 或 监考手动开考（状态 testing）
+ *     → 考生进入答题
+ *
  * 重点验证 P0-4：考试进行中任何响应都不得包含 quiz_key。
- * 覆盖：登录取卷 -> 逐题作答 -> 交卷判分 -> 查答案 -> 幂等/越权。
  */
 
 require __DIR__ . '/../../core/helpers.php';
 start_session();
 
+use App\Models\Exam;
+use App\Services\ExamEngine;
 use Test\Fixture;
 use Test\Harness;
 use Test\Http;
@@ -44,13 +52,32 @@ if ($fx === null) {
 $examId = (int) $fx['exam_id'];
 echo "  夹具考试 #{$examId}（科目题量充足，每题型 1 题 / 5 分）\n";
 
+/* =================== 阶段一：入场 =================== */
+
 /* ---------- 1. 未登录无法取卷 ---------- */
 $t->guard('未登录取卷被拒', function () use ($t) {
     $res = Http::get('/api/exam/paper');
     $t->assertSame('未登录取卷 -> 401', 401, $res['status']);
 });
 
-/* ---------- 2. 错误的考场口令被拒 ---------- */
+/* ---------- 2. 未开放入场（无口令）的考试拒绝入场 ---------- */
+$t->guard('未开放入场时拒绝入场', function () use ($t) {
+    // exam_pwd 为整型列，未开放入场时取 0（视为无口令）
+    $noPwd = Fixture::createExam(['exam_pwd' => '0']);
+    if ($noPwd === null) {
+        $t->skip('未开放入场时拒绝入场', '夹具创建失败');
+        return;
+    }
+    $res = Http::post('/api/exam/login', [
+        'exam_id'  => $noPwd['exam_id'],
+        'stu_id'   => $noPwd['stu_a'],
+        'password' => Fixture::PWD,
+    ]);
+    $t->assertSame('未开放入场 -> 403', 403, $res['status']);
+    $t->assertTrue('提示未开放入场', str_contains($res['raw'], '尚未开放入场'));
+});
+
+/* ---------- 3. 错误的考场口令被拒 ---------- */
 $t->guard('错误考场口令被拒', function () use ($t, $examId, $fx) {
     $res = Http::post('/api/exam/login', [
         'exam_id'  => $examId,
@@ -61,8 +88,8 @@ $t->guard('错误考场口令被拒', function () use ($t, $examId, $fx) {
     $t->assertSame('错误口令 -> 403', 403, $res['status']);
 });
 
-/* ---------- 3. 正确凭据登录考场 ---------- */
-$t->guard('考场登录成功', function () use ($t, $examId, $fx) {
+/* ---------- 4. 正确的准考证号 + 密码 + 口令入场成功（等待室阶段） ---------- */
+$t->guard('窗口内凭口令入场成功', function () use ($t, $examId, $fx) {
     $res = Http::post('/api/exam/login', [
         'exam_id'  => $examId,
         'stu_id'   => $fx['stu_a'],
@@ -71,18 +98,112 @@ $t->guard('考场登录成功', function () use ($t, $examId, $fx) {
     ]);
     $t->assertSame('登录成功 -> 200', 200, $res['status']);
     $data = Http::data($res);
-    $t->assertTrue('返回组卷警告数组', is_array($data['warnings'] ?? null));
-    $t->assertSame('无缺题警告', [], $data['warnings'] ?? null);
+    $t->assertSame('未开考 → 处于等待室', 'waiting', (string) ($data['phase'] ?? ''));
 
-    // 组卷应生成 4 道题（每题型 1 题）
+    // 入场不组卷：此时不应有试卷
     $cnt = (int) (\Core\Database::fetch(
         'SELECT COUNT(*) c FROM `stupaper` WHERE exam_id = ? AND stu_id = ?',
         [$examId, $fx['stu_a']]
     )['c'] ?? 0);
-    $t->assertSame('组卷生成 4 题', 4, $cnt);
+    $t->assertSame('入场阶段尚未组卷', 0, $cnt);
+
+    // 入场后标记为在考场
+    $row = \Core\Database::fetch(
+        'SELECT stu_status FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
+        [$examId, $fx['stu_a']]
+    );
+    $t->assertSame('入场后状态 online', 'online', (string) ($row['stu_status'] ?? ''));
 });
 
-/* ---------- 4. 每个题型都不能泄露答案（P0-4） ---------- */
+/* ---------- 5. 开考后未入场者被拒（新规则） ---------- */
+$t->guard('开考后无法再入场', function () use ($t) {
+    // exam_start 已过 → 入场窗口关闭
+    $closed = Fixture::createExam([
+        'exam_status' => 'paper',
+        'exam_start'  => date('Y-m-d H:i:s', time() - 60),
+        'exam_end'    => date('Y-m-d H:i:s', time() + 3600),
+    ]);
+    if ($closed === null) {
+        $t->skip('开考后无法再入场', '夹具创建失败');
+        return;
+    }
+    $res = Http::post('/api/exam/login', [
+        'exam_id'  => $closed['exam_id'],
+        'stu_id'   => $closed['stu_a'],
+        'password' => Fixture::PWD,
+        'exam_pwd' => $closed['exam_pwd'],
+    ]);
+    $t->assertSame('开考后入场 -> 403', 403, $res['status']);
+    $t->assertTrue('提示考试已开始', str_contains($res['raw'], '无法进入考场'));
+});
+
+/* ---------- 6. 未到入场时间（开考前 15 分钟之外）被拒 ---------- */
+$t->guard('未到入场时间被拒', function () use ($t) {
+    $future = Fixture::createExam([
+        'exam_status' => 'exam',
+        'exam_start'  => date('Y-m-d H:i:s', time() + 1800), // 30 分钟后开考
+        'exam_end'    => date('Y-m-d H:i:s', time() + 5400),
+    ]);
+    if ($future === null) {
+        $t->skip('未到入场时间被拒', '夹具创建失败');
+        return;
+    }
+    $res = Http::post('/api/exam/login', [
+        'exam_id'  => $future['exam_id'],
+        'stu_id'   => $future['stu_a'],
+        'password' => Fixture::PWD,
+        'exam_pwd' => $future['exam_pwd'],
+    ]);
+    $t->assertSame('未到入场时间 -> 403', 403, $res['status']);
+    $t->assertTrue('提示 15 分钟后才可入场', str_contains($res['raw'], '15 分钟'));
+});
+
+/* =================== 阶段二：监考出题 =================== */
+
+/* ---------- 7. 出题：为参考班级每位考生随机组卷 ---------- */
+$t->guard('出题后状态推进且试卷就绪', function () use ($t, $examId) {
+    $exam = (new Exam())->find($examId);
+    $r = ExamEngine::generateForClass($examId, $exam);
+    $t->assertTrue('匹配到参考班级考生', $r['students'] >= 1);
+    $t->assertSame('新生成 2 份试卷', 2, $r['generated']);
+    $t->assertSame('无缺题警告', [], $r['warnings']);
+
+    $cnt = (int) (\Core\Database::fetch(
+        'SELECT COUNT(*) c FROM `stupaper` WHERE exam_id = ? AND stu_id = ?',
+        [$examId, Fixture::STU_A]
+    )['c'] ?? 0);
+    $t->assertSame('考生 A 组卷 4 题', 4, $cnt);
+
+    $status = (string) ((new Exam())->find($examId)['exam_status'] ?? '');
+    $t->assertSame('出题后状态为已排卷', Exam::STATUS_PAPER, $status);
+});
+
+/* ---------- 8. 未开考不得取题 ---------- */
+$t->guard('未开考不得取题', function () use ($t) {
+    $res = Http::get('/api/exam/paper?paper_id=1');
+    $t->assertSame('未开考取卷 -> 409', 409, $res['status']);
+    $t->assertSame('状态为等待开考', 'waiting', (string) (Http::data(Http::get('/api/exam/status'))['phase'] ?? ''));
+});
+
+/* =================== 阶段三：开考 =================== */
+
+/* ---------- 9. 手动开考保留原口令 ---------- */
+$t->guard('手动开考保留入场口令', function () use ($t, $examId, $fx) {
+    $pwd = (new Exam())->start($examId);
+    $t->assertSame('开考口令未突变', $fx['exam_pwd'], $pwd);
+    $t->assertSame('状态置为进行中', Exam::STATUS_TESTING, (string) ((new Exam())->find($examId)['exam_status'] ?? ''));
+});
+
+/* ---------- 10. 开考后考生状态轮询进入答题阶段 ---------- */
+$t->guard('开考后进入答题阶段', function () use ($t) {
+    $res = Http::get('/api/exam/status');
+    $t->assertSame('状态可读', 200, $res['status']);
+    $data = Http::data($res);
+    $t->assertSame('阶段为答题中', 'answering', (string) ($data['phase'] ?? ''));
+    $t->assertSame('试卷已就绪', true, (bool) ($data['paper_ready'] ?? false));
+});
+
+/* ---------- 11. 每个题型都不能泄露答案（P0-4） ---------- */
 $t->guard('全卷不泄露答案', function () use ($t) {
     for ($pid = 1; $pid <= 4; $pid++) {
         $res = Http::get("/api/exam/paper?paper_id={$pid}");
@@ -95,7 +216,7 @@ $t->guard('全卷不泄露答案', function () use ($t) {
     }
 });
 
-/* ---------- 5. 题目字段完整性 ---------- */
+/* ---------- 12. 题目字段完整性 ---------- */
 $t->guard('题目字段完整', function () use ($t) {
     $res = Http::get('/api/exam/paper?paper_id=1');
     $q = Http::data($res)['question'] ?? [];
@@ -108,22 +229,21 @@ $t->guard('题目字段完整', function () use ($t) {
     $t->assertSame('答题卡未答 0', 0, (int) ($nav['done'] ?? -1));
 });
 
-/* ---------- 6. 越界题号 ---------- */
+/* ---------- 13. 越界题号 ---------- */
 $t->guard('越界题号被拒', function () use ($t) {
     $res = Http::get('/api/exam/paper?paper_id=999');
     $t->assertSame('题号越界 -> 400', 400, $res['status']);
 });
 
-/* ---------- 7. CSRF：无令牌不能保存 ---------- */
+/* ---------- 14. CSRF：无令牌不能保存 ---------- */
 $t->guard('保存答案需 CSRF 令牌', function () use ($t) {
     $res = Http::post('/api/exam/paper/save', ['paper_id' => 1, 'stu_key' => 'A']);
     $t->assertSame('无 CSRF -> 419', 419, $res['status']);
 });
 
-/* ---------- 8. 逐题保存 + 答题卡状态 ---------- */
+/* ---------- 15. 逐题保存 + 答题卡状态 ---------- */
 $t->guard('保存答案并更新答题卡', function () use ($t) {
     $csrf = \App\Services\AuthSession::csrfToken();
-    // 第 1 题（判断题）提交 A；第 2 题（单选）提交 A
     $r1 = Http::post('/api/exam/paper/save', ['paper_id' => 1, 'stu_key' => 'A'], ['X-CSRF-Token' => $csrf]);
     $t->assertSame('第 1 题保存成功', 200, $r1['status']);
     $t->assertSame('返回下一题号 2', 2, (int) (Http::data($r1)['next_paper_id'] ?? 0));
@@ -134,7 +254,7 @@ $t->guard('保存答案并更新答题卡', function () use ($t) {
     $t->assertSame('答题卡已答 2 题', 2, (int) ($nav['done'] ?? -1));
 });
 
-/* ---------- 9. 多选题数组形式提交（归一化） ---------- */
+/* ---------- 16. 多选题数组形式提交（归一化） ---------- */
 $t->guard('多选题数组答案归一化', function () use ($t, $examId) {
     $csrf = \App\Services\AuthSession::csrfToken();
     // 第 3 题应为多选（checkbox），提交乱序数组 "C","A" -> 归一为 "AC"
@@ -147,7 +267,9 @@ $t->guard('多选题数组答案归一化', function () use ($t, $examId) {
     $t->assertSame('多选题答案已排序归一', 'AC', (string) ($row['stu_key'] ?? ''));
 });
 
-/* ---------- 10. 交卷判分（指定正确答案，验证计分准确） ---------- */
+/* =================== 阶段四：交卷 =================== */
+
+/* ---------- 17. 交卷判分（指定正确答案，验证计分准确） ---------- */
 $t->guard('交卷判分准确', function () use ($t, $examId, $fx) {
     $csrf = \App\Services\AuthSession::csrfToken();
 
@@ -161,7 +283,6 @@ $t->guard('交卷判分准确', function () use ($t, $examId, $fx) {
     );
     $expected = 0;
     foreach ($keys as $k) {
-        $type = (string) $k['quiz_class'];
         $key = (string) $k['quiz_key'];
         if ($key === '') {
             continue;
@@ -175,7 +296,6 @@ $t->guard('交卷判分准确', function () use ($t, $examId, $fx) {
     $got = (int) (Http::data($res)['score'] ?? -1);
     $t->assertSame("全对得分应为 {$expected}", $expected, $got);
 
-    // 成绩已落库
     $row = \Core\Database::fetch(
         'SELECT stu_score, stu_status FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
         [$examId, $fx['stu_a']]
@@ -184,7 +304,7 @@ $t->guard('交卷判分准确', function () use ($t, $examId, $fx) {
     $t->assertSame('状态已置为 over', 'over', (string) ($row['stu_status'] ?? ''));
 });
 
-/* ---------- 11. 交卷后可见答案 ---------- */
+/* ---------- 18. 交卷后可见答案 ---------- */
 $t->guard('交卷后可查看答案', function () use ($t) {
     $res = Http::get('/api/exam/answer');
     $t->assertSame('查看答案成功', 200, $res['status']);
@@ -197,7 +317,7 @@ $t->guard('交卷后可查看答案', function () use ($t) {
     $t->assertTrue('含分题型统计', is_array($summary) && count($summary) > 0);
 });
 
-/* ---------- 12. 重复交卷幂等 ---------- */
+/* ---------- 19. 重复交卷幂等 ---------- */
 $t->guard('重复交卷幂等', function () use ($t) {
     $csrf = \App\Services\AuthSession::csrfToken();
     $res = Http::post('/api/exam/paper/submit', [], ['X-CSRF-Token' => $csrf]);
@@ -205,13 +325,59 @@ $t->guard('重复交卷幂等', function () use ($t) {
     $t->assertTrue('标记已交卷', (Http::data($res)['already_submitted'] ?? false) === true);
 });
 
-/* ---------- 13. 交卷后不能再取卷 ---------- */
+/* ---------- 20. 交卷后不能再取卷 ---------- */
 $t->guard('交卷后禁止取卷', function () use ($t) {
     $res = Http::get('/api/exam/paper?paper_id=1');
     $t->assertSame('交卷后取卷 -> 409', 409, $res['status']);
 });
 
-/* ---------- 14. 考生 B 未登录不能读 A 的答卷 ---------- */
+/* ---------- 21. 已交卷考生不能重复入场 ---------- */
+$t->guard('已交卷考生不能重复入场', function () use ($t, $examId, $fx) {
+    $res = Http::post('/api/exam/login', [
+        'exam_id'  => $examId,
+        'stu_id'   => $fx['stu_a'],
+        'password' => Fixture::PWD,
+        'exam_pwd' => $fx['exam_pwd'],
+    ]);
+    $t->assertSame('已交卷入场 -> 409', 409, $res['status']);
+});
+
+/* =================== 阶段五：惰性自动开考 =================== */
+
+/* ---------- 22. 到点自动开考（幂等） ---------- */
+$t->guard('到点惰性自动开考', function () use ($t) {
+    $due = Fixture::createExam([
+        'exam_status' => 'paper',
+        'exam_start'  => date('Y-m-d H:i:s', time() - 5),
+        'exam_end'    => date('Y-m-d H:i:s', time() + 3600),
+    ]);
+    if ($due === null) {
+        $t->skip('到点惰性自动开考', '夹具创建失败');
+        return;
+    }
+    $id = (int) $due['exam_id'];
+    $t->assertSame('自动开考前状态为已排卷', Exam::STATUS_PAPER, (string) ((new Exam())->find($id)['exam_status'] ?? ''));
+    $changed = Exam::autoStartIfDue($id);
+    $t->assertSame('触发自动开考', true, $changed);
+    $t->assertSame('状态推进为进行中', Exam::STATUS_TESTING, (string) ((new Exam())->find($id)['exam_status'] ?? ''));
+    $t->assertSame('重复调用幂等', false, Exam::autoStartIfDue($id));
+});
+
+/* ---------- 23. 未到点不自动开考 ---------- */
+$t->guard('未到点不自动开考', function () use ($t) {
+    $notYet = Fixture::createExam([
+        'exam_status' => 'paper',
+        'exam_start'  => date('Y-m-d H:i:s', time() + 600),
+        'exam_end'    => date('Y-m-d H:i:s', time() + 3600),
+    ]);
+    if ($notYet === null) {
+        $t->skip('未到点不自动开考', '夹具创建失败');
+        return;
+    }
+    $t->assertSame('未到点不推进', false, Exam::autoStartIfDue((int) $notYet['exam_id']));
+});
+
+/* ---------- 24. 考生 B 未登录不能读 A 的答卷 ---------- */
 $t->guard('未登录不能跨考生读卷', function () use ($t) {
     \App\Services\AuthSession::logout();
     $res = Http::get('/api/exam/answer');
