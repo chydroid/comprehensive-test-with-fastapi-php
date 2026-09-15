@@ -89,8 +89,11 @@ class SessionAuthMiddleware implements Middleware
         ['/api/admin/news',       'admin', 'news.view'],
         ['/api/admin/upload',     'admin', 'quiz.add'],
 
-        // 兜底：其余 /api/admin/** 一律要求管理员登录
-        ['/api/admin/',           'admin'],
+        // 兜底：其余 /api/admin/** 要求管理员登录。
+        // 必须带上最小权限点 admin.access（各内置角色均已授予）：此前这里没有权限点，
+        // 中间件会跳过 can() 判断，任何新增却忘记登记规则的 /api/admin/xxx
+        // 都会对全体已登录管理员无条件开放。
+        ['/api/admin/',           'admin', 'admin.access'],
     ];
 
     /**

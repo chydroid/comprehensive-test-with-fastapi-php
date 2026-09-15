@@ -173,6 +173,10 @@ class StudentController extends BaseController
                 ? ['stu_status' => $e['stu_status'], 'stu_score' => $e['stu_score'] ?? 0]
                 : null;
             $e = array_merge($e, Exam::entryState($e, $score));
+
+            // 考场口令是入场凭证，绝不能下发给考生（前端只需 needs_pwd / pwd_ready
+            // 这类布尔位）。此前把整行 exam_pwd 回传，考生刷接口即可拿到本场口令。
+            unset($e['exam_pwd'], $e['stu_pwd']);
         }
         unset($e);
 

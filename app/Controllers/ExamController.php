@@ -121,9 +121,14 @@ class ExamController extends BaseController
             'login_at' => time(),
         ]);
 
+        // 独立考场入口（/exam）不经过个人中心登录，会话里还没有安全令牌。
+        // 此处必须补发，否则后续保存答案 / 交卷会被 CSRF 校验拦截（419）。
+        $csrf = AuthSession::csrfToken();
+
         $phase = (string) $exam['exam_status'] === Exam::STATUS_TESTING ? 'answering' : 'waiting';
 
         return $this->ok([
+            'csrf_token' => $csrf,
             'exam' => [
                 'id'          => (int) $exam['id'],
                 'exam_name'   => $exam['exam_name'],

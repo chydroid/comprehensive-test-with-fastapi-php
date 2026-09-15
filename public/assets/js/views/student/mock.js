@@ -155,7 +155,10 @@ export function MockTakeView({ router, query }) {
 
   mount(host, runner.node);
   runner.start();
-  return host;
+
+  // 必须返回 dispose：此前直接返回 host，答题引擎内部的 1 秒倒计时定时器
+  // 在离开页面后仍继续运行，归零时会对已卸载的试卷触发一次自动交卷。
+  return { node: host, dispose: () => runner.dispose() };
 }
 
 /* ============================ 错题回顾 ============================ */

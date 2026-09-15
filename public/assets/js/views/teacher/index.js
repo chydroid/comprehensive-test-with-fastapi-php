@@ -307,7 +307,21 @@ export function TeacherMonitorView({ router, query }) {
     pickerSlot, statsSlot, controlSlot, toolbarSlot, tableSlot,
   );
 
+  // 并发保护：轮询 tick 与「锁定/交卷/结束考试」后的手动刷新可能同时触发，
+  // 多个请求并行时后返回的响应会覆盖较新的数据，导致名单闪烁 / 回退到旧数据。
+  // 注意只拦外部触发，load() 内部的一次自我递归不受影响。
+  let inflight = false;
   async function init() {
+    if (inflight) return;
+    inflight = true;
+    try {
+      await load();
+    } finally {
+      inflight = false;
+    }
+  }
+
+  async function load() {
     // 自动刷新间隔来自后台设置；取回后再建立轮询
     await loadAppSettings();
     const res = await withLoading(tableSlot, () => teacherApi.monitor(state.examId ? { exam_id: state.examId } : {}));
@@ -440,14 +454,16 @@ export function TeacherMonitorView({ router, query }) {
 
   async function startExam() {
     const ok = await new Promise((resolve) => {
-      openModal({
+      // 持有返回值并在按钮里关闭，否则遮罩永久停留、页面无法滚动
+      const dlg = openModal({
         title: '确认开考',
         size: 'sm',
         body: el('p', { text: '确定立即开考吗？开考后考生将无法再入场，且立即进入答题界面。' }),
         footer: el('div.row.gap-sm', {}, [
-          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
-          button('立即开考', { variant: 'primary', onClick: () => resolve(true) }),
+          button('取消', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
+          button('立即开考', { variant: 'primary', onClick: () => { dlg.close(); resolve(true); } }),
         ]),
+        onClose: () => resolve(false),
       });
     });
     if (!ok) return;
@@ -458,7 +474,7 @@ export function TeacherMonitorView({ router, query }) {
   }
 
   function showPwdModal(title, message, pwd, after) {
-    openModal({
+    const dlg = openModal({
       title,
       size: 'sm',
       body: el('div.stack', {}, [
@@ -479,7 +495,9 @@ export function TeacherMonitorView({ router, query }) {
         button('复制口令', { variant: 'secondary', iconName: 'copy', block: true,
           onClick: () => copyWithToast(pwd, '考场口令') }),
       ]),
-      footer: button('知道了', { variant: 'primary', onClick: () => { document.body.querySelector('.modal-backdrop')?.click(); after?.(); } }),
+      // 此前用 document.body.querySelector('.modal-backdrop')?.click() 关闭：
+      // 遮罩监听的是 mousedown，.click() 只派发 click 事件，弹窗根本关不掉。
+      footer: button('知道了', { variant: 'primary', onClick: () => { dlg.close(); after?.(); } }),
     });
   }
 
@@ -509,7 +527,8 @@ export function TeacherMonitorView({ router, query }) {
   function renderToolbar() {
     clear(toolbarSlot);
     toolbarSlot.append(el('div.toolbar', {}, [
-      el('div.toolbar-left', {}, [el('span.muted', { text: `${state.list.length} 名考生 · 每 10 秒自动刷新` })]),
+      // 刷新间隔来自后台设置（monitor_refresh_seconds），此前文案写死 10 秒，改配置后会撒谎
+      el('div.toolbar-left', {}, [el('span.muted', { text: `${state.list.length} 名考生 · 每 ${appSettingInt('monitor_refresh_seconds', 10)} 秒自动刷新` })]),
       el('div.toolbar-right', {}, [
         button('全部锁定', { variant: 'secondary', size: 'sm', iconName: 'lock', onClick: () => bulk('lockAll') }),
         button('全部解锁', { variant: 'secondary', size: 'sm', iconName: 'unlock', onClick: () => bulk('unlockAll') }),
@@ -522,14 +541,16 @@ export function TeacherMonitorView({ router, query }) {
   async function bulk(action, danger = false) {
     if (danger) {
       const ok = await new Promise((resolve) => {
-        openModal({
+        // 持有返回值并在按钮里关闭，否则遮罩永久停留、页面无法滚动
+        const dlg = openModal({
           title: '确认结束考试',
           size: 'sm',
           body: el('p', { text: '结束整场考试后考生将无法继续作答，且会立即判分。确认继续？' }),
           footer: el('div.row.gap-sm', {}, [
-            button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
-            button('确认结束', { variant: 'danger', onClick: () => resolve(true) }),
+            button('取消', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
+            button('确认结束', { variant: 'danger', onClick: () => { dlg.close(); resolve(true); } }),
           ]),
+          onClose: () => resolve(false),
         });
       });
       if (!ok) return;

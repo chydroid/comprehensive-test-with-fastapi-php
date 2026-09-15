@@ -38,19 +38,26 @@ final class ExamEngine
             return ['generated' => false, 'warnings' => []];
         }
 
-        // 已有试卷 → 幂等返回，不重复排卷
-        $existing = Database::fetch(
-            'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ? AND stu_id = ?',
-            [$examId, $stuId]
-        );
-        if ((int) ($existing['c'] ?? 0) > 0) {
-            return ['generated' => false, 'warnings' => []];
-        }
-
+        // 已有试卷 → 幂等返回，不重复排卷。
+        // 注意：存在性检查必须与插入处于同一事务内。此前检查在事务之外，
+        // 两个并发请求会双双读到 c=0，各插一整套题，且 paper_id 都从 1 开始，
+        // 造成题量翻倍、saveAnswer 串写、autoGrade 重复计分（总分可超满分）。
         $warnings = [];
 
         Database::beginTransaction();
         try {
+            // 对考试行加排他锁，串行化同一场考试的并发组卷
+            Database::fetch('SELECT id FROM `examinfo` WHERE id = ? FOR UPDATE', [$examId]);
+
+            $existing = Database::fetch(
+                'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ? AND stu_id = ?',
+                [$examId, $stuId]
+            );
+            if ((int) ($existing['c'] ?? 0) > 0) {
+                Database::commit();
+                return ['generated' => false, 'warnings' => []];
+            }
+
             // 确保成绩记录存在（考场口令/状态管理依赖它）
             $hasScore = Database::fetch(
                 'SELECT id FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
@@ -147,8 +154,15 @@ final class ExamEngine
             }
         }
 
-        // 有试卷产生即视为「已出题」；未开考的考试推进为「已排卷」
-        if ($generated > 0 && (string) ($exam['exam_status'] ?? '') === Exam::STATUS_EXAM) {
+        // 只要该考试已存在试卷就视为「已出题」，推进为「已排卷」。
+        // 此前条件为 $generated > 0：若考生此前已排过卷（本次全部 skipped），
+        // 状态会停在 exam，而惰性开考 autoStartIfDue() 只在 paper 状态才推进，
+        // 结果是「编辑过一次的考试到点也不会自动开考」，只能手动启动。
+        $hasPaper = (int) (Database::fetch(
+            'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ?',
+            [$examId]
+        )['c'] ?? 0);
+        if ($hasPaper > 0 && (string) ($exam['exam_status'] ?? '') === Exam::STATUS_EXAM) {
             Database::query(
                 "UPDATE `examinfo` SET exam_status = 'paper' WHERE id = ? AND exam_status = 'exam'",
                 [$examId]
@@ -195,15 +209,29 @@ final class ExamEngine
             [$examId]
         );
         $graded = 0;
-        foreach ($rows as $r) {
-            // 已交卷（over 前缀）的跳过，避免重复判分
-            if (str_starts_with((string) ($r['stu_status'] ?? ''), 'over')) {
-                continue;
+        // 全员判分与状态推进必须原子：此前 UPDATE examinfo 在循环之后且无事务，
+        // 中途异常会留下「前 N 人已判分、其余仍是 online、考试却还显示进行中」的中间态。
+        Database::beginTransaction();
+        try {
+            foreach ($rows as $r) {
+                // 已交卷（over 前缀）的跳过，避免重复判分
+                if (str_starts_with((string) ($r['stu_status'] ?? ''), 'over')) {
+                    continue;
+                }
+                self::autoGrade($examId, (string) $r['stu_id']);
+                $graded++;
             }
-            self::autoGrade($examId, (string) $r['stu_id']);
-            $graded++;
+            Database::query(
+                "UPDATE `examinfo` SET exam_status = 'over' WHERE id = ? AND exam_status <> 'over'",
+                [$examId]
+            );
+            Database::commit();
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollBack();
+            }
+            throw $e;
         }
-        Database::query("UPDATE `examinfo` SET exam_status = 'over' WHERE id = ?", [$examId]);
         return ['graded' => $graded, 'total' => count($rows)];
     }
 
@@ -247,14 +275,14 @@ final class ExamEngine
         $score = 0;
         Database::beginTransaction();
         try {
-            foreach ($rows as $r) {
-                // 标记已批阅
-                Database::query(
-                    'UPDATE `stupaper` SET quiz_status = 1
-                     WHERE exam_id = ? AND stu_id = ? AND paper_id = ?',
-                    [$examId, $stuId, (int) $r['paper_id']]
-                );
+            // 一次性标记全部已批阅（此前循环内逐条 UPDATE，百题试卷会产生上百次往返
+            // 并长时间持锁，也与 saveAnswer 的加锁顺序不一致，存在死锁风险）
+            Database::query(
+                'UPDATE `stupaper` SET quiz_status = 1 WHERE exam_id = ? AND stu_id = ?',
+                [$examId, $stuId]
+            );
 
+            foreach ($rows as $r) {
                 $type = (string) $r['quiz_class'];
                 if ($type === 'longtext') {
                     continue; // 问答题不自动判分
@@ -269,10 +297,30 @@ final class ExamEngine
                 }
             }
 
-            Database::query(
-                'UPDATE `stuscore` SET stu_score = ?, stu_status = ? WHERE exam_id = ? AND stu_id = ?',
+            // 总分封顶：若因异常（如并发重复排卷）出现重复计分行，避免成绩超过试卷满分
+            $cap = (int) ($exam['exam_score'] ?? 0);
+            if ($cap > 0 && $score > $cap) {
+                $score = $cap;
+            }
+
+            // 幂等门禁：已交卷的记录不再覆盖。此前无条件 UPDATE，手动交卷与超时
+            // 自动交卷并发时会互相覆盖，且事后无法区分哪次才是真实交卷。
+            $affected = Database::query(
+                "UPDATE `stuscore` SET stu_score = ?, stu_status = ?
+                 WHERE exam_id = ? AND stu_id = ? AND LEFT(stu_status, 4) != 'over'",
                 [$score, 'over', $examId, $stuId]
-            );
+            )->rowCount();
+
+            if ($affected === 0) {
+                // 已判过分：直接返回库中既有成绩，保证重复交卷幂等
+                Database::commit();
+                $existing = Database::fetch(
+                    'SELECT stu_score FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
+                    [$examId, $stuId]
+                );
+                return (int) ($existing['stu_score'] ?? $score);
+            }
+
             Database::commit();
         } catch (\Throwable $e) {
             if (Database::inTransaction()) {

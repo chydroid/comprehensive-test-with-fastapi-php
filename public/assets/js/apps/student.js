@@ -69,6 +69,9 @@ function renderAuth() {
     { path: '/login', view: () => page },
     { path: '/register', view: () => StudentRegisterView({ router }) },
   ]);
+  // shell.mount() 会清空 #app，把 router 的 outlet 从 DOM 上摘掉。
+  // 回到登录页时必须重新挂回，否则路由会渲染进游离节点，整页空白。
+  if (!outlet.isConnected) appRoot().append(outlet);
   router.start();
 }
 
@@ -103,6 +106,19 @@ function startShell() {
   }).init();
 
   shell.mount();
+
+  // 模拟考试三个视图是门户入口（/portal）与考生中心（/student）共用的，
+  // 它们内部统一跳转到 /exercise/mock*。门户注册的就是这组路径，考生中心
+  // 若只注册 /mock*，跳转会落到「页面不存在」。这里补注册同义别名。
+  const mockRoute = (path, title, make) => ({
+    path,
+    view: async (ctx) => {
+      shell.setActive('mock');
+      shell.setTitle(title);
+      try { shell.setContent(await make({ router, query: ctx.query })); } catch (e) { shell.setContent(renderErrorNode(e, title)); }
+      return undefined;
+    },
+  });
 
   const routes = [
     ...NAV.filter((n) => VIEWS[n.key]).map((n) => ({
@@ -144,6 +160,9 @@ function startShell() {
         return undefined;
       },
     },
+    mockRoute('/exercise/mock', '模拟考试', MockSetupView),
+    mockRoute('/exercise/mock/take', '模拟考试', MockTakeView),
+    mockRoute('/exercise/mock/review', '错题回顾', MockReviewView),
   ];
 
   router.setRoutes(routes);

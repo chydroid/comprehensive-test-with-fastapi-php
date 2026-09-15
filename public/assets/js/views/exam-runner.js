@@ -239,11 +239,17 @@ export function createExamRunner(cfg) {
     nextBtn.disabled = state.paperId >= state.nav.total;
   }
 
+  // 翻页序号：连点「下一题」会并发多个 loadPaper，谁后返回谁生效，
+  // 最终停在哪题取决于响应顺序而非用户点击。用序号丢弃过期结果。
+  let navSeq = 0;
+
   async function go(paperId) {
     if (paperId < 1 || paperId > state.nav.total) return;
     if (paperId === state.paperId && state.question) return;
     if (state.dirty && !(await saveCurrent())) return;
+    const token = ++navSeq;
     const res = await withLoading(questionCard, () => cfg.loadPaper(paperId), { silent: true });
+    if (token !== navSeq) return; // 已有更新的翻页请求，丢弃本次结果
     if (!res.ok) return;
     state.paperId = res.result.paper_id || paperId;
     state.question = res.result.question;
@@ -255,23 +261,32 @@ export function createExamRunner(cfg) {
   async function saveCurrent() {
     const val = localAnswer(state.paperId);
     if (val == null) { state.dirty = false; return true; }
-    const res = await cfg.saveAnswer(state.paperId, val);
-    if (res && res.navigation) state.nav = res.navigation;
-    setAnswered(state.paperId, true);
-    state.dirty = false;
-    if (res && res.submitted) {
-      state.finished = true;
-      await finish();
+    // 保存失败（网络抖动 / 已被强制收卷）时不能让异常冒泡成 unhandled rejection：
+    // 答题卡跳题处是 saveCurrent().then(...)，doSubmit 里也是直接 await。
+    try {
+      const res = await cfg.saveAnswer(state.paperId, val);
+      if (res && res.navigation) state.nav = res.navigation;
+      setAnswered(state.paperId, true);
+      state.dirty = false;
+      if (res && res.submitted) {
+        state.finished = true;
+        await finish();
+        return false;
+      }
+      return true;
+    } catch (e) {
+      notify.error('答案保存失败，请检查网络后重试');
       return false;
     }
-    return true;
   }
 
   async function confirmSubmit() {
     if (state.submitting || state.finished) return;
     const unanswered = state.nav.total - state.nav.done;
     const ok = await new Promise((resolve) => {
-      openModal({
+      // 必须持有 openModal 的返回值并在按钮里关闭：此前只 resolve 不 close，
+      // 遮罩会永久停留挡住交卷结果页，body 的滚动锁也不会解除。
+      const dlg = openModal({
         title: '确认交卷',
         size: 'sm',
         body: el('div.stack', {}, [
@@ -281,11 +296,12 @@ export function createExamRunner(cfg) {
             : el('div.alert.alert-success', {}, [icon('check-circle', { size: 15 }), el('span', { text: '所有题目均已作答' })]),
         ]),
         footer: el('div.row.gap-sm', {}, [
-          button('再检查一下', { variant: 'secondary', onClick: () => resolve(false) }),
-          button('确认交卷', { variant: 'danger', onClick: () => resolve(true) }),
+          button('再检查一下', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
+          button('确认交卷', { variant: 'danger', onClick: () => { dlg.close(); resolve(true); } }),
         ]),
+        // ESC / 点击遮罩 / 右上角 X 关闭时也要结束等待
+        onClose: () => resolve(false),
       });
-      void ok;
     });
     if (!ok) return;
     await doSubmit();
@@ -311,7 +327,9 @@ export function createExamRunner(cfg) {
   async function finish() {
     stopTimer();
     clear(root);
-    const data = cfg.loadReview ? (await cfg.loadReview()).result || (await cfg.loadReview()) : null;
+    // http.js 已解包信封，loadReview() 返回的就是 data 本身，
+    // 此前写 `.result || (await ...)` 使左侧恒为 undefined，每次交卷都多发一次请求。
+    const data = cfg.loadReview ? await cfg.loadReview() : null;
     root.append(renderResult(data));
   }
 
@@ -331,7 +349,9 @@ export function createExamRunner(cfg) {
       timerNode.append(icon('clock', { size: 15 }), el('span', { text: fmtDuration(left) }));
       if (left <= 0) {
         stopTimer();
-        if (!state.finished) doSubmit();
+        // 自动交卷在定时器回调里触发，异常必须就地兜住，否则倒计时归零时
+        // 一次保存失败就会让交卷静默不执行，且抛出的 Promise 无人处理。
+        if (!state.finished) doSubmit().catch(() => {});
       }
     };
     tick();

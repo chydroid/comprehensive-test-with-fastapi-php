@@ -304,6 +304,10 @@ export function openModal({ title, body, footer = null, size = '', onClose, clos
     released?.();
     backdrop.remove();
     document.removeEventListener('keydown', onKey);
+    // 恢复滚动必须放在内部 close 里：ESC、右上角 X、点击遮罩走的都是这条路径，
+    // 若只在对外暴露的 close 里恢复，这几种关闭方式会让 body 的 overflow:hidden
+    // 永久残留，导致关闭弹窗后整页无法滚动。
+    if (!$('.modal-backdrop')) document.body.style.overflow = '';
     if (lastFocused && lastFocused.isConnected) lastFocused.focus();
     onClose?.();
   }
@@ -319,20 +323,13 @@ export function openModal({ title, body, footer = null, size = '', onClose, clos
   document.body.style.overflow = 'hidden';
   released = trapFocus(modal);
 
-  // 恢复滚动
-  const origClose = close;
-  const wrappedClose = () => {
-    origClose();
-    if (!$('.modal-backdrop')) document.body.style.overflow = '';
-  };
-
   // 自动聚焦首个可交互元素
   requestAnimationFrame(() => {
     const target = $('input:not([type=hidden]), select, textarea, button', modal);
     target?.focus();
   });
 
-  return { close: wrappedClose, root: modal, body: bodyEl };
+  return { close, root: modal, body: bodyEl };
 }
 
 /** 确认对话框（Promise） */

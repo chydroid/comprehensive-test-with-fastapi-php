@@ -155,7 +155,9 @@ final class InvigilationService
                 $statusMap[$baseStatus] ?? $status,
             ];
             if ($withPwd) {
-                $line[] = (string) ($row['stu_pwd'] ?? '');
+                // 全考场共用同一个口令（stuscore.stu_pwd 只是开考时的快照），
+                // 成绩名单接口已不再下发 stu_pwd，这里直接取 examinfo.exam_pwd。
+                $line[] = (string) ($exam['exam_pwd'] ?? '');
             }
             fputcsv($buffer, $line);
         }

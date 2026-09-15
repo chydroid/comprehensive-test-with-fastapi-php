@@ -85,19 +85,19 @@ class App
                 $response->header('Allow', implode(', ', $e->allowedMethods));
             }
         } catch (\PDOException $e) {
-            // 唯一约束/外键等完整性冲突（SQLSTATE 23000）→ 409，而非 500
+            // 唯一约束/外键等完整性冲突（SQLSTATE 23000）→ 409，而非 500。
+            // 注意：数据库异常绝不能把原文（含表名、字段名、SQL 片段）回给客户端，
+            // 即使开启调试模式也只是附加到日志，响应体恒定为通用文案（CWE-209）。
             $this->logError($e);
             if ($e->getCode() === '23000') {
-                $message = $this->isDebug() ? $e->getMessage() : '数据重复或违反唯一约束';
-                $response->error(40900, $message, 409, ['request_id' => $GLOBALS['__request_id']]);
+                $response->error(40900, '数据重复或违反唯一约束', 409, ['request_id' => $GLOBALS['__request_id']]);
             } else {
-                $message = $this->isDebug() ? $e->getMessage() : '服务器内部错误';
-                $response->error(50000, $message, 500, ['request_id' => $GLOBALS['__request_id']]);
+                $response->error(50000, '服务器内部错误', 500, ['request_id' => $GLOBALS['__request_id']]);
             }
         } catch (Throwable $e) {
+            // 同上：Throwable 原文可能包含服务器绝对路径与内部类名，只写日志。
             $this->logError($e);
-            $message = $this->isDebug() ? $e->getMessage() : '服务器内部错误';
-            $response->error(50000, $message, 500, ['request_id' => $GLOBALS['__request_id']]);
+            $response->error(50000, '服务器内部错误', 500, ['request_id' => $GLOBALS['__request_id']]);
         }
 
         return $this->finish($request, $response, microtime(true) - $start);

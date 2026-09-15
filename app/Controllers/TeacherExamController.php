@@ -78,10 +78,34 @@ class TeacherExamController extends BaseController
         ]);
     }
 
+    /**
+     * 归属校验：教师只能操作自己负责（exam_tea 与登录教师同名）的考试。
+     *
+     * 此前各 {id} 方法只取路径 id 就直接操作，既没读教师会话也没比对 exam_tea，
+     * 导致教师之间可水平越权：读取他人考试的考场口令、把他人考试过户到自己名下、
+     * 删除他人考试（级联删试卷与成绩）、导出他人班级考生成绩。
+     */
+    private function assertOwnExam(int $id): array
+    {
+        $sess = $this->authTeacher();
+        $teaName = (string) ($sess['tea_name'] ?? '');
+
+        $row = $this->model->find($id);
+        if ($row === null) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+        // 用「不存在」而非「无权限」回应，避免通过响应码探测他人考试编号是否存在
+        if ((string) ($row['exam_tea'] ?? '') !== $teaName) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+        return $row;
+    }
+
     /** GET /api/teacher/exams/{id} */
     public function show(): Response
     {
         $id = $this->idParam();
+        $this->assertOwnExam($id);
         $row = $this->model->detail($id);
         if ($row === null) {
             throw new HttpException(404, '考试不存在', 40400);
@@ -153,10 +177,7 @@ class TeacherExamController extends BaseController
     public function update(): Response
     {
         $id = $this->idParam();
-        $row = $this->model->find($id);
-        if ($row === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $row = $this->assertOwnExam($id);
         if (str_starts_with((string) $row['exam_status'], 'over')) {
             throw new HttpException(409, '已结束的考试不能修改', 40901);
         }
@@ -180,10 +201,7 @@ class TeacherExamController extends BaseController
     public function start(): Response
     {
         $id = $this->idParam();
-        $row = $this->model->detail($id);
-        if ($row === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $row = $this->assertOwnExam($id);
         if ((string) $row['exam_status'] === Exam::STATUS_TESTING) {
             throw new HttpException(409, '该考试已处于进行中状态', 40901);
         }
@@ -201,10 +219,7 @@ class TeacherExamController extends BaseController
     public function open(): Response
     {
         $id = $this->idParam();
-        $row = $this->model->detail($id);
-        if ($row === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $row = $this->assertOwnExam($id);
         if (str_starts_with((string) $row['exam_status'], 'over')) {
             throw new HttpException(409, '已结束的考试不能开放入场', 40901);
         }
@@ -222,10 +237,7 @@ class TeacherExamController extends BaseController
     public function generatePapers(): Response
     {
         $id = $this->idParam();
-        $exam = $this->model->detail($id);
-        if ($exam === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $exam = $this->assertOwnExam($id);
         if (!in_array((string) $exam['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER], true)) {
             throw new HttpException(409, '只能为未开考的考试出题', 40901);
         }
@@ -260,10 +272,7 @@ class TeacherExamController extends BaseController
     public function delete(): Response
     {
         $id = $this->idParam();
-        $row = $this->model->find($id);
-        if ($row === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $row = $this->assertOwnExam($id);
         if (!in_array((string) $row['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER], true)) {
             throw new HttpException(409, '该考试已开考或已结束，无法删除', 40901);
         }
@@ -288,10 +297,7 @@ class TeacherExamController extends BaseController
     public function students(): Response
     {
         $examId = $this->idParam();
-        $exam = $this->model->detail($examId);
-        if ($exam === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $exam = $this->assertOwnExam($examId);
 
         // 若已排卷，返回实际考生成绩名单；否则按参考班级列出候选人
         $scored = Database::fetchAll(
@@ -338,9 +344,7 @@ class TeacherExamController extends BaseController
         if ($examId <= 0) {
             return $this->ok(['exams' => $exams, 'exam_id' => 0, 'list' => []]);
         }
-        if ($this->model->find($examId) === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $this->assertOwnExam($examId);
 
         return $this->ok([
             'exams'   => $exams,
@@ -365,10 +369,7 @@ class TeacherExamController extends BaseController
         if ($examId <= 0) {
             throw new HttpException(400, '请选择要导出的考试', 40000);
         }
-        $exam = $this->model->find($examId);
-        if ($exam === null) {
-            throw new HttpException(404, '考试不存在', 40400);
-        }
+        $exam = $this->assertOwnExam($examId);
 
         $rows = Database::fetchAll(
             'SELECT si.id AS stu_id, si.stu_name, si.grade_id, si.class_id,

@@ -11,8 +11,11 @@ return [
         'version'       => '2.0.0',
         'debug'         => (bool) env('APP_DEBUG', false),
         'timezone'      => 'Asia/Shanghai',
-        // 请求体上限（字节），超限返回 413，防止超大请求拖垮服务
-        'max_body_bytes'=> (int) env('MAX_BODY_BYTES', 1048576),
+        // 请求体上限（字节），超限返回 413，防止超大请求拖垮服务。
+        // 必须大于 upload.max_bytes：图片经 base64 传输会膨胀约 1.34 倍，
+        // 2MB 的上传实际请求体接近 2.8MB。此前默认 1MB，导致 UploadController
+        // 里 2MB 的大小校验永远执行不到，图片上传恒被 413 拒绝。
+        'max_body_bytes'=> (int) env('MAX_BODY_BYTES', 6291456), // 6MB
     ],
 
     'database' => [
@@ -120,24 +123,31 @@ return [
             'exam.view', 'exam.add', 'exam.edit', 'exam.delete', 'exam.start', 'exam.generate',
             'category.view', 'category.add', 'category.edit', 'category.delete',
             'student.view', 'student.add', 'student.edit', 'student.delete', 'student.import',
-            'grade.view', 'grade.edit',
-            'class.view', 'class.edit',
+            // 年级/班级/教师此前只有 view/edit，缺少 add（delete 同样缺失），
+            // 导致该角色无法新建年级、班级与教师，与「考试/考生/成绩相关」的定位不符。
+            'grade.view', 'grade.add', 'grade.edit', 'grade.delete',
+            'class.view', 'class.add', 'class.edit', 'class.delete',
             'monitor.view', 'monitor.control',
             'score.view', 'score.backup', 'score.export',
             'quiz.view',
-            'teacher.view',
+            // 与 student.* 对齐：既能查看也需要维护授课教师
+            'teacher.view', 'teacher.add', 'teacher.edit', 'teacher.delete',
             'news.view',
+            // 兜底权限点：所有管理端接口都要求的最小权限（见 SessionAuthMiddleware）
+            'admin.access',
         ],
         'quizOperator' => [
             'dashboard.view',
             'quiz.view', 'quiz.clean',
             'subject.view',
             'category.view',
+            'admin.access',
         ],
         'quizAdder' => [
             'dashboard.view',
             'quiz.view', 'quiz.add', 'quiz.edit', 'quiz.delete',
             'subject.view',
+            'admin.access',
         ],
     ],
 

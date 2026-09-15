@@ -11,6 +11,7 @@ import { icon } from '../../core/icons.js';
 import { button, card, field, input, notify, alertBox } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { examApi } from '../../api/index.js';
+import { setCsrfToken } from '../../core/http.js';
 import { createExamRunner } from '../exam-runner.js';
 import { fmtDateTime } from '../../core/format.js';
 import {
@@ -51,6 +52,9 @@ export function ExamLoginView({ router, query }) {
       errSlot.append(alertBox(res.error?.message || '进入考场失败', { type: 'danger' }));
       return;
     }
+    // 独立考场入口（/exam）不经过个人中心登录，会话里原本没有安全令牌，
+    // 后端在登录响应中补发，这里必须立刻注入，否则保存答案 / 交卷会被 419 拦截。
+    if (res.result.csrf_token) setCsrfToken(res.result.csrf_token);
     const warn = (res.result.warnings || []).filter(Boolean);
     if (warn.length) warn.forEach((w) => notify.warning(String(w)));
     notify.success(`欢迎你，${res.result.stu_name}`);
@@ -127,11 +131,19 @@ export function ExamTakeView({ router, query }) {
 
     stopPoll();
     const pollSeconds = Math.max(2, appSettingInt('waiting_poll_seconds', 4));
+    let polling = false;
     pollTimer = setInterval(async () => {
-      const r = await examApi.status().catch(() => null);
-      if (!r || !r.phase) return;
-      if (r.phase === 'answering') { stopPoll(); startRunner(); }
-      else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }
+      // 上一次请求还没回来就跳过本次 tick，避免慢网下请求堆积
+      if (polling) return;
+      polling = true;
+      try {
+        const r = await examApi.status().catch(() => null);
+        if (!r || !r.phase) return;
+        if (r.phase === 'answering') { stopPoll(); startRunner(); }
+        else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }
+      } finally {
+        polling = false;
+      }
     }, pollSeconds * 1000);
   }
 
@@ -175,6 +187,16 @@ export function ExamTakeView({ router, query }) {
   void examId;
   boot();
 
-  // 视图卸载时清理轮询与事件
-  return { node: host, dispose: () => { stopPoll(); window.removeEventListener('beforeunload', beforeUnload); } };
+  // 视图卸载时清理：轮询、beforeunload，以及答题引擎内部的 1 秒倒计时。
+  // 漏掉 runner.dispose() 会让倒计时定时器在离开答题页后继续运行，
+  // 归零时还会对已卸载的试卷触发一次自动交卷请求。
+  return {
+    node: host,
+    dispose: () => {
+      stopPoll();
+      window.removeEventListener('beforeunload', beforeUnload);
+      runner?.dispose?.();
+      runner = null;
+    },
+  };
 }

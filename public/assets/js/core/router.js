@@ -76,12 +76,18 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
     }
   }
 
+  // 导航序号：快速连续导航（或前进/后退连击）时，两个 handle 会并发 await，
+  // 先发起的那个可能后返回，把旧视图盖到新视图上，并覆盖掉新视图的 disposer。
+  let seq = 0;
+
   async function handle() {
+    const token = ++seq;
     const target = resolve();
 
     // 守卫：可返回 false（阻断）或重定向路径
     if (beforeEach) {
       const verdict = await beforeEach(target, current);
+      if (token !== seq) return; // 等待期间又发生了导航，放弃本次渲染
       if (verdict === false) return;
       if (typeof verdict === 'string') { navigate(verdict, { replace: true }); return; }
     }
@@ -108,6 +114,10 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
     try {
       const result = await target.route.view({ params: target.params, query: target.query, router: api, route: target.route });
 
+      // 已有更新的导航接管，丢弃本次结果：否则旧视图会后挂载，
+      // 并把新视图的 disposer 覆盖掉，造成定时器泄漏。
+      if (token !== seq) return;
+
       // 支持四种返回值：
       //   1) Node              → 直接挂载
       //   2) { node, dispose } → 挂载 node，卸载时调用 dispose
@@ -131,15 +141,28 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
   function defaultNotFound(target) {
     const s = document.createElement('section');
     s.className = 'empty';
-    s.innerHTML = `
-      <div class="empty-icon">
-        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
-          <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/>
-        </svg>
-      </div>
-      <div class="empty-title">页面不存在</div>
-      <div class="empty-desc">路径 <code>${target.path}</code> 未匹配到任何视图。</div>
-    `;
+
+    // 图标是静态常量，可以安全地用 innerHTML；路径不可信，必须走 textContent
+    const iconBox = document.createElement('div');
+    iconBox.className = 'empty-icon';
+    iconBox.innerHTML = `
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+        <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/>
+      </svg>`;
+
+    const title = document.createElement('div');
+    title.className = 'empty-title';
+    title.textContent = '页面不存在';
+
+    const desc = document.createElement('div');
+    desc.className = 'empty-desc';
+    const code = document.createElement('code');
+    // 路径取自 location.hash，可被构造成 #/<img src=x onerror=...>。
+    // 此前直接拼进 innerHTML，属于潜伏的 DOM XSS（当前各入口都传了 notFound 才未暴露）。
+    code.textContent = String(target?.path ?? '');
+    desc.append('路径 ', code, ' 未匹配到任何视图。');
+
+    s.append(iconBox, title, desc);
     return s;
   }
 
@@ -152,9 +175,12 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
   }
 
   function start() {
-    if (started) return;
-    started = true;
-    window.addEventListener('hashchange', handle);
+    // 只有事件监听需要幂等保护；渲染必须每次执行。
+    // 早退会导致：登录后内容区空白、退出登录后整页白屏（登录页不再渲染）。
+    if (!started) {
+      started = true;
+      window.addEventListener('hashchange', handle);
+    }
     if (!location.hash) history.replaceState(null, '', `${location.pathname}${location.search}#/`);
     handle();
   }

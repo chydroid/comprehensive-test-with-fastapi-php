@@ -81,6 +81,9 @@ function renderLoginPage() {
     { path: '/', view: () => page },
     { path: '/login', view: () => page },
   ]);
+  // shell.mount() 会清空 #app，把 router 的 outlet 从 DOM 上摘掉。
+  // 回到登录页时必须重新挂回，否则路由会渲染进游离节点，整页空白。
+  if (!outlet.isConnected) appRoot().append(outlet);
   router.start();
 }
 

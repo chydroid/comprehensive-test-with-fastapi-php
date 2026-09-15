@@ -53,8 +53,11 @@ class StuScore extends Model
         $direction = strtolower($order) === 'desc' ? 'DESC' : 'ASC';
 
         return Database::fetchAll(
+            // 不再 SELECT ss.stu_pwd：考场口令是入场凭证，成绩查看权限（score.view）
+            // 不应顺带拿到它。需要口令的 CSV 导出由 InvigilationService::csv($withPwd)
+            // 单独从 examinfo.exam_pwd 取。
             "SELECT si.id AS stu_id, si.stu_name, si.grade_id, si.class_id, si.stu_sex,
-                    ss.stu_score, ss.stu_status, ss.stu_pwd, ss.exam_id
+                    ss.stu_score, ss.stu_status, ss.exam_id
              FROM `stuinfo` si
              INNER JOIN `stuscore` ss ON si.id = ss.stu_id
              WHERE ss.exam_id = ?
@@ -63,11 +66,21 @@ class StuScore extends Model
         );
     }
 
-    /** 更新单个考生状态 */
-    public function updateStatus(int $examId, string $stuId, string $status): int
+    /**
+     * 更新单个考生状态。
+     *
+     * 默认拒绝从「已交卷」（over / overBak）迁出：此前单条版没有任何守卫，
+     * 而批量版 lockAll/unlockAll 有，导致监考对已交卷考生点「解锁」就能把
+     * 状态从 over 改回 online —— 连锁击穿登录拦截、答题拦截，再交卷时
+     * autoGrade 会覆盖已封存的成绩。
+     *
+     * @param bool $allowFromSubmitted 是否允许修改已交卷记录（仅管理员显式回收场景使用）
+     */
+    public function updateStatus(int $examId, string $stuId, string $status, bool $allowFromSubmitted = false): int
     {
+        $guard = $allowFromSubmitted ? '' : " AND LEFT(stu_status, 4) != 'over'";
         return Database::query(
-            'UPDATE `stuscore` SET stu_status = ? WHERE exam_id = ? AND stu_id = ?',
+            'UPDATE `stuscore` SET stu_status = ? WHERE exam_id = ? AND stu_id = ?' . $guard,
             [$status, $examId, $stuId]
         )->rowCount();
     }
