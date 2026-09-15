@@ -211,7 +211,18 @@ export function createShell(cfg) {
     },
 
     setContent(node) {
-      if (node instanceof Node) mount(content, node);
+      // 先释放上一个视图（清理定时器/事件监听，避免泄漏）
+      if (typeof this._viewDispose === 'function') {
+        try { this._viewDispose(); } catch (_) { /* 忽略 */ }
+        this._viewDispose = null;
+      }
+      // 兼容两种视图返回值：裸节点，或 { node, dispose } 信封
+      let real = node;
+      if (node && typeof node === 'object' && 'node' in node) {
+        real = node.node;
+        this._viewDispose = typeof node.dispose === 'function' ? node.dispose : null;
+      }
+      if (real instanceof Node) mount(content, real);
       return this;
     },
 
@@ -293,7 +304,13 @@ export function createShell(cfg) {
       return this;
     },
 
-    destroy() { root.remove(); },
+    destroy() {
+      if (typeof this._viewDispose === 'function') {
+        try { this._viewDispose(); } catch (_) { /* 忽略 */ }
+        this._viewDispose = null;
+      }
+      root.remove();
+    },
   };
 
   // 预填充导航（避免 init 前空白）

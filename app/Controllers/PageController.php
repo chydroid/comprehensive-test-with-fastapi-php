@@ -105,17 +105,28 @@ HTML;
         return $this->response->html($html);
     }
 
-    /** 资源版本号：取全部入口脚本与样式的最新修改时间，便于缓存失效 */
+    /**
+     * 资源版本号：取 assets 下全部 js/css 的最新修改时间，便于缓存失效。
+     *
+     * 注意：必须递归扫描整个 assets 目录。入口脚本虽然带 ?v=，但它 import 的
+     * 子模块（core/、ui/、views/ 等）不带版本号，只按 URL 缓存；若版本只看
+     * apps/*.js，改动 ui/shell.js 之类子模块不会让版本号变化，浏览器仍用旧缓存。
+     */
     private function assetVersion(): string
     {
         $latest = 0;
-        foreach ([
-            glob(BASE_PATH . '/public/assets/js/apps/*.js') ?: [],
-            glob(BASE_PATH . '/public/assets/css/*.css') ?: [],
-        ] as $files) {
-            foreach ($files as $f) {
-                $latest = max($latest, (int) filemtime($f));
-            }
+        $root = BASE_PATH . '/public/assets';
+        if (!is_dir($root)) {
+            return substr((string) time(), -6);
+        }
+        $it = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::LEAVES_ONLY
+        );
+        foreach ($it as $file) {
+            if (!$file->isFile()) continue;
+            if (!in_array(strtolower($file->getExtension()), ['js', 'css'], true)) continue;
+            $latest = max($latest, (int) $file->getMTime());
         }
         return substr((string) ($latest ?: time()), -6);
     }
