@@ -193,6 +193,10 @@ class ExamController extends BaseController
                 'exam_status' => $exam['exam_status'],
             ],
             'stu_name'   => $sess['stu_name'] ?? '',
+            // 答题页刷新后前端的 csrfToken 会随模块状态一起重置为空，
+            // 而本接口是答题页启动 / 轮询的唯一入口，故在此重新下发令牌，
+            // 使保存答案 / 交卷可正常通过 CSRF 校验（否则恒 419）。
+            'csrf_token' => AuthSession::csrfToken(),
             'server_ts'  => time(),
         ]);
     }

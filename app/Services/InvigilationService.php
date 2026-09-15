@@ -146,18 +146,18 @@ final class InvigilationService
             $status = (string) ($row['stu_status'] ?? '');
             $baseStatus = explode(':', $status)[0];
             $line = [
-                (string) ($row['stu_id'] ?? ''),
-                (string) ($row['stu_name'] ?? ''),
-                (string) ($row['stu_sex'] ?? ''),
-                (string) ($row['grade_id'] ?? ''),
-                (string) ($row['class_id'] ?? ''),
+                self::csvSafe((string) ($row['stu_id'] ?? '')),
+                self::csvSafe((string) ($row['stu_name'] ?? '')),
+                self::csvSafe((string) ($row['stu_sex'] ?? '')),
+                self::csvSafe((string) ($row['grade_id'] ?? '')),
+                self::csvSafe((string) ($row['class_id'] ?? '')),
                 (int) ($row['stu_score'] ?? 0),
-                $statusMap[$baseStatus] ?? $status,
+                self::csvSafe($statusMap[$baseStatus] ?? $status),
             ];
             if ($withPwd) {
                 // 全考场共用同一个口令（stuscore.stu_pwd 只是开考时的快照），
                 // 成绩名单接口已不再下发 stu_pwd，这里直接取 examinfo.exam_pwd。
-                $line[] = (string) ($exam['exam_pwd'] ?? '');
+                $line[] = self::csvSafe((string) ($exam['exam_pwd'] ?? ''));
             }
             fputcsv($buffer, $line);
         }
@@ -167,6 +167,18 @@ final class InvigilationService
         fclose($buffer);
 
         return $content === false ? '' : $content;
+    }
+
+    /**
+     * CSV 单元格防公式注入。
+     *
+     * 考生姓名 / 单位 / 班级等多为导入数据，若以 = + - @ 或制表符、回车开头，
+     * Excel / WPS 打开导出文件时会将其当作公式执行（可触发 DDE / 外链请求）。
+     * 前置单引号使其恒被识别为文本——仅作用于字符串列，成绩等数值列不受影响。
+     */
+    private static function csvSafe(string $value): string
+    {
+        return preg_match('/^[=+\-@\t\r]/', $value) === 1 ? "'" . $value : $value;
     }
 
     /** 成绩 CSV 文件名 */

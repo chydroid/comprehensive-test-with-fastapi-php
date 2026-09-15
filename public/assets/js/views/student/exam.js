@@ -114,6 +114,9 @@ export function ExamTakeView({ router, query }) {
       router.navigate('/');
       return;
     }
+    // 刷新答题页后模块内的 csrfToken 会重置为空（不像登录那样由登录响应注入），
+    // 而本接口每次都随响应带回令牌——不注入的话保存 / 交卷会被 419 拦截。
+    if (data.csrf_token) setCsrfToken(data.csrf_token);
     if (data.phase === 'answering') { startRunner(); return; }
     if (data.phase === 'submitted' || data.phase === 'closed') { renderClosed(data); return; }
     renderWaiting(data.exam);
@@ -139,6 +142,7 @@ export function ExamTakeView({ router, query }) {
       try {
         const r = await examApi.status().catch(() => null);
         if (!r || !r.phase) return;
+        if (r.csrf_token) setCsrfToken(r.csrf_token);
         if (r.phase === 'answering') { stopPoll(); startRunner(); }
         else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }
       } finally {

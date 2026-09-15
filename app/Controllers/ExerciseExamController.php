@@ -29,7 +29,7 @@ use Core\Response;
  */
 class ExerciseExamController extends BaseController
 {
-    private const MOCK_CLASS = '模拟考试';
+    private const MOCK_CLASS = Exam::MOCK_CLASS;
 
     /** 模拟考试默认分值 */
     private const VALUE_MAP = ['radio1' => 2, 'radio2' => 2, 'checkbox' => 3, 'text' => 5, 'longtext' => 0];
@@ -70,6 +70,12 @@ class ExerciseExamController extends BaseController
     {
         $sess = $this->authStudent();
         $stuId = (string) $sess['id'];
+
+        // 正式考试进行中暂停模拟考试：模拟考试同样从 quizlib 抽题，
+        // 交卷后 review() 会整卷下发 quiz_key —— 开考期间可用它批量导出题库答案。
+        if (Exam::hasOngoingFormalExam()) {
+            throw new HttpException(403, '当前有正在进行的正式考试，模拟考试已临时暂停', 40308);
+        }
 
         $in = $this->validate([
             'subj_id'        => 'required|integer',
@@ -286,6 +292,13 @@ class ExerciseExamController extends BaseController
         $stuId = (string) $sess['id'];
         $examId = (int) $this->request->query('exam_id', 0);
         $this->assertMockExam($examId, $stuId);
+
+        // 错题回顾会整卷下发 quiz_key。正式考试进行中禁止查看：
+        // 模拟考试可自由组卷，若不拦截，考生可组一场覆盖某科目全部题目的
+        // 模拟考试并立即交卷，再借复盘导出该科目答案（可能是本场考试用题）。
+        if (Exam::hasOngoingFormalExam()) {
+            throw new HttpException(403, '当前有正在进行的正式考试，暂不能查看错题回顾', 40308);
+        }
 
         // 仅复盘已交卷的模拟考试
         $score = Database::fetch(

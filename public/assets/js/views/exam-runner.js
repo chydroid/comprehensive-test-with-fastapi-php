@@ -153,6 +153,11 @@ export function createExamRunner(cfg) {
     }
   }
 
+  // 当前题干配图节点。renderQuestion 在每次点选后都会被重绘（单选换项 / 多选切换），
+  // 而配图是插在 stemNode 之后的常驻节点、此前从不清理 —— 于是点一次选项就多叠一张图。
+  // 每次重绘前先移除上一张，保证题干下始终只有一张配图。
+  let picNode = null;
+
   function renderQuestion() {
     const q = state.question;
     if (!q) return;
@@ -165,12 +170,14 @@ export function createExamRunner(cfg) {
     const cur = localAnswer(state.paperId);
     const isFill = meta.kind === 'fill' || meta.kind === 'text';
 
-    // 配图
+    // 配图（先清理上一张，避免重复叠加）
+    if (picNode) { picNode.remove(); picNode = null; }
     const pic = q.quiz_pic_name
-      ? el('img.question-pic', { src: `/uploads/${q.quiz_pic_name}`, alt: '题目配图', loading: 'lazy', onerror: function () { this.style.display = 'none'; } })
+      ? el('img.question-pic', { src: `/uploads/${q.quiz_pic_name}`, alt: '题目配图', loading: 'lazy' })
       : null;
     if (pic) {
-      pic.addEventListener('error', () => pic.remove());
+      picNode = pic;
+      pic.addEventListener('error', () => { pic.remove(); if (picNode === pic) picNode = null; });
       stemNode.after(pic);
     }
 

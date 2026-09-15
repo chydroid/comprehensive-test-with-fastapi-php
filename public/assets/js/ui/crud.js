@@ -85,7 +85,10 @@ export function createListView(cfg) {
 
   /* ---------- 渲染 ---------- */
   function render() {
-    const allColumns = selectable ? [checkboxColumn(), ...columns] : columns;
+    // 必须复制一份 columns：未启用多选时若直接用原数组（allColumns === columns），
+    // 下面 push('__ops') 会把「操作」列写回调用方的列定义里，而 render() 每次
+    // load()（翻页 / 搜索 / 排序 / 保存后回刷）都会执行 —— 操作列于是不断重复叠加。
+    const allColumns = selectable ? [checkboxColumn(), ...columns] : [...columns];
 
     if (rowActions) {
       allColumns.push({

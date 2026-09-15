@@ -37,6 +37,30 @@ class Exam extends Model
     /** 「未结束」状态集合，用于考生端展示待考考试 */
     public const ACTIVE_STATUSES = ['exam', 'paper', 'testing'];
 
+    /**
+     * 模拟考试在 examinfo 中的 exam_class 标记（与正式考试的唯一区分依据）。
+     * 与 ExerciseExamController 共用，避免两处各写一份字面量而分叉。
+     */
+    public const MOCK_CLASS = '模拟考试';
+
+    /**
+     * 是否存在「进行中的正式考试」。
+     *
+     * 注意：模拟考试同样以 exam_status = 'testing' 落库
+     * （见 ExamEngine::createPracticeExam），因此判断「正式考试是否在进行」
+     * 必须排除 exam_class = '模拟考试'——否则学生自己开一场模拟考试，
+     * 就会被练习 / 模拟入口误判成「考试进行中」（练习被错误暂停）。
+     */
+    public static function hasOngoingFormalExam(): bool
+    {
+        $row = \Core\Database::fetch(
+            "SELECT COUNT(*) AS c FROM `examinfo`
+             WHERE exam_status = ? AND COALESCE(exam_class, '') <> ?",
+            [self::STATUS_TESTING, self::MOCK_CLASS]
+        );
+        return (int) ($row['c'] ?? 0) > 0;
+    }
+
     /** 进行中的考试（含科目名/类别名），供前台门户展示 */
     public static function activeWithSubject(): array
     {

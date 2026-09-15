@@ -329,3 +329,196 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 - 全量 `bash test/run_all.sh`（基线 272 PASS）必须保持全绿。
 - jsdom 冒烟全套：portal / login×4 / exam_lifecycle / admin_live / settings_view。
 - 复现脚本 `temp/repro_p0.mjs` 修复后**必须全部转为 PASS**。
+
+---
+---
+
+# 第二轮全面审查 —— 缺陷清单与修复（追补）
+
+> 触发：要求「再次全面细致地检查」。做法上不止重复首轮，而是针对性做两类**交叉核对**：
+> ① 首轮的修复是否留下了「同类但未覆盖的路径」（安全补丁最怕只堵一个出口）；
+> ② 前端声明/消费的字段契约是否与后端真实返回一致（首轮正是这样发现图片路径错的）。
+> 结果：新增 **9 项**（2 P0 / 6 P1 / 1 P2），**全部已修复**并配套回归。
+
+## 一、总览（第二轮）
+
+| 编号 | 等级 | 一句话 |
+|---|---|---|
+| BUG-101 | P1 | 练习抽题缺 `quiz_id` 字段 → 题号显示 `#undefined`、提交答案恒 400 |
+| **BUG-102** | **P0** | 正式考试进行中 `/api/exercise/answer` 仍返回正确答案，可反查在考题目 |
+| BUG-103 | P1 | 模拟考试被误判为「正式考试进行中」，练习入口被错误暂停 |
+| **BUG-104** | **P0** | 开考期间可组模拟卷并立即交卷，再经 `review()` **批量导出题库答案** |
+| BUG-105 | P1 | `/api/health` 从不下发 `X-CSRF-Token`，前端 419 自动恢复形同虚设 |
+| BUG-106 | P1 | `/api/exam/status` 不下发 `csrf_token`，答题页刷新后保存/交卷恒 419 |
+| BUG-107 | P2 | 成绩 CSV 导出未防公式注入（姓名等以 `= + - @` 开头会被 Excel 当公式执行） |
+| BUG-108 | P1 | 答题页配图在每次点选后**重复叠加**（点一次选项多一张图） |
+| BUG-109 | P1 | 未启用多选的列表把「操作」列**反复写回**列定义，刷新一次多一列 |
+
+**本轮再次确认无问题**：题库清理工具的「清理中禁止」判断、教师端 `assertOwnExam` 覆盖完整性、
+路由表与前端 `api/index.js` 全部端点对齐、`core/Http.js` 的 401/403 事件、`Database` 预处理与
+标识符白名单。
+
+---
+
+### BUG-101　练习抽题缺 `quiz_id`，前端题号 `#undefined` 且提交答案恒 400
+
+- **位置**：`app/Controllers/ExerciseController.php`（`index()` 的 SELECT）
+- **代码**：`SELECT q.id, q.subj_id, ...` —— **未起别名**，返回的键是 `id`；
+  而消费方 `public/assets/js/views/student/exercise.js` 取的是 `q.quiz_id`：
+  - `:187`　`exerciseApi.check({ quiz_id: q.quiz_id, stu_key: val })` → `quiz_id` 为
+    `undefined`，被 `JSON.stringify` 丢弃 → 后端 `required|integer` 失败 → **恒 400**；
+  - `:218`　`badge('题目 #' + q.quiz_id)` → 界面显示 **`题目 #undefined`**。
+- **对照**：正式考试 `ExamController::paper()` 与模拟考试 `ExerciseExamController::paper()`
+  都写了 `q.id AS quiz_id`，唯独练习接口漏了 —— 典型的「三处同构、改了两处」。
+- **影响**：在线练习的「提交答案」功能完全不可用，且题号错乱（首轮未覆盖，因练习不在冒烟范围）。
+- **修复**：`SELECT q.id AS quiz_id, ...`，与另两处保持一致。
+- **回归**：`test/cases/regression_audit2_test.php` BUG-101。
+
+---
+
+### BUG-102　【P0】正式考试进行中，练习接口仍可换取正确答案
+
+- **位置**：`app/Controllers/ExerciseController.php::check()`（`POST /api/exercise/answer`）
+- **代码**：`index()` 明确写了「进行中的正式考试会锁定练习（防题目泄露）」并据此不下发题目，
+  但 `check()` **完全没有这道判断**，直接按 `quiz_id` 查 `quizlib.quiz_key` 并原样返回。
+- **完整攻击链**：
+  1. 考生在正式考试中，`GET /api/exam/paper` 每道题都返回 `quiz_id`
+     （`ExamController.php` `q.id AS quiz_id`）；
+  2. 同一浏览器另开标签页 `POST /api/exercise/answer { quiz_id: N }`
+     （`/api/exercise/` 只需**个人中心**考生会话，考试期间依然有效）；
+  3. 响应 `data.answer` 即该题正确答案。
+- **影响**：**击穿首轮 P0-4「考试中不下发答案」的全部防护** —— 考生可逐题反查答案后从容作答。
+  首轮只堵了「考试接口不下发答案」这个出口，没堵「练习接口按 id 换答案」这个出口。
+- **修复**：`check()` 开头加入与 `index()` 一致的判定，命中则 `403`。
+- **回归**：`regression_audit2_test.php` BUG-102（开考期间取答案 → 403）。
+
+---
+
+### BUG-103　模拟考试被误判为「正式考试进行中」
+
+- **位置**：`app/Controllers/ExerciseController.php::index()`（原判定）
+- **代码**：原判定为 `SELECT COUNT(*) FROM examinfo WHERE exam_status='testing'`。
+  但 `ExamEngine::createPracticeExam()` 建模拟考试时也是
+  `exam_status='testing'`（靠 `exam_class='模拟考试'` 区分）——
+  于是**学生自己开一场模拟考试，就会把练习入口判成「考试进行中」并暂停**。
+- **佐证**：项目内其它地方都做了排除，如 `Exam.php:118`、`Admin/DashboardController.php:43`
+  的 `COALESCE(exam_class,'') != '模拟考试'`，唯独练习这里漏了。
+- **影响**：功能误停（自愈于模拟考试交卷），但会让学生困惑「为什么练习被暂停了」。
+- **修复**：抽出 `Exam::hasOngoingFormalExam()`（`app/Models/Exam.php`）统一承载该判定，
+  内含 `exam_class <> '模拟考试'`；三个调用点（练习列表 / 练习答案 / 模拟考试）共用一份实现。
+- **回归**：`regression_audit2_test.php` BUG-103（插入 testing 模拟考试后判定不变）。
+
+---
+
+### BUG-104　【P0】开考期间借模拟考试批量导出整卷答案
+
+- **位置**：`app/Controllers/ExerciseExamController.php`（`start()` / `review()`）
+- **代码**：模拟考试可**自由组卷**（`subj_id` + 各题型数量，单题型上限 100 题），
+  交卷后 `review()` 会返回每题的 `quiz_key`；而这两个方法都没有「正式考试进行中」的判断。
+- **攻击链**：开考期间 → `POST /api/exercise/mock/start`（某科目抽满 400 题）
+  → `POST /api/exercise/mock/submit`（空卷即刻判分）→ `GET /api/exercise/mock/review`
+  → **一次性拿到该科目最多 400 道题的标准答案**，再与自己在考卷面上的 `quiz_id` 对照。
+- **影响**：比 BUG-102 更严重（一次导出整库，而非逐题），同样击穿 P0-4。
+- **修复**：`start()` 与 `review()` 均加入「正式考试进行中 → 403」；
+  `review()` 是真正的答案披露点，`start()` 一并拦截以快速失败并给出明确文案。
+  同时把两处硬编码的 `'模拟考试'` 收敛为 `Exam::MOCK_CLASS`。
+- **回归**：`regression_audit2_test.php` BUG-104（组卷 → 403；复盘 → 403）。
+
+---
+
+### BUG-105　`/api/health` 从不下发 `X-CSRF-Token`，419 自动恢复是死代码
+
+- **位置**：`config/routes.php`（`GET /api/health` 处理器） × `public/assets/js/core/http.js:118`
+- **代码**：前端 419 处理写得很完整 —— 调 `refreshCsrf()` 读 `/api/health` 的
+  **`X-CSRF-Token` 响应头**再重试一次；但后端**全项目从未下发过该响应头**
+  （令牌只出现在登录/`/me` 的 JSON body 里）。`refreshCsrf()` 恒取到空 → 重试仍 419。
+- **影响**：任何原因导致的令牌丢失都无法自愈，用户表现为「刷新页面后所有写操作都失败」。
+- **修复**：`/api/health` 返回时补 `X-CSRF-Token`（取 `AuthSession::csrfToken()`）。
+  令牌与会话绑定，跨站脚本受同源策略限制无法读取该响应头，公开下发无安全风险。
+- **回归**：`regression_audit2_test.php` BUG-105（响应头存在且为 64 位十六进制）。
+
+---
+
+### BUG-106　答题页刷新后保存 / 交卷恒 419
+
+- **位置**：`app/Controllers/ExamController.php::status()` ×
+  `public/assets/js/views/student/exam.js`（`ExamTakeView.boot()`）
+- **代码**：考场入口的令牌只在**入场那一刻**由登录响应注入
+  （`apps/exam.js` 注释：「令牌由 ExamLoginView 在入场成功后注入，此处无需预取」）。
+  但考生在答题中**刷新页面**时，模块级 `csrfToken` 随 ESM 状态一起重置为空，
+  而 `ExamTakeView.boot()` 只调 `/api/exam/status` —— 该接口**不返回** `csrf_token`
+  → 保存 / 交卷 419；再叠加 BUG-105，自动恢复也失效。
+- **影响**：考生中途刷新即「无法保存、无法交卷」，且倒计时归零时的自动交卷同样 419 → 成绩丢失。
+- **修复**：`status()` 响应补 `csrf_token`；`ExamTakeView` 在 `boot()` 与等待室轮询中
+  每次都 `setCsrfToken(data.csrf_token)` 重新注入。
+- **回归**：`regression_audit2_test.php` BUG-106（`/status` 的令牌与入场令牌一致）。
+
+---
+
+### BUG-107　成绩 CSV 未防公式注入
+
+- **位置**：`app/Services/InvigilationService.php::csv()`（管理端与教师端导出共用）
+- **代码**：`fputcsv()` 只解决「逗号/引号转义」，不解决**公式注入**。
+  `stu_name` / `grade_id` / `class_id` 多为导入数据，若以 `=` `+` `-` `@` 或制表符、回车开头，
+  Excel / WPS 打开导出文件时会当作公式执行（可触发 DDE 或外链请求）。
+- **修复**：新增 `csvSafe()`，仅对**字符串列**前置单引号使其恒为文本；成绩等数值列不受影响
+  （避免把负数变成 `'-1`）。
+- **回归**：`regression_audit2_test.php` BUG-107（`=1+1` 被转义、正常姓名不加引号）。
+
+---
+
+### BUG-108　答题页配图每次点选都重复叠加
+
+- **位置**：`public/assets/js/views/exam-runner.js::renderQuestion()`
+- **代码**：配图用 `stemNode.after(pic)` 插入为**常驻节点**，而 `renderQuestion()` 在
+  **每次点选后都会被重绘**（单选换项 `:218`、多选切换 `:214` 都会重新调用），
+  旧图从不清理 → 点一次选项就在题干下多叠一张图。
+- **对照**：练习（`student/exercise.js`）与模拟（`student/mock.js`）每帧 `clear()` 重建，不受影响 ——
+  该缺陷**仅存在于正式考试的答题引擎**，而它同时被正式考试与模拟考试复用。
+- **修复**：以模块内 `picNode` 记住当前配图，重绘前先 `remove()`；配图加载失败时同步置空。
+- **回归**：jsdom 运行时复现 `temp/domtest/repro_audit2.mjs` → `1 / 1 / 1`（修复前为 `1 / 2 / 3`）。
+
+---
+
+### BUG-109　列表「操作」列被反复写回，刷新一次多一列
+
+- **位置**：`public/assets/js/ui/crud.js::render()`
+- **代码**：
+  ```js
+  const allColumns = selectable ? [checkboxColumn(), ...columns] : columns;  // ← 同一引用
+  if (rowActions) allColumns.push({ key: '__ops', title: '操作', ... });      // ← 污染调用方数组
+  ```
+  未启用多选时 `allColumns === columns`，`push` 会**直接改写调用方传入的列定义**；
+  而 `render()` 每次 `load()`（翻页 / 搜索 / 排序 / 保存后回刷）都会执行 → 操作列不断叠加。
+- **影响**：`admin/exam.js`、`admin/simple-crud.js`（科目/班级/新闻等）都未启用 `selectable`
+  → 每刷新一次表格就多一列「操作」。`quiz.js` / `student.js` 因启用多选而幸免。
+- **修复**：未启用多选时也做浅拷贝 `[...columns]`。
+- **回归**：jsdom 运行时复现 `temp/domtest/repro_audit2.mjs` → 表头列数稳定 `2 / 2 / 2`、
+  调用方 `columns.length` 恒为 `1`（修复前为 `2 / 3 / 4`）。
+
+---
+
+## 二、修复与验证结果（第二轮）
+
+- **PHP lint**：6 个改动 PHP 文件全部 `No syntax errors`。
+- **JS 语法**：3 个改动 JS 文件 `node --check` 全通过；`temp/check_frontend.mjs`
+  38 文件 0 语法 / 0 未解析导入。
+- **全量回归**：`bash test/run_all.sh` → **321 PASS / 0 FAIL / 0 SKIP**
+  （首轮 293 + 本轮新增 `test/cases/regression_audit2_test.php` 28 断言）。
+- **运行时复现**：`temp/domtest/repro_audit2.mjs`（jsdom 加载**真实** `exam-runner.js` /
+  `crud.js`）两处均为 `FIXED`。
+
+### 本轮改动文件
+
+| 文件 | 修复 |
+|---|---|
+| `app/Models/Exam.php` | 新增 `hasOngoingFormalExam()` / `MOCK_CLASS` |
+| `app/Controllers/ExerciseController.php` | BUG-101 `quiz_id` 别名；BUG-102 答案校验守卫；BUG-103 判定收敛 |
+| `app/Controllers/ExerciseExamController.php` | BUG-104 `start()`/`review()` 守卫；`MOCK_CLASS` 收敛 |
+| `app/Controllers/ExamController.php` | BUG-106 `status()` 下发 `csrf_token` |
+| `app/Services/InvigilationService.php` | BUG-107 `csvSafe()` 防公式注入 |
+| `config/routes.php` | BUG-105 `/api/health` 下发 `X-CSRF-Token` |
+| `public/assets/js/views/exam-runner.js` | BUG-108 配图去重 |
+| `public/assets/js/ui/crud.js` | BUG-109 列定义浅拷贝 |
+| `public/assets/js/views/student/exam.js` | BUG-106 令牌重新注入 |
+| `test/cases/regression_audit2_test.php` | 新增 28 断言回归 |

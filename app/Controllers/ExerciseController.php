@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Models\Exam;
 use App\Models\Subject;
 use Core\Database;
 use Core\HttpException;
@@ -35,9 +36,10 @@ class ExerciseController extends BaseController
 
         $subjects = (new Subject())->all('id ASC');
 
-        // 进行中的正式考试会锁定练习（防题目泄露）
-        $ongoing = Database::fetch("SELECT COUNT(*) AS c FROM `examinfo` WHERE exam_status = 'testing'");
-        $hasOngoingExam = (int) ($ongoing['c'] ?? 0) > 0;
+        // 进行中的正式考试会锁定练习（防题目泄露）。
+        // 注意排除模拟考试（它同样以 exam_status='testing' 落库），
+        // 否则学生自己开一场模拟考试就会把练习误判为「已暂停」。
+        $hasOngoingExam = Exam::hasOngoingFormalExam();
 
         $question = null;
         $quizCount = 0;
@@ -62,7 +64,7 @@ class ExerciseController extends BaseController
             }
             $offset = random_int(0, $quizCount - 1);
             $row = Database::fetch(
-                'SELECT q.id, q.subj_id, q.quiz_title, q.quiz_class, q.quiz_option,
+                'SELECT q.id AS quiz_id, q.subj_id, q.quiz_title, q.quiz_class, q.quiz_option,
                         q.quiz_diff, q.quiz_pic_name, s.subj_name
                  FROM `quizlib` q
                  INNER JOIN `subject` s ON s.id = q.subj_id
@@ -93,6 +95,14 @@ class ExerciseController extends BaseController
      */
     public function check(): Response
     {
+        // 正式考试进行中必须同样暂停练习答案校验：本接口按 quiz_id 即可换取
+        // 任意题目的正确答案，而 /api/exam/paper 又向考生下发了所考题目
+        // 的 quiz_id —— 若不拦截，考生可在开考期间用另一标签页「练习」反查
+        // 正在考的题目答案，等于绕过 P0-4「考试中不下发答案」的防护。
+        if (Exam::hasOngoingFormalExam()) {
+            throw new HttpException(403, '当前有正在进行的正式考试，练习功能已临时暂停', 40308);
+        }
+
         $in = $this->validate([
             'quiz_id' => 'required|integer',
         ]);

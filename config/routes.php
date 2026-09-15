@@ -58,11 +58,18 @@ return [
         } catch (\Throwable $e) {
             $dbOk = false;
         }
+        // 前端 http.js 在收到 419 时会请求本接口并读取 X-CSRF-Token 响应头来
+        // 刷新令牌后重试一次。此前后端从未下发该响应头（令牌只出现在登录/
+        // /me 的 JSON body 里），导致「419 自动恢复」形同虚设——例如考生在
+        // 答题中途刷新页面后保存答案，会一直被 419 卡住。
+        // 令牌与当前会话绑定，跨站脚本无法读取同源响应头，公开下发无安全风险。
+        $token = \App\Services\AuthSession::csrfToken();
+
         return $response->success([
             'status' => $dbOk ? 'ok' : 'degraded',
             'time'   => date('c'),
             'db'     => $dbOk,
-        ]);
+        ])->header('X-CSRF-Token', $token);
     }],
 
     /* ==================== 前台公开 ==================== */
