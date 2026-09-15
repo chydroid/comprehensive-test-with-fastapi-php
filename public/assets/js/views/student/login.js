@@ -31,7 +31,10 @@ export function StudentLoginView({ router, query, onDone }) {
         const data = await studentApi.login({ username: values.username, password: values.password });
         studentSession.accept(data);
         notify.success(`欢迎回来，${data?.student?.stu_name || ''}`);
-        if (onDone) onDone(); else router.navigate(redirect);
+        // onDone 由各个入口自行决定落地页（考生中心页内走 startShell，
+        // 门户/其它页走整页跳转）。兜底分支的 redirect 指向真实页面路径，
+        // 必须用整页跳转而非 router.navigate（后者只会改写 hash）。
+        if (onDone) onDone(); else location.assign(redirect);
       } catch (e) {
         notify.error(e?.message || '登录失败，请检查账号或密码后重试');
       }

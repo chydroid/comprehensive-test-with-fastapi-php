@@ -26,7 +26,11 @@ const router = createRouter({
     { path: '/', view: () => PortalView({ router }) },
     { path: '/portal', view: () => PortalView({ router }) },
     { path: '/hero', view: () => HeroPageView({ router }) },
-    { path: '/login', view: (ctx) => StudentLoginView({ router, query: ctx.query, onDone: () => router.navigate('/student') }) },
+    // 登录成功后应跳转到「考生中心」独立页面（/student 是真实页面路由，
+    // 不是本 SPA 的 hash 路由）。若用 router.navigate('/student') 只会改写
+    // location.hash 成 #/student，门户 SPA 没有该路由 → 报「页面不存在」。
+    // 因此必须做整页跳转，而不是 hash 跳转。
+    { path: '/login', view: (ctx) => StudentLoginView({ router, query: ctx.query, onDone: () => { location.assign('/student'); } }) },
     { path: '/register', view: () => StudentRegisterView({ router }) },
     { path: '/exercise', view: () => guard(() => ExerciseView({ router })) },
     { path: '/exercise/mock', view: () => guard(() => MockSetupView({ router })) },
