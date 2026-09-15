@@ -106,7 +106,9 @@ export function TeacherExamsView({ router }) {
           const notTesting = st === 'exam' || st === 'paper';
           const pwdReady = !!(r.exam_pwd && String(r.exam_pwd) !== '0');
           return el('div.row.gap-xs.end', {}, [
-            button('监考', { variant: 'secondary', size: 'xs', iconName: 'eye', onClick: () => router.navigate(`/teacher/monitor?exam_id=${r.id}`) }),
+            // 教师端注册的路由是 /monitor（不是 /teacher/monitor），
+          // 此前写死 /teacher/monitor → 点击落到「页面不存在」。
+          button('监考', { variant: 'secondary', size: 'xs', iconName: 'eye', onClick: () => router.navigate(`/monitor?exam_id=${r.id}`) }),
             notTesting
               ? button(pwdReady ? '重置口令' : '开放入场', {
                   variant: pwdReady ? 'ghost' : 'secondary', size: 'xs', iconName: 'login',

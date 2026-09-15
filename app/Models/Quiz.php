@@ -141,7 +141,7 @@ class Quiz extends Model
         }
         if (!empty($filters['keyword'])) {
             $where[] = '(q.quiz_title LIKE ? OR q.quiz_key LIKE ?)';
-            $kw = '%' . $filters['keyword'] . '%';
+            $kw = '%' . addcslashes((string) $filters['keyword'], '%_\\') . '%';
             $params[] = $kw;
             $params[] = $kw;
         }

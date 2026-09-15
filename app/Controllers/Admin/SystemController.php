@@ -24,7 +24,10 @@ use Core\Response;
  */
 class SystemController extends BaseController
 {
-    private const TABLES_EXAM = ['examinfo', 'stupaper', 'stuscore'];
+    // 清库必须带上 stuscorebak：它通过 stu_id / exam_id 关联考试与考生，
+    // 若不清理会留下孤儿备份行（而 bak 列表是 INNER JOIN examinfo，孤儿行不可见），
+    // 表现为「数据消失但没删」—— 持续占空间且无法审计。
+    private const TABLES_EXAM = ['examinfo', 'stupaper', 'stuscore', 'stuscorebak'];
 
     /** GET /api/admin/system —— 当前数据量 + 操作前置状态 */
     public function index(): Response
@@ -116,10 +119,17 @@ class SystemController extends BaseController
         return (int) (Database::fetch("SELECT COUNT(*) AS c FROM `{$table}`")['c'] ?? 0);
     }
 
+    /**
+     * 进行中的**正式**考试数。
+     * 必须排除模拟考试（exam_class='模拟考试'）：它同样以 exam_status='testing'
+     * 落库，若不排除，考生开一场模拟考试就会永久阻塞系统初始化 / 清空考试。
+     */
     private function runningExamCount(): int
     {
         return (int) (Database::fetch(
-            "SELECT COUNT(*) AS c FROM `examinfo` WHERE exam_status = 'testing'"
+            "SELECT COUNT(*) AS c FROM `examinfo`
+             WHERE exam_status = 'testing' AND COALESCE(exam_class, '') != ?",
+            [\App\Models\Exam::MOCK_CLASS]
         )['c'] ?? 0);
     }
 }

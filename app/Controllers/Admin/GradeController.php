@@ -32,11 +32,11 @@ class GradeController extends BaseController
         if ($kw !== '') {
             $total = (int) (\Core\Database::fetch(
                 'SELECT COUNT(*) AS c FROM `gradeinfo` WHERE grade_name LIKE ?',
-                ['%' . $kw . '%']
+                [self::like($kw)]
             )['c'] ?? 0);
             $list = \Core\Database::fetchAll(
                 'SELECT * FROM `gradeinfo` WHERE grade_name LIKE ? ORDER BY id ASC LIMIT ' . $p['per_page'] . ' OFFSET ' . $p['offset'],
-                ['%' . $kw . '%']
+                [self::like($kw)]
             );
         } else {
             $result = $this->model->paginate($p['page'], $p['per_page'], []);

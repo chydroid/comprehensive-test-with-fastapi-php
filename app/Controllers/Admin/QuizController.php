@@ -89,6 +89,8 @@ class QuizController extends BaseController
             'quiz_option'   => 'maxlen:65535',
             'quiz_key'      => 'maxlen:255',
             'quiz_pic_name' => 'maxlen:255',
+            'quiz_writer'   => 'maxlen:50',
+            'quiz_time'     => 'maxlen:10',
         ]);
 
         $subjId = (int) $in['subj_id'];
@@ -97,8 +99,10 @@ class QuizController extends BaseController
         }
 
         $data = $this->buildRow($in);
-        $data['quiz_writer'] = (string) ($sess['username'] ?? '');
-        $data['quiz_time']   = date('Y-m-d');
+        // 尊重表单里的「录题人 / 日期」（题库弹窗有这两个输入框），留空才回落默认值。
+        // 此前一律用当前账号与当天覆盖，用户填了也白填。
+        $data['quiz_writer'] = self::pickWriter($in['quiz_writer'] ?? null, (string) ($sess['username'] ?? ''));
+        $data['quiz_time']   = self::pickQuizDate($in['quiz_time'] ?? null);
         $data['quiz_hits']   = 0;
         $data['quiz_key_ok'] = 0;
 
@@ -123,6 +127,8 @@ class QuizController extends BaseController
             'quiz_option'   => 'maxlen:65535',
             'quiz_key'      => 'maxlen:255',
             'quiz_pic_name' => 'maxlen:255',
+            'quiz_writer'   => 'maxlen:50',
+            'quiz_time'     => 'maxlen:10',
         ]);
 
         $subjId = (int) $in['subj_id'];
@@ -130,7 +136,17 @@ class QuizController extends BaseController
             throw new HttpException(400, '所选科目不存在', 40001);
         }
 
-        $this->model->update($id, $this->buildRow($in));
+        $data = $this->buildRow($in);
+        $writer = self::pickWriter($in['quiz_writer'] ?? null, '');
+        if ($writer !== '') {
+            $data['quiz_writer'] = $writer;
+        }
+        $qtime = self::pickQuizDate($in['quiz_time'] ?? null, '');
+        if ($qtime !== '') {
+            $data['quiz_time'] = $qtime;
+        }
+
+        $this->model->update($id, $data);
         return $this->ok($this->model->find($id), '修改成功');
     }
 
@@ -198,9 +214,13 @@ class QuizController extends BaseController
      */
     public function doAdvancedClean(): Response
     {
-        // 考试进行中禁止清理（沿用旧系统保护）
+        // 考试进行中禁止清理（沿用旧系统保护）。
+        // 必须排除模拟考试：它同样以 exam_status='testing' 落库，考生开一场模拟考试
+        // 不交卷就会让所有维护操作永久 409，而管理端没有任何入口能清理它。
+        $mock = \App\Models\Exam::MOCK_CLASS;
         $running = Database::fetch(
-            "SELECT id FROM `examinfo` WHERE exam_status = 'testing' LIMIT 1"
+            "SELECT id FROM `examinfo` WHERE exam_status = 'testing' AND COALESCE(exam_class, '') != ? LIMIT 1",
+            [$mock]
         );
         if ($running !== null) {
             throw new HttpException(409, '当前有正在进行的考试，不能执行高级清理', 40903);
@@ -243,12 +263,29 @@ class QuizController extends BaseController
 
     /** 保存前归一化答案：大写 + 多选题按字母排序（预防脏数据进入题库） */
     private function normalizeKey(string $type, string $key): string
-    {
-        $key = trim($key);
+    {        $key = trim($key);
         if ($key === '') {
             return '';
         }
         return Quiz::normalizeAnswer($type, $key);
+    }
+
+    /** 录题人：表单值优先，留空回落到传入的默认值（通常是当前登录账号） */
+    private static function pickWriter(mixed $input, string $fallback): string
+    {
+        $v = trim((string) ($input ?? ''));
+        return $v !== '' ? mb_substr($v, 0, 50) : $fallback;
+    }
+
+    /**
+     * 录题日期：仅接受 YYYY-MM-DD，否则回落到 $fallback（默认当天）。
+     * quiz_time 是 date 列，非法值写入会触发 MySQL 报错或存成 0000-00-00。
+     */
+    private static function pickQuizDate(mixed $input, ?string $fallback = null): string
+    {
+        $fallback ??= date('Y-m-d');
+        $v = trim((string) ($input ?? ''));
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) === 1 ? $v : $fallback;
     }
 
     /** 解析 ids 参数（数组或逗号分隔字符串） */

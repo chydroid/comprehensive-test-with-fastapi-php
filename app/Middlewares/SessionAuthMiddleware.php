@@ -213,13 +213,16 @@ class SessionAuthMiddleware implements Middleware
      */
     private function writePoint(string $method, string $path, string $readPoint): ?string
     {
-        if (in_array($method, self::SAFE_METHODS, true)) {
-            return $readPoint;
-        }
         $pattern = \Core\App::instance()->router()->match($method, $path) ?? $path;
+        // 显式声明优先，且必须放在 SAFE_METHODS 短路**之前**：
+        // 否则 GET /api/admin/scores/export 这类「读方法但属敏感操作」的
+        // 显式权限点永远读不到，只被授予 score.view 的角色就能导出含考场口令的 CSV。
         $explicit = self::WRITE_POINTS[$method . ' ' . $pattern] ?? null;
         if ($explicit !== null) {
             return $explicit;
+        }
+        if (in_array($method, self::SAFE_METHODS, true)) {
+            return $readPoint;
         }
         $module = self::POINT_MODULE[$readPoint] ?? null;
         if ($module === null) {

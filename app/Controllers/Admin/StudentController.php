@@ -61,8 +61,8 @@ class StudentController extends BaseController
         }
         if ($kw !== '') {
             $where[] = '(stu_name LIKE ? OR id LIKE ?)';
-            $params[] = '%' . $kw . '%';
-            $params[] = '%' . $kw . '%';
+            $params[] = self::like($kw);
+            $params[] = self::like($kw);
         }
         $sqlWhere = implode(' AND ', $where);
 
@@ -146,7 +146,7 @@ class StudentController extends BaseController
             'grade_id' => 'maxlen:100',
             'class_id' => 'maxlen:100',
         ]);
-        $id = trim((string) $in['id']);
+        $id = $this->normalizeStuId($in['id']);
 
         if ($this->model->existsId($id)) {
             throw new HttpException(409, "准考证号「{$id}」已存在", 40900);
@@ -171,11 +171,11 @@ class StudentController extends BaseController
                 $id,
                 $name,
                 Password::hash($password),
-                trim((string) ($in['stu_sex'] ?? '')),
-                trim((string) ($in['grade_id'] ?? '')),
-                trim((string) ($in['class_id'] ?? '')),
-            ]
-        );
+                  trim((string) ($in['stu_sex'] ?? '')),
+                  Grade::resolveId($in['grade_id'] ?? ''),
+                  SchoolClass::resolveId($in['class_id'] ?? ''),
+              ]
+          );
 
         return $this->ok(Student::sanitize($this->model->find($id)), '添加成功');
     }
@@ -233,6 +233,8 @@ class StudentController extends BaseController
             // 级联清理该考生的答卷与成绩（旧系统会残留孤儿数据）
             Database::query('DELETE FROM `stupaper` WHERE stu_id = ?', [$id]);
             Database::query('DELETE FROM `stuscore` WHERE stu_id = ?', [$id]);
+            // 备份行同样按 stu_id 关联，一并清理，避免孤儿数据
+            Database::query('DELETE FROM `stuscorebak` WHERE stu_id = ?', [$id]);
             Database::commit();
         } catch (\Throwable $e) {
             if (Database::inTransaction()) {
@@ -290,8 +292,9 @@ class StudentController extends BaseController
                 $password = $sid;
             }
             $sex = trim((string) ($parts[3] ?? ''));
-            $gradeId = trim((string) ($parts[4] ?? ''));
-            $classId = trim((string) ($parts[5] ?? ''));
+            // CSV 里第 5/6 列通常是单位名与班级名，统一折算为 ID
+            $gradeId = Grade::resolveId($parts[4] ?? '');
+            $classId = SchoolClass::resolveId($parts[5] ?? '');
 
             // 姓名冲突（他人占用）则跳过，避免登录歧义
             if ($this->model->nameTaken($name, $sid)) {

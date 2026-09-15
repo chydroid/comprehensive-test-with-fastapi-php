@@ -39,12 +39,12 @@ class AdminController extends BaseController
         if ($kw !== '') {
             $total = (int) (Database::fetch(
                 'SELECT COUNT(*) AS c FROM `admininfo` WHERE username LIKE ?',
-                ['%' . $kw . '%']
+                [self::like($kw)]
             )['c'] ?? 0);
             $rows = Database::fetchAll(
                 'SELECT * FROM `admininfo` WHERE username LIKE ? ORDER BY id ASC
                  LIMIT ' . $p['per_page'] . ' OFFSET ' . $p['offset'],
-                ['%' . $kw . '%']
+                [self::like($kw)]
             );
         } else {
             $result = $this->model->paginate($p['page'], $p['per_page'], []);

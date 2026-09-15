@@ -79,6 +79,7 @@ final class AuthSession
         return $token;
     }
 
+    /** 清除全部会话数据（含考场会话）——仅用于显式登出 / 销毁会话 */
     private static function purge(): void
     {
         sess_forget(self::ADMIN);

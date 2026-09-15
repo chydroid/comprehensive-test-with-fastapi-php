@@ -62,8 +62,8 @@ class StudentController extends BaseController
         $students->update($row['id'], [
             'stu_name' => $in['stu_name'],
             'stu_sex'  => $in['stu_sex'] ?? (string) $row['stu_sex'],
-            'grade_id' => (string) ($in['grade_id'] ?? $row['grade_id']),
-            'class_id' => (string) ($in['class_id'] ?? $row['class_id']),
+            'grade_id' => Grade::resolveId($in['grade_id'] ?? (string) $row['grade_id']),
+            'class_id' => SchoolClass::resolveId($in['class_id'] ?? (string) $row['class_id']),
         ]);
 
         // 同步会话中的姓名

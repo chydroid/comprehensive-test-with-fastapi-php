@@ -154,27 +154,23 @@ export function TeacherView() {
           el('div.avatar.avatar-sm', { style: { background: hashTone(r.tea_name || '', TONES) }, text: initials(r.tea_name) }),
           el('span.fw-500', { text: r.tea_name || '—' }),
         ]) },
-      { key: 'tea_sex', title: '性别', width: '70px', align: 'center', render: (r) => r.tea_sex || '—' },
-      { key: 'tea_phone', title: '联系方式', render: (r) => el('span.mono.fs-sm', { text: r.tea_phone || r.tea_tel || '—' }) },
-      { key: 'tea_info', title: '备注', render: (r) => el('span.fs-sm.c-secondary.truncate', {
-          style: { maxWidth: '220px', display: 'inline-block' }, text: r.tea_info || '—' }) },
+      // 说明：teainfo 表只有 id / tea_name / tea_pwd / avatar 四列，
+      // 不存在 tea_sex / tea_phone / tea_info，故不再展示这些「永远为空」的列与输入项。
     ],
     formFields: (row) => {
       const isEdit = !!row;
       return [
         { name: 'tea_name', label: '姓名', required: true, maxlength: 50, placeholder: '教师姓名' },
-        { name: 'tea_sex', label: '性别', type: 'select', placeholder: '请选择',
-          options: [{ value: '男', label: '男' }, { value: '女', label: '女' }] },
-        { name: 'tea_phone', label: '联系电话', maxlength: 30, placeholder: '手机或固话' },
-        { name: 'tea_pwd', label: '登录密码', type: 'password', required: !isEdit,
+        // 字段名必须是 password：后端 TeacherController 校验的是 'password'。
+        // 此前发 tea_pwd，后端按「password 不能为空」直接 400，新增教师必然失败。
+        { name: 'password', label: '登录密码', type: 'password', required: !isEdit,
           placeholder: isEdit ? '留空表示不修改' : `${passwordHintText()}，不能为纯数字`, hint: isEdit ? '不修改请留空' : '' },
-        { name: 'tea_info', label: '备注', type: 'textarea', rows: 3, colSpan: 2 },
       ];
     },
     transform: (v) => {
       // 编辑时空密码不提交
       const out = { ...v };
-      if (!out.tea_pwd || out.tea_pwd === '') delete out.tea_pwd;
+      if (!out.password) delete out.password;
       return out;
     },
     deleteMessage: (r) => `确定删除教师「${r.tea_name}」吗？`,

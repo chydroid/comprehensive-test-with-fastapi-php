@@ -69,6 +69,13 @@ export function createListView(cfg) {
       const data = await fetch(params);
       state.list = data?.list ?? [];
       state.total = data?.total ?? state.list.length;
+      // 删除（或筛选变化）后可能停在越界页：该页请求回来是空列表，而分页器
+      // 因 total <= per_page 被隐藏 —— 用户看到「共 N 条」+ 空表却翻不动页。
+      // 此时回退到最后一页有数据的那一页重取（total=0 时回第 1 页，不会递归）。
+      if (state.list.length === 0 && state.page > 1) {
+        state.page = Math.max(1, Math.ceil(state.total / state.per_page) || 1);
+        return load({ silent: true });
+      }
       state.selected.clear();
       render();
     } catch (e) {

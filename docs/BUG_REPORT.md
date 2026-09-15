@@ -522,3 +522,253 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 | `public/assets/js/ui/crud.js` | BUG-109 列定义浅拷贝 |
 | `public/assets/js/views/student/exam.js` | BUG-106 令牌重新注入 |
 | `test/cases/regression_audit2_test.php` | 新增 28 断言回归 |
+
+---
+---
+
+# 第三轮全面审查 —— 缺陷清单与修复（2026-09-16）
+
+> 触发：要求「全面细致地检查本项目，发现 bug 或潜在 bug 要做好详细记录，然后制定一个完善的修复计划并实施，
+> 最后模拟浏览器再次全面检查所有页面的所有功能」。
+>
+> 本轮做法与上两轮的区别：**以真实浏览器点击「保存」为验收口径**，而不是只打开弹窗。
+> 这一改变直接暴露了前两轮完全漏掉的一整类缺陷 —— **所有弹窗表单的「保存」按钮从未生效**。
+> 前两轮巡检只断言「弹窗能打开」「页面非空」「无 JS 错误」，而「点保存没反应」既不报错、也不清空页面，
+> 因此连续两轮巡检都是 PASS。
+
+## 一、总览（第三轮）
+
+| 级别 | 数量 | 说明 |
+|---|---|---|
+| **P0** | 3 | 后台全部 CRUD 表单无法保存；题库编辑器无法保存；单人「收卷」误伤全场 |
+| **P1** | 11 | 字段名前后端不一致 ×3、`submitAll` 方法缺失、行内操作不渲染、教师监考死链、考试状态被打回、模拟考试阻塞系统维护、考场登录缺班级校验、备份可对进行中考试执行、注册越界残留孤儿行 |
+| **P2** | 14 | page 无上限致 500、公开接口泄露安全参数、`WRITE_POINTS` 的 GET 条目失效、级联删除漏 `stuscorebak`、`LIKE` 未转义、N+1、题库清理阻塞、会话互踢、CSP 下 `onerror` 失效、分页越界、焦点陷阱泄漏、`[object Object]` 渲染 ×2、资料页单位被清空 |
+| 合计 | **28** | |
+
+### 关键验证：P0-201 实证（`temp/domtest/prove_modal_save.mjs`，真实 Chromium）
+
+```
+点击按钮: 新增科目
+弹窗探测: { hasForm: true, formInBody: true, saveText: "保存", saveType: "submit",
+            saveFormOwner: null, saveInForm: false }
+已填入: ZZ自检科目785
+保存后:   { modalStillOpen: true, rows: 3, toast: "", modalErr: "" }   ← 列表行数 3→3，无任何提示
+==== 2 PASS / 4 FAIL ====
+```
+
+结论：保存按钮**没有 form owner**，点击是彻底的空操作 —— 既不提交、也不报错、也不关弹窗。
+
+## 二、P0 —— 阻断（必须修复）
+
+### BUG-201　后台全部「新增/编辑」弹窗的保存按钮无效（表单从未被提交）
+- **位置**：`public/assets/js/ui/crud.js:320/323-325/327`、`public/assets/js/ui/components.js:333-336`
+- **根因**：`openFormModal()` 把 `<form>` 作为 `openModal({ body: form, footer: [cancelBtn, submitBtn] })` 传入，
+  而 `openModal` 把 `body` 挂进 `.modal-body`、把 `footer` 追加为**兄弟节点** `.modal-footer`：
+  ```js
+  modal.append(head, bodyEl);
+  if (footer) modal.append(el('div.modal-footer', {}, ...));   // ← 与 form 平级
+  ```
+  HTML 规范中 `type=submit` 按钮的 form owner 只由「`form` 属性」或「最近的 form 祖先」决定，
+  两者都没有 → **按钮点击不产生任何提交行为**（连 click 事件都没被监听，因为提交依赖 `form` 的 submit 事件）。
+- **影响范围**：`views/admin/simple-crud.js` 承载的全部基础数据模块 —— 考试科目、考试类别、单位管理、
+  班级管理、教师管理、管理员、考试公告；以及 `views/admin/student.js` 考生管理的新增/编辑。
+  即**后台几乎所有写操作入口全部失效**，且界面无任何报错，用户只会以为「点了没反应」。
+- **为何前两轮漏报**：巡检只断言「弹窗打开成功」，未点击保存；`settings_view_smoke.mjs` 覆盖的是
+  「系统设置」页（自建表单，不走 `openFormModal`），故未被发现。
+- **修复**（中心化，一处覆盖全部调用方）：`openModal` 在挂载后，若 `bodyEl` 内恰有 1 个 `<form>`，
+  自动为其生成 `id`，并把 `footer` 中所有 `button[type=submit]` 的 `form` 属性指向它。
+  这样既修好 `crud.js`，也修好任何「form 作 body + submit 按钮放 footer」的视图。
+
+### BUG-202　题库编辑器「创建题目 / 保存修改」永久无法提交
+- **位置**：`public/assets/js/views/admin/quiz.js:280`（`el('div.form-grid', …)`）、`:311`、`:318`
+- **根因**：表单容器是 `div` 而非 `form`，`div` 永不派发 `submit` 事件；同时提交按钮位于 `footer`（无 form owner）。
+  两条路径同时失效 → 题库无法新增/编辑任何题目。
+- **修复**：`div.form-grid` → `form.form-grid`；配合 BUG-201 的中心化 form-owner 关联即可生效。
+
+### BUG-203　监考「收卷」按人操作实际把**全场**考生强制交卷
+- **位置**：`public/assets/js/views/admin/monitor.js:371-372/385`、`views/teacher/index.js:582`、
+  `public/assets/js/api/index.js:167/72`、`config/routes.php:236/133`
+- **根因**：行内「收卷」调用 `adminApi.submit({ exam_id, stu_id })` → `POST /admin/monitor/submit`，
+  而该路由在路由表中指向 **`submitAll`**（整场），后端 `examId()` 只读 `exam_id`、完全忽略 `stu_id`。
+  监控端与教师端同构。
+- **影响**：监考员想给 1 名考生收卷，结果**全场考生被强制交卷并判分**，不可撤销（属数据事故）。
+  而该行内按钮因 BUG-206（`rowActions` 不被 `table()` 支持）目前又根本不渲染 —— 属**潜伏**，
+  一旦补上操作列即会立即造成事故，因此必须在补操作列**之前**先修好语义。
+- **修复**：新增按人交卷端点 `POST /admin|teacher/monitor/submit-one`（`InvigilationService::submitOne()`），
+  前端 `submit` 指向它；`submit` 之外的批量入口统一改名走 `submitAll`。
+
+## 三、P1 —— 功能错误 / 一致性
+
+| 编号 | 标题 | 位置 | 影响 |
+|---|---|---|---|
+| BUG-204 | 「全部收卷 / 全员交卷」调用不存在的 `api.submitAll` | `views/admin/monitor.js:320/395`、`views/teacher/index.js:540/563`、`api/index.js` | `adminApi[method] is not a function` → toast 抛英文 TypeError，批量收卷不可用 |
+| BUG-205 | 考生端「修改密码」字段名与后端不一致 | `views/student/center.js:288-291` ← `StudentController.php:80-84` | 发 `old_password/new_password`，后端要 `old_pwd/new_pwd/new_pwd2` → 恒 400「参数 old_pwd 不能为空」，考生无法自助改密 |
+| BUG-206 | 管理端监考行内「锁定/解锁/收卷」永不渲染 | `views/admin/monitor.js:358`、`ui/components.js:197` | `table()` 无 `rowActions` 参数，被静默忽略 → 无法对单个考生操作，`doOne()` 成死代码 |
+| BUG-207 | 后台「考生管理」密码字段名错误，密码被静默丢弃 | `views/admin/student.js:125/133-138` ← `Admin/StudentController.php:144` | 发 `stu_pwd`，后端只认 `password` → 管理员设置的密码失效，实际回退为「准考证号」 |
+| BUG-208 | 后台「教师管理」新增必然失败，且三个字段无处可存 | `views/admin/basics.js:165-171` ← `TeacherController.php:77-94` | 发 `tea_pwd`，后端 `password` 必填 → 400「参数 password 不能为空」；且 `teainfo` 表**没有** `tea_sex/tea_phone/tea_info` 列，相关输入与列表列均为死字段 |
+| BUG-209 | 教师端考试列表「监考」按钮跳到未注册路由 | `views/teacher/index.js:109` ← `apps/teacher.js:121-123` | 跳 `/teacher/monitor?...`，实际注册为 `/monitor` → 「页面不存在」 |
+| BUG-210 | 管理员编辑考试把状态**无条件打回** `exam`，惰性自动开考永久失效 | `app/Controllers/Admin/ExamController.php:163` | 出题后状态为 `paper`，编辑一次被改回 `exam`；`Exam::autoStartIfDue()` 只推进 `paper` → 到点永不自动开考，考生卡在等待室。**上一轮把 BUG-011 标记为已修，但只改了 `ExamEngine`，未覆盖此路径** |
+| BUG-211 | 模拟考试阻塞「系统初始化 / 清空考试 / 高级清理」 | `Admin/QuizController.php:203`、`Admin/SystemController.php:122` | 两处查 `exam_status='testing'` **未排除 `exam_class='模拟考试'`**（项目已有正确写法 `Exam::hasOngoingFormalExam()`）。考生开一场模拟考试后不交卷 → 管理端全部维护操作 409，且无任何入口可清理 |
+| BUG-212 | 考场登录不校验「考生是否属于本场考试参考班级」 | `app/Controllers/ExamController.php:85-94` | 班级归属只用于列表展示，登录入口不校验。任意已注册考生（注册接口公开）猜中 4–10 位纯数字口令即可进入**他人班级**的考试，被 `createScore()` 写入名单、污染成绩单，并回传该场考试信息 |
+| BUG-213 | 成绩备份可对**未结束**的考试执行且无事务 | `InvigilationService.php:103-109`、`StuScore.php:119-132`、`Admin/ScoreController.php` | 接口无「必须已结束」前置校验 → 把 `exam_status` 改成 `overBak` 中途冻结考试，而考生仍可继续答题交卷 → 备份快照与真实成绩永久不一致 |
+| BUG-214 | 考生自助注册「先 INSERT 自增 id、再 UPDATE 改主键」，越界时 500 且残留孤儿行 | `app/Controllers/StudentAuthController.php:50-58` | `stu_id` 校验为 `regex:/^\d{1,20}$/`，而 `stuinfo.id` 是 INT → 传 11 位以上数字：第 1 步插入成功、第 2 步 UPDATE 越界报错 → 500，且**无事务**，留下一条无法登录的孤儿考生行 |
+
+## 四、P2 —— 健壮性 / 性能 / 加固
+
+| 编号 | 标题 | 位置 |
+|---|---|---|
+| BUG-215 | `page` 无上限 → `offset` 溢出为浮点数拼进 SQL（MySQL 语法错误 500）；合法大值触发深分页全表扫描 | `BaseController.php:69`、`Model.php:79-84`、`Exam.php:115`、`Quiz.php:162` |
+| BUG-216 | `/api/public/site` 用 `SiteConfig::allAsMap()` 全量下发，`Setting` 写入同表的安全参数（限流阈值/密码最小长度）将随之外泄，`publicSubset()` 白名单被架空 | `HomeController.php:26/38-39` |
+| BUG-217 | `writePoint()` 见安全方法直接返回读权限点，`WRITE_POINTS` 里的 GET 条目永不生效 → `GET /scores/export` 实际只需 `score.view` 就能拿到含考场口令的 CSV | `SessionAuthMiddleware.php:214-218` |
+| BUG-218 | 级联删除/清库漏掉 `stuscorebak`，备份行成孤儿（`INNER JOIN` 后被静默过滤）→ 数据「消失但未删」、无法审计 | `Admin/StudentController.php:230-242`、`Admin/ExamController.php:179-190`、`TeacherExamController.php:280-291`、`Admin/SystemController.php:27/47/58` |
+| BUG-219 | 关键字搜索未转义 `LIKE` 的 `%`/`_` → 输入 `%` 退化为全表返回（可绕过筛选、放大深分页成本） | `Admin/StudentController.php:62-66` 等 9 处 |
+| BUG-220 | 列表接口普遍 N+1（每行 1~3 次查询）；`MonitorController` 硬编码 `limit 200`，考试数 >200 时静默截断 | `Admin/ExamController.php:62-66`、`Admin/MonitorController.php:41-48`、`Admin/SubjectController.php:52-62` 等 |
+| BUG-221 | 模拟考试交卷后仍可改答案并重复交卷重判分（`savePaper/submitPaper` 无状态守卫，`gradeMock` 无幂等门禁）→ 可自助刷分 | `ExerciseExamController.php:209-258/385-441` |
+| BUG-222 | `AuthSession::login()` 的 `purge()` 会清掉**考场会话** → 考试中途去考生中心登录会被踢出考场 | `AuthSession.php:27-36/82-88` |
+| BUG-223 | 考场登录属权限提升但未 `sess_regenerate()`，与项目自身防会话固定策略不一致（CWE-384） | `ExamController.php:124-129` |
+| BUG-224 | `Exam::start()/openForEntry()` 两条 UPDATE 无事务，口令与 `stuscore.stu_pwd` 快照可能不一致 | `Exam.php:165-181/263-275` |
+| BUG-225 | `Setting::putMany()` 校验在循环内抛错 → 部分写入且 `flush()` 未执行，响应 400 但 DB 已改 | `Setting.php:248-268/304-331` |
+| BUG-226 | 内联 `onerror` 属性被 CSP 拦截（与已修的「内联脚本」同因）→ 图片失败占位永不显示，且刷 CSP 违规日志 | `views/admin/quiz.js:234/387`、`views/student/exercise.js:146`、`views/student/mock.js:210` |
+| BUG-227 | 列表删除后分页不回退，停在越界页显示空表且分页器被隐藏 | `ui/crud.js:74-77/123-130` |
+| BUG-228 | `openDrawer` 的焦点陷阱在 X/ESC/点遮罩关闭时未释放（`openModal` 已修，抽屉漏改） | `ui/components.js:415-429` |
+
+## 五、修复计划（第三轮）
+
+### 批次 A —— 打通全部写入路径（P0，最高优先）
+1. **BUG-201** `openModal` 中心化关联：`bodyEl` 内唯一 `<form>` 自动赋 id，footer 的
+   `button[type=submit]` 补 `form` 属性 → 一处修复覆盖所有「form + footer」调用方。
+2. **BUG-202** `quiz.js` 表单容器 `div.form-grid` → `form.form-grid`。
+3. **BUG-203** 新增 `submit-one` 端点与 `InvigilationService::submitOne()`；前端按人收卷改指向它。
+
+### 批次 B —— 前后端字段与路由对齐
+4. **BUG-207/208** 表单字段更名 `password`；`teainfo` 无对应列，移除 `tea_sex/tea_phone/tea_info` 输入与列表列。
+5. **BUG-205** 考生改密字段改为 `old_pwd/new_pwd/new_pwd2`（补传二次确认）。
+6. **BUG-204** `adminApi`/`teacherApi` 补 `submitAll`，与按人 `submit` 语义分离。
+7. **BUG-206** 管理端监考改用 `columns` 内的操作列（参照教师端），使行内操作可用。
+8. **BUG-209** 教师端监考跳转路径改为 `/monitor`。
+
+### 批次 C —— 后端逻辑与数据一致
+9. **BUG-210** `Admin\ExamController::update()` 不再覆盖 `exam_status`。
+10. **BUG-211** 两处 `testing` 查询统一排除 `MOCK_CLASS`（复用 `Exam::hasOngoingFormalExam()` 口径）。
+11. **BUG-212/223** 考场登录校验班级归属（`FIND_IN_SET`，与 `pendingForStudent` 同口径）+ `sess_regenerate()`。
+12. **BUG-214** 注册改为单条带 `id` 的 INSERT，并把 id 收紧为 INT 范围内纯数字。
+13. **BUG-213** 备份前校验已结束 + 事务化 + 锁行。
+14. **BUG-215** `page` 加上限并强制 `(int) $offset`。
+15. **BUG-216** `/api/public/site` 改为站点展示字段白名单。
+16. **BUG-217** `writePoint()` 先查显式声明，安全方法不再短路。
+17. **BUG-218** 各删除路径补 `stuscorebak`。
+18. **BUG-219** `LIKE` 关键字统一 `addcslashes($kw, '%_\\')`。
+19. **BUG-222** `AuthSession::login()` 不再清理 `exam_session`。
+20. **BUG-221** 模拟考试 `savePaper/submitPaper` 加已交卷守卫，`gradeMock` 加幂等门禁。
+21. **BUG-225** `Setting::putMany()` 先全量校验再落库 + 异常路径 `flush()`。
+
+### 批次 D —— 前端细节
+22. **BUG-226** 内联 `onerror` → `addEventListener('error')`。
+23. **BUG-227** `crud.js` 删除/保存后回退页码。
+24. **BUG-228** `openDrawer` 焦点陷阱在内部 `close()` 释放。
+25. **BUG-220** 列表统计改批量查询（`MonitorController`/`ExamController`/`SubjectController` 优先）。
+26. `student/center.js` 单位/班级选项 `value` 统一为 ID（避免保存时清空）。
+27. `admin/exam.js` 题库不足明细与出题警告不再渲染成 `[object Object]`。
+
+### 验证方式
+- 每个修复配套断言；新增 `temp/domtest/verify_round3.mjs`（真实 Chromium，点击保存并核对落库）。
+- 全量 `bash test/run_all.sh` 必须保持全绿（基线 321 PASS）。
+- `temp/domtest/verify_final.mjs`（22 项）与 `temp/domtest/prove_modal_save.mjs` 必须由 FAIL 转 PASS。
+
+---
+
+# 第三轮修复实施结果 + 第四轮全面巡检（2026-09-16）
+
+## 一、第三轮实施结果
+
+批次 A/B/C/D 共 27 项**全部落地**（已用 `temp/domtest/verify_fix_markers.mjs` 逐项核对代码标记，40 项标记全部命中）：
+
+| 批次 | 内容 | 落地 |
+|---|---|---|
+| A | `openModal` 表单关联（BUG-201）、题库表单改真 `<form>`（BUG-202）、按人交卷 `submit-one` 端点与前端（BUG-203、BUG-206） | ✅ |
+| B | 表单字段名对齐（BUG-205/207/208）、`submitAll` 补齐（BUG-204）、教师监考跳转（BUG-209） | ✅ |
+| C | 考试状态不再被编辑打回（BUG-210）、模拟考试排除（BUG-211）、考场班级准入 + 换发会话（BUG-212/223）、注册单条 INSERT（BUG-214）、备份守卫（BUG-213）、页码上限（BUG-215）、站点白名单（BUG-216）、写权限点优先（BUG-217）、`stuscorebak` 级联（BUG-218）、`LIKE` 转义（BUG-219）、考场会话不被清理（BUG-222）、模拟考试防刷分（BUG-221）、设置先校验后落库（BUG-225） | ✅ |
+| D | 配图 `onerror` 去内联（BUG-226）、删除后回退页码（BUG-227）、抽屉焦点陷阱释放（BUG-228）、单位/班级选项用 ID、缺题明细渲染 | ✅ |
+
+**未实施（如实记录）**：BUG-220（列表接口 N+1 与 `limit 200` 硬编码）—— 纯性能项，
+改动面覆盖 5 个控制器的列表查询，本轮未做；建议独立一轮专项处理。
+
+## 二、第四轮发现（浏览器全站巡检暴露）
+
+### BUG-229　【P0】「考生管理」编辑弹窗的保存按钮点了没反应（`form.id` 被同名控件遮蔽）
+
+- **位置**：`public/assets/js/ui/components.js`（`openModal`）、`public/assets/js/views/admin/student.js:118`
+- **现象**：后台「考生管理 → 编辑 → 保存」完全无反应：不报错、不关弹窗、数据不变。
+  第三轮的 BUG-201 修复对其他页面有效，**唯独考生管理仍失效**。
+- **根因**：考生表单里有一个 `name="id"` 的控件（准考证号）。`HTMLFormElement` 支持
+  **具名访问**——表单内名为 `id` 的控件会成为 form 自身的属性，于是 `form.id` 返回的是
+  那个 `<input>` 而不是字符串 id：
+
+  ```js
+  if (!form.id) form.id = uid('mf');            // form.id 是元素（真值）→ id 永远补不上
+  btn.setAttribute('form', form.id);            // → form="[object HTMLInputElement]"
+  ```
+
+  实测：`save.form === null`、`save.getAttribute('form') === '[object HTMLInputElement]'`。
+- **修复**：改用 `form.getAttribute('id')` / `form.setAttribute('id', fid)`，并把解析出的
+  `fid` 赋给按钮的 `form` 属性；不受控件名影响。
+- **实证**：`temp/domtest/debug_modal_owner.mjs` 修复前 `owner=null`、修复后
+  `C6 保存按钮 form owner 指向表单` + 真点保存后弹窗关闭（提交确实触发）。
+
+### BUG-230　【P1】未登录时「公开页面」全部被弹到登录页，考生无法自助注册
+
+- **位置**：`public/assets/js/core/http.js:97`
+- **现象**：未登录访问门户 `/`、`/#/hero`、`/#/register`，hash 一律被改写为 `#/login`。
+  表现即「注册按钮点进去还是登录页」「首页打不开」。
+- **根因**：`request()` 对**任何** 401（除 `/login`）都 `emit('unauthorized')`，而各端
+  `installErrorHandlers` 的回调会跳登录页。问题是**引导阶段的会话探测** `GET /api/student/me`
+  在未登录时**必然** 401 —— 这正是 `bootstrapSession` 用来判断登录态的正常结果，
+  却把公开页面直接弹走。后台端还因此多弹一次「登录状态已失效」并重复渲染登录页。
+- **修复**：新增 `NO_AUTH_REDIRECT = [/\/login$/i, /\/me$/i]`，会话探测与登录接口的 401
+  不再触发全局跳转。各端 `boot()` 已有显式的未登录分支（渲染自己的登录页），
+  门户侧由 `studentSession.require()` 守卫受保护视图，因此不依赖这个全局跳转。
+- **实证**：`C8` 探针 —— `/#/register` 渲染出 7 个控件的注册表单且 hash 保持 `#/register`；
+  `/` 渲染落地页；`/#/exercise` 仍正确走守卫跳 `#/login?redirect=%2Fexercise`。
+
+### BUG-231　【P1】「单位 / 班级」引用名称与 ID 两套写法并存 → 考生匹配不到考试
+
+- **位置**：`app/Models/Grade.php`、`app/Models/SchoolClass.php`、`StudentAuthController::register`、
+  `StudentController::saveInfo`、`Admin/StudentController::save/update/import`、
+  `Admin/ExamController::resolveClasses`、`TeacherExamController::resolveClasses`、
+  `views/student/login.js`、`views/student/center.js`
+- **现象**：库中 `stuinfo.grade_id/class_id` 与 `examinfo.stu_class` 混着写名称和 ID。
+- **根因**：旧系统（`E:/develop/csip-php`）的表单提交的是**名称**
+  （`Views/admin/students/form.php:12/17`、`Views/front/register.php:37/46`、
+  `Views/admin/exams/form.php:52` 的 option `value` 都是 `grade_name`/`class_name`），
+  而重写后的逻辑一律按 **ID** 匹配：
+
+  - 排卷 / 名单：`Student::byClassIds()` → `class_id IN (ids)`
+  - 待考列表：`Exam::pendingForStudent()` → `FIND_IN_SET(class_id, exam.stu_class)`
+  - 考场准入：`Exam::isStudentEligible()`
+
+  而**考生端**的注册页与资料页仍按「名称优先」提交（`value: g.grade_name || g.id`），
+  于是一次「保存个人资料」就足以让该考生**再也看不到任何考试**；反之旧考试（存名称）
+  也匹配不到新考生（存 ID）。存量数据已证实：`165165/165166` 存名称、`999999` 存 ID。
+- **修复**：
+  1. 模型新增归一：`Grade::resolveId()`、`SchoolClass::resolveId()/resolveIds()`（请求内缓存映射表）；
+  2. **全部 5 条写入路径**接入归一（考生注册 / 考生资料 / 后台考生增改与 CSV 导入 /
+     管理端与教师端考试保存的参考班级）；
+  3. 前端考生端两处下拉改为提交 ID（`value: String(g.id)`），与后台一致；
+     资料页回填时先按 ID 命中、再按名称命中，都认不出则补一条「历史值」选项，避免打开即清空；
+  4. **存量数据迁移**：`temp/domtest/migrate_refs.php`（干跑 → 备份 → 事务执行），
+     归一 `stuinfo` 2 行、`examinfo` 28 行；备份 `temp/backup/before_ref_migration_*.sql`。
+- **实证**：`C2/C3/C5` 探针 —— 资料页与注册页下拉 value 均为 `"1"`；`/api/student/exams` 返回非空。
+
+## 三、第四轮验证结果
+
+| 验证 | 结果 |
+|---|---|
+| 后端回归 `bash test/run_all.sh` | **321 PASS / 0 FAIL**（与基线一致，零回归） |
+| 浏览器全站巡检 `temp/domtest/browser_sweep_v6.mjs` | **103 项 PASS / 0 FAIL** |
+| 公开页（9 个入口，含 `#/register`、`#/hero`、`/exam`、守卫跳转） | 全部渲染正确 |
+| 管理端 16 路由 / 教师端 3 / 考生端 6 | 全部渲染，关键文案与统计卡数量均匹配 |
+| CRUD 弹窗 | 7 个模块「编辑 → 保存按钮 form owner」全部有效；Esc 可关 |
+| 定点回归 C1–C8 | 监考跳转、班级归一、教师监考空壳、注册表单、公开页可达、考生保存全部通过 |
+
+**遗留**：`BUG-220`（N+1 查询与 `limit 200` 硬编码）未实施；第一轮记录的限流、密码策略
+两项加固仍待产品决策。以上均不影响功能正确性。

@@ -28,6 +28,9 @@ export class ApiError extends Error {
 let csrfToken = '';
 const listeners = { unauthorized: [], forbidden: [] };
 
+/** 这些路径上的 401 不触发全局未登录跳转（见 request() 中的说明） */
+const NO_AUTH_REDIRECT = [/\/login$/i, /\/me$/i];
+
 export function setCsrfToken(token) { csrfToken = token || ''; }
 export function getCsrfToken() { return csrfToken; }
 
@@ -92,9 +95,16 @@ async function request(method, path, { query, body, headers = {}, raw = false, r
     try { payload = await res.json(); } catch (_) { payload = null; }
   }
 
-  // 登录接口自身的 401 属于「账号/密码错误」，不应触发全局未登录跳转；
-  // 交给调用方 catch 显示真实错误（如「账号或密码不正确」）。
-  if (res.status === 401 && !/\/login$/i.test(path)) emit('unauthorized', { path });
+  // 以下两类 401 属于「预期内」的结果，不触发全局未登录跳转：
+  //  1. 登录接口自身：401 = 账号/密码错误，应交给调用方显示真实提示；
+  //  2. 会话探测接口（*/me）：未登录时必然 401，这正是引导流程判断登录态的依据。
+  //     若也触发跳转，门户首页 / 注册页 / 英雄页等**公开页面**一打开就被弹到
+  //     #/login（考生因此无法自助注册），且后台端会在登录页上多弹一次
+  //     「登录状态已失效」。各端 boot 里已有显式的未登录分支（渲染自己的登录页），
+  //     门户侧则由 studentSession.require() 守卫受保护视图。
+  if (res.status === 401 && !NO_AUTH_REDIRECT.some((re) => re.test(path))) {
+    emit('unauthorized', { path });
+  }
   if (res.status === 403) emit('forbidden', { path, message: payload?.message });
 
   if (!res.ok) {

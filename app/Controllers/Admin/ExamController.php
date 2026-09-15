@@ -160,7 +160,11 @@ class ExamController extends BaseController
             }
         }
 
-        $this->model->update($id, $data + ['exam_status' => Exam::STATUS_EXAM]);
+        // 不要把 exam_status 无条件打回 exam：出题后状态已是 paper，
+        // 而 Exam::autoStartIfDue() 只在 paper 状态推进到 testing，
+        // 一旦被改回 exam，到点将永不自动开考，考生会卡在等待室。
+        // 状态流转只由 启动/出题/开考/结束 这些专用接口负责。
+        $this->model->update($id, $data);
         return $this->ok($this->model->detail($id), '修改成功');
     }
 
@@ -181,6 +185,8 @@ class ExamController extends BaseController
             $this->model->delete($id);
             Database::query('DELETE FROM `stupaper` WHERE exam_id = ?', [$id]);
             Database::query('DELETE FROM `stuscore` WHERE exam_id = ?', [$id]);
+            // 备份行同样按 exam_id 关联，一并清理，避免孤儿数据
+            Database::query('DELETE FROM `stuscorebak` WHERE exam_id = ?', [$id]);
             Database::commit();
         } catch (\Throwable $e) {
             if (Database::inTransaction()) {
@@ -340,13 +346,10 @@ class ExamController extends BaseController
         return $data;
     }
 
-    /** 参考班级：数组 → 逗号分隔字符串 */
+    /** 参考班级：数组 → 逗号分隔字符串；班级名称统一折算为班级 ID */
     private function resolveClasses(mixed $raw): string
     {
-        if (is_array($raw)) {
-            return implode(',', array_values(array_filter(array_map('trim', array_map('strval', $raw)), static fn ($v) => $v !== '')));
-        }
-        return trim((string) $raw);
+        return SchoolClass::resolveIds($raw);
     }
 
     /** 时间归一：1750 / 17：50 / 17:50 → 17:50 */

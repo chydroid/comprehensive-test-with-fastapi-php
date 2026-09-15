@@ -215,14 +215,18 @@ export function StudentInfoView() {
       [{ value: '男', label: '男' }, { value: '女', label: '女' }],
       { name: 'stu_sex', value: info.stu_sex || '男' },
     );
-    const gradeSel = select(
-      (opts.grades || []).map((g) => ({ value: g.grade_name || g.id, label: g.grade_name || g.id })),
-      { name: 'grade_id', value: info.grade_id || '', placeholder: '请选择单位' },
-    );
-    const classSel = select(
-      (opts.classes || []).map((c) => ({ value: c.class_name || c.id, label: c.class_name || c.id })),
-      { name: 'class_id', value: info.class_id || '', placeholder: '请选择班级' },
-    );
+      const gradeOpts = refOptions(opts.grades, 'grade_name');
+      const classOpts = refOptions(opts.classes, 'class_name');
+      const gradeSel = select(gradeOpts, {
+        name: 'grade_id',
+        value: refValue(gradeOpts, info.grade_id, info.grade_name),
+        placeholder: '请选择单位',
+      });
+      const classSel = select(classOpts, {
+        name: 'class_id',
+        value: refValue(classOpts, info.class_id, info.class_name),
+        placeholder: '请选择班级',
+      });
 
     const form = el('form', { class: 'form-grid', on: { submit: (ev) => { ev.preventDefault(); save(); } } }, [
       field('准考证号', input({ value: String(info.id), disabled: true }), { hint: '准考证号不可修改' }),
@@ -262,9 +266,9 @@ export function StudentInfoView() {
 /* ============================ 修改密码 ============================ */
 export function StudentPasswordView() {
   const root = el('div.stack');
-  const oldIn = input({ name: 'old_password', type: 'password', required: true, autocomplete: 'current-password' });
-  const newIn = input({ name: 'new_password', type: 'password', required: true, autocomplete: 'new-password' });
-  const reIn = input({ name: 'confirm_password', type: 'password', required: true, autocomplete: 'new-password' });
+  const oldIn = input({ name: 'old_pwd', type: 'password', required: true, autocomplete: 'current-password' });
+  const newIn = input({ name: 'new_pwd', type: 'password', required: true, autocomplete: 'new-password' });
+  const reIn = input({ name: 'new_pwd2', type: 'password', required: true, autocomplete: 'new-password' });
   const errSlot = el('div');
 
   const form = el('form', { class: 'form-grid', on: { submit: (ev) => { ev.preventDefault(); submit(); } } }, [
@@ -285,9 +289,12 @@ export function StudentPasswordView() {
       errSlot.append(el('div.alert.alert-danger', {}, [el('span', { text: '两次输入的新密码不一致' })]));
       return;
     }
+    // 字段名必须与后端 StudentController::savePwd 一致（old_pwd / new_pwd / new_pwd2）。
+    // 此前发 old_password/new_password 且漏发二次确认 → 恒 400「参数 old_pwd 不能为空」。
     const res = await withLoading(form, () => studentApi.updatePassword({
-      old_password: oldIn.value,
-      new_password: newIn.value,
+      old_pwd: oldIn.value,
+      new_pwd: newIn.value,
+      new_pwd2: reIn.value,
     }));
     if (res.ok) {
       notify.success('密码修改成功');
@@ -301,4 +308,30 @@ export function StudentPasswordView() {
     el('div', {}, [el('h1.page-title', { text: '修改密码' }), el('p.page-sub', { text: '定期更换密码保障账号安全' })]),
   ]), card({ title: '安全设置', iconName: 'shield', body: form }));
   return root;
+}
+
+/* ==================== 单位 / 班级下拉（名称→ID 归一） ==================== */
+
+/**
+ * 选项一律用「ID 作为 value、名称作为 label」。
+ *
+ * stuinfo.grade_id / class_id 是 varchar：旧系统表单提交的是名称，而排卷
+ * （Student::byClassIds）、待考列表（FIND_IN_SET(class_id, exam.stu_class)）、
+ * 考场准入（Exam::isStudentEligible）全都按 ID 匹配。本页此前提交名称，
+ * 保存一次个人资料就会让该考生从此看不到任何考试，故统一改为提交 ID。
+ */
+function refOptions(rows, nameKey) {
+  return (rows || []).map((r) => ({ value: String(r.id), label: r[nameKey] || String(r.id) }));
+}
+
+/** 回填值：先按 ID 命中，再按名称命中，都不中且原值非空则补一条历史值选项 */
+function refValue(options, idValue, nameValue) {
+  const id = String(idValue ?? '');
+  if (id === '') return '';
+  if (options.some((o) => o.value === id)) return id;
+  const hit = options.find((o) => o.label === String(nameValue ?? ''));
+  if (hit) return hit.value;
+  // 例如班级已被删除：保留原值，避免「打开即清空、保存即丢失归属」
+  options.push({ value: id, label: `${nameValue || id}（历史值，建议重新选择）` });
+  return id;
 }

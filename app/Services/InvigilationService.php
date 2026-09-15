@@ -84,6 +84,28 @@ final class InvigilationService
         return ['graded' => $graded, 'skipped' => $skipped, 'total' => count($rows)];
     }
 
+    /**
+     * 为**单个**考生强制交卷并判分（考试继续）。
+     *
+     * 此前监考页面「收卷」按钮直接调用 submitAll，导致监考员想收 1 人却把全场判了分，
+     * 属不可撤销的数据事故。单人与全员必须是两个不同的入口。
+     *
+     * @return array{graded:int, skipped:int, score:int}|null 返回 null 表示该考生不在本场名单中
+     */
+    public function submitOne(int $examId, string $stuId): ?array
+    {
+        $row = $this->scores->findOne($examId, $stuId);
+        if ($row === null) {
+            return null;
+        }
+        if (str_starts_with((string) ($row['stu_status'] ?? ''), 'over')) {
+            return ['graded' => 0, 'skipped' => 1, 'score' => (int) ($row['stu_score'] ?? 0)];
+        }
+        // autoGrade 内部有幂等门禁（已交卷不再覆盖），重复交卷是安全的
+        $score = ExamEngine::autoGrade($examId, $stuId);
+        return ['graded' => 1, 'skipped' => 0, 'score' => $score];
+    }
+
     /** 结束整场考试（强制判分 + 状态流转 over） */
     public function endAll(int $examId): array
     {
@@ -99,9 +121,19 @@ final class InvigilationService
         ];
     }
 
-    /** 备份成绩（幂等：已备份则拒绝） */
+    /** 备份成绩（仅限已结束的考试；幂等：已备份则拒绝） */
     public function backup(int $examId): int
     {
+        $exam = $this->exams->find($examId);
+        if ($exam === null) {
+            throw new \RuntimeException('考试不存在');
+        }
+        // 必须已结束。此前该接口没有任何前置校验，对进行中的考试也能备份：
+        // 备份会把 exam_status 改成 overBak（考试被中途冻结），而考生仍可继续
+        // 作答交卷，于是 stuscorebak 里留下旧快照，备份报表与真实成绩永久不一致。
+        if (!str_starts_with((string) ($exam['exam_status'] ?? ''), 'over')) {
+            throw new \RuntimeException('考试尚未结束，不能备份成绩');
+        }
         if ($this->scores->isBackedUp($examId)) {
             throw new \RuntimeException('此场考试成绩已经备份过了');
         }

@@ -206,11 +206,12 @@ export function MockReviewView({ router, query }) {
       ]));
       const body = el('div.card-body.stack');
       body.append(el('div.question-stem', { text: w.quiz_title }));
-      if (w.quiz_pic_name) {
-        const img = el('img.question-pic', { src: `/uploads/${w.quiz_pic_name}`, alt: '题目配图', onerror: function () { this.style.display = 'none'; } });
-        img.addEventListener('error', () => img.remove());
-        body.append(img);
-      }
+        if (w.quiz_pic_name) {
+          // 只保留 addEventListener（内联 onerror 在 CSP script-src 'self' 下不执行）
+          const img = el('img.question-pic', { src: `/uploads/${w.quiz_pic_name}`, alt: '题目配图' });
+          img.addEventListener('error', () => img.remove());
+          body.append(img);
+        }
       const opts = w.quiz_option_list || [];
       if (opts.length) {
         const correct = keys(w.quiz_key);

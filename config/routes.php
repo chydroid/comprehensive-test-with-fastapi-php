@@ -234,6 +234,7 @@ return [
     ['POST', '/api/admin/monitor/lock',    [MonitorController::class, 'lock']],
     ['POST', '/api/admin/monitor/unlock',  [MonitorController::class, 'unlock']],
     ['POST', '/api/admin/monitor/submit',  [MonitorController::class, 'submitAll']],
+    ['POST', '/api/admin/monitor/submit-one', [MonitorController::class, 'submitOne']],
     ['POST', '/api/admin/monitor/lock-all', [MonitorController::class, 'lockAll']],
     ['POST', '/api/admin/monitor/unlock-all', [MonitorController::class, 'unlockAll']],
     ['POST', '/api/admin/monitor/over-all', [MonitorController::class, 'overAll']],

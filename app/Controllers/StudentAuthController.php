@@ -38,26 +38,35 @@ class StudentAuthController extends BaseController
             throw new HttpException(400, '密码过于简单，请使用至少 6 位且非纯数字的组合', 40000);
         }
 
+        $stuId = $this->normalizeStuId($in['stu_id']);
         $students = new Student();
         // 准考证号即 stuinfo.id
-        if ($students->find($in['stu_id']) !== null) {
+        if ($students->find($stuId) !== null) {
             throw new HttpException(409, '准考证号已被使用，请检查', 40900);
         }
         if ($students->findByName($in['stu_name']) !== null) {
             throw new HttpException(409, '该姓名已注册，请检查', 40900);
         }
 
-        $id = $students->create([
-            'stu_name' => $in['stu_name'],
-            'stu_pwd'  => Password::hash($in['password']),
-            'stu_sex'  => $in['stu_sex'] ?? '',
-            'grade_id' => (string) ($in['grade_id'] ?? ''),
-            'class_id' => (string) ($in['class_id'] ?? ''),
-        ]);
-        // stuinfo.id 需显式指定为准考证号，create 用自增主键，故此处二次校正
-        \Core\Database::query('UPDATE `stuinfo` SET `id` = ? WHERE `id` = ?', [$in['stu_id'], $id]);
+        // 单条 INSERT 直接写入业务主键。此前「先 INSERT 自增 id，再 UPDATE 改主键」
+        // 两步走：第二步失败（越界 / 被 kill / 超时）会留下一条 id 为自增值、
+        // 无法登录的孤儿考生行，且响应是 500。
+        // grade_id / class_id 归一为 ID：注册表单可能提交名称，而排卷、待考列表
+        // 一律按 ID 匹配，存名称会让该考生从此看不到任何考试。
+        \Core\Database::query(
+            'INSERT INTO `stuinfo` (id, stu_name, stu_pwd, stu_sex, grade_id, class_id)
+             VALUES (?, ?, ?, ?, ?, ?)',
+            [
+                $stuId,
+                (string) $in['stu_name'],
+                Password::hash($in['password']),
+                (string) ($in['stu_sex'] ?? ''),
+                Grade::resolveId($in['grade_id'] ?? ''),
+                SchoolClass::resolveId($in['class_id'] ?? ''),
+            ]
+        );
 
-        return $this->ok(['stu_id' => $in['stu_id']], '注册成功');
+        return $this->ok(['stu_id' => $stuId], '注册成功');
     }
 
     /** GET /api/student/register/options —— 注册页所需的下拉数据 */

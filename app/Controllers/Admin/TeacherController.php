@@ -37,12 +37,12 @@ class TeacherController extends BaseController
         if ($kw !== '') {
             $total = (int) (Database::fetch(
                 'SELECT COUNT(*) AS c FROM `teainfo` WHERE tea_name LIKE ?',
-                ['%' . $kw . '%']
+                [self::like($kw)]
             )['c'] ?? 0);
             $rows = Database::fetchAll(
                 'SELECT * FROM `teainfo` WHERE tea_name LIKE ? ORDER BY id ASC
                  LIMIT ' . $p['per_page'] . ' OFFSET ' . $p['offset'],
-                ['%' . $kw . '%']
+                [self::like($kw)]
             );
         } else {
             $result = $this->model->paginate($p['page'], $p['per_page'], []);

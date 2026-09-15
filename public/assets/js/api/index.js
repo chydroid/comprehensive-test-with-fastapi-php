@@ -161,13 +161,15 @@ export const adminApi = {
   updateClass:   (id, body) => http.put(`/admin/classes/${id}`, body),
   deleteClass:   (id) => http.del(`/admin/classes/${id}`),
 
-  monitor:   (params) => http.get('/admin/monitor', { query: params }),
-  lock:      (body) => http.post('/admin/monitor/lock', body),
-  unlock:    (body) => http.post('/admin/monitor/unlock', body),
-  submit:    (body) => http.post('/admin/monitor/submit', body),
-  lockAll:   (body) => http.post('/admin/monitor/lock-all', body),
-  unlockAll: (body) => http.post('/admin/monitor/unlock-all', body),
-  overAll:   (body) => http.post('/admin/monitor/over-all', body),
+    monitor:   (params) => http.get('/admin/monitor', { query: params }),
+    lock:      (body) => http.post('/admin/monitor/lock', body),
+    unlock:    (body) => http.post('/admin/monitor/unlock', body),
+    // submit = 单个考生收卷；submitAll = 全员收卷。两者语义不同，不可混用。
+    submit:    (body) => http.post('/admin/monitor/submit-one', body),
+    submitAll: (body) => http.post('/admin/monitor/submit', body),
+    lockAll:   (body) => http.post('/admin/monitor/lock-all', body),
+    unlockAll: (body) => http.post('/admin/monitor/unlock-all', body),
+    overAll:   (body) => http.post('/admin/monitor/over-all', body),
 
   scores:        (params) => http.get('/admin/scores', { query: params }),
   scoreStudents: (params) => http.get('/admin/scores/students', { query: params }),

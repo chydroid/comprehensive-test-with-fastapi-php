@@ -86,6 +86,20 @@ class MonitorController extends BaseController
         return $this->ok($result, "已强制交卷并判分 {$result['graded']} 人（跳过已交卷 {$result['skipped']} 人）");
     }
 
+    /** POST /api/admin/monitor/submit-one —— body: {exam_id, stu_id} 单个考生交卷并判分 */
+    public function submitOne(): Response
+    {
+        [$examId, $stuId] = $this->target();
+        $result = $this->service->submitOne($examId, $stuId);
+        if ($result === null) {
+            throw new HttpException(404, '该考生不在本场考试名单中', 40401);
+        }
+        $message = $result['skipped'] > 0
+            ? '该考生已交卷'
+            : "已强制交卷并判分（{$result['score']} 分）";
+        return $this->ok($result, $message);
+    }
+
     /** POST /api/admin/monitor/lock-all */
     public function lockAll(): Response
     {

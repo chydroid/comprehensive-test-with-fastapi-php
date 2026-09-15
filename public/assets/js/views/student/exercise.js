@@ -143,7 +143,9 @@ export function ExerciseView() {
 
     const body = el('div.stack');
     if (q.quiz_pic_name) {
-      const img = el('img.question-pic', { src: `/uploads/${q.quiz_pic_name}`, alt: '题目配图', onerror: function () { this.style.display = 'none'; } });
+      // 只保留 addEventListener：内联 onerror 属性在 script-src 'self' 的 CSP 下
+      // 不会执行，只会产生控制台违规日志。
+      const img = el('img.question-pic', { src: `/uploads/${q.quiz_pic_name}`, alt: '题目配图' });
       img.addEventListener('error', () => img.remove());
       body.append(img);
     }

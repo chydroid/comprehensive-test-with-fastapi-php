@@ -229,10 +229,15 @@ export async function QuizView({ router, can }) {
       function renderPic(url) {
         clear(picPreview);
         if (!url) return;
-        picPreview.append(el('img', {
-          src: url, alt: '配图预览',
-          onerror: function () { clear(picPreview); picPreview.append(el('span.fs-sm.c-danger', { text: '图片加载失败' })); },
-        }));
+        const img = el('img', { src: url, alt: '配图预览' });
+        // 必须用 addEventListener 而不是内联 onerror 属性：
+        // 本项目 CSP 为 script-src 'self'，内联事件处理器会被浏览器拒绝执行，
+        // 图片 404 时既不会显示占位提示，还会往控制台刷 CSP 违规日志。
+        img.addEventListener('error', () => {
+          clear(picPreview);
+          picPreview.append(el('span.fs-sm.c-danger', { text: '图片加载失败' }));
+        });
+        picPreview.append(img);
       }
       renderPic(picName ? `/uploads/${picName}` : '');
 
@@ -277,7 +282,9 @@ export async function QuizView({ router, can }) {
       const writerInput = input({ name: 'quiz_writer', value: values.quiz_writer || '', placeholder: '录题人' });
       const timeInput = input({ name: 'quiz_time', type: 'date', value: values.quiz_time || new Date().toISOString().slice(0, 10) });
 
-      const form = el('div.form-grid', {}, [
+      // 必须是 <form>：此前的 div 永不派发 submit 事件，
+      // 且提交按钮在 .modal-footer（form 之外），导致「创建题目 / 保存修改」完全无法提交。
+      const form = el('form.form-grid', {}, [
         field('科目', subjSelect, { required: true }),
         field('题型', typeSelect, { required: true }),
         el('div.span-2', {}, [field('题干', titleInput, { required: true })]),
@@ -377,19 +384,22 @@ export async function QuizView({ router, can }) {
       el('div.pre-wrap.fw-500', { text: row.quiz_title }),
     ]));
 
-    if (row.quiz_pic_name) {
-      body.append(el('div', {}, [
-        el('div.fs-sm.c-secondary.mb-2', { text: '配图' }),
-        el('img', {
-          src: `/uploads/${row.quiz_pic_name}`,
+      if (row.quiz_pic_name) {
+        const picName = String(row.quiz_pic_name);
+        // 同上：CSP 下内联 onerror 不生效，改用事件监听
+        const img = el('img', {
+          src: `/uploads/${picName}`,
           style: { maxHeight: '220px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' },
           alt: '题目配图',
-          onerror: function () {
-            this.replaceWith(el('span.fs-sm.c-danger', { text: '图片缺失（文件未找到：/uploads/' + row.quiz_pic_name + '）' }));
-          },
-        }),
-      ]));
-    }
+        });
+        img.addEventListener('error', () => {
+          img.replaceWith(el('span.fs-sm.c-danger', { text: `图片缺失（文件未找到：/uploads/${picName}）` }));
+        });
+        body.append(el('div', {}, [
+          el('div.fs-sm.c-secondary.mb-2', { text: '配图' }),
+          img,
+        ]));
+      }
 
     if (opts.length) {
       const listEl = el('div.stack-sm');

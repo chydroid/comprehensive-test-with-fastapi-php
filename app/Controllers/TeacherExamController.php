@@ -282,6 +282,8 @@ class TeacherExamController extends BaseController
             $this->model->delete($id);
             Database::query('DELETE FROM `stupaper` WHERE exam_id = ?', [$id]);
             Database::query('DELETE FROM `stuscore` WHERE exam_id = ?', [$id]);
+            // 备份行同样按 exam_id 关联，一并清理，避免孤儿数据
+            Database::query('DELETE FROM `stuscorebak` WHERE exam_id = ?', [$id]);
             Database::commit();
         } catch (\Throwable $e) {
             if (Database::inTransaction()) {
@@ -449,15 +451,10 @@ class TeacherExamController extends BaseController
         return $data;
     }
 
+    /** 参考班级：数组 → 逗号分隔字符串；班级名称统一折算为班级 ID */
     private function resolveClasses(mixed $raw): string
     {
-        if (is_array($raw)) {
-            return implode(',', array_values(array_filter(
-                array_map('trim', array_map('strval', $raw)),
-                static fn ($v) => $v !== ''
-            )));
-        }
-        return trim((string) $raw);
+        return SchoolClass::resolveIds($raw);
     }
 
     private function normalizeTime(string $time): string

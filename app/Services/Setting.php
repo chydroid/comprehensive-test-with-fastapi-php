@@ -248,23 +248,32 @@ final class Setting
     public static function putMany(array $input): array
     {
         $model = new SiteConfig();
-        $saved = [];
 
+        // 先全量校验，再统一落库。此前在循环内 normalize() 抛 400，前面的键
+        // 已经写进库、而 flush() 还没执行 —— 响应告诉前端「未保存」，
+        // 实际上 DB 已被部分修改，且同一请求内仍读到旧缓存值。
+        $pending = [];
         foreach (self::SCHEMA as $key => $def) {
             if (!array_key_exists($key, $input)) {
                 continue;
             }
-            $value = self::normalize($key, $def, $input[$key]);
-            $model->put($key, (string) $value);
-            $saved[$key] = $value;
+            $pending[$key] = self::normalize($key, $def, $input[$key]);
         }
 
-        if ($saved === []) {
+        if ($pending === []) {
             throw new \Core\HttpException(400, '没有可更新的设置项', 40001);
         }
 
-        self::flush();
-        return $saved;
+        try {
+            foreach ($pending as $key => $value) {
+                $model->put($key, (string) $value);
+            }
+        } finally {
+            // 成功或失败都清缓存：失败时也不能留着可能已被写入的旧缓存
+            self::flush();
+        }
+
+        return $pending;
     }
 
     /** 清空请求级缓存（写入后调用） */

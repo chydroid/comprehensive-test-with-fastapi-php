@@ -33,12 +33,12 @@ class NewsController extends BaseController
         if ($kw !== '') {
             $total = (int) (\Core\Database::fetch(
                 'SELECT COUNT(*) AS c FROM `examnews` WHERE news_title LIKE ?',
-                ['%' . $kw . '%']
+                [self::like($kw)]
             )['c'] ?? 0);
             $list = \Core\Database::fetchAll(
                 'SELECT * FROM `examnews` WHERE news_title LIKE ? ORDER BY id DESC
                  LIMIT ' . $p['per_page'] . ' OFFSET ' . $p['offset'],
-                ['%' . $kw . '%']
+                [self::like($kw)]
             );
         } else {
             $result = $this->model->paginate($p['page'], $p['per_page'], []);

@@ -94,7 +94,7 @@ class Exam extends Model
         }
         if (!empty($filters['keyword'])) {
             $where[] = '(e.exam_name LIKE ? OR e.exam_class LIKE ?)';
-            $kw = '%' . $filters['keyword'] . '%';
+            $kw = '%' . addcslashes((string) $filters['keyword'], '%_\\') . '%';
             $params[] = $kw;
             $params[] = $kw;
         }
@@ -263,14 +263,30 @@ class Exam extends Model
     public function openForEntry(int $id): string
     {
         $pwd = self::generatePwd();
-        \Core\Database::query(
-            "UPDATE `examinfo` SET exam_pwd = ? WHERE id = ?",
-            [$pwd, $id]
-        );
-        \Core\Database::query(
-            "UPDATE `stuscore` SET stu_pwd = ? WHERE exam_id = ?",
-            [$pwd, $id]
-        );
+        // 同 start()：exam_pwd 与 stuscore.stu_pwd 快照必须一起生效，否则考生
+        // 拿新口令入场、而续考校验用的旧快照会判定口令错误。
+        $ownTx = !\Core\Database::inTransaction();
+        if ($ownTx) {
+            \Core\Database::beginTransaction();
+        }
+        try {
+            \Core\Database::query(
+                "UPDATE `examinfo` SET exam_pwd = ? WHERE id = ?",
+                [$pwd, $id]
+            );
+            \Core\Database::query(
+                "UPDATE `stuscore` SET stu_pwd = ? WHERE exam_id = ?",
+                [$pwd, $id]
+            );
+            if ($ownTx) {
+                \Core\Database::commit();
+            }
+        } catch (\Throwable $e) {
+            if ($ownTx && \Core\Database::inTransaction()) {
+                \Core\Database::rollBack();
+            }
+            throw $e;
+        }
         return $pwd;
     }
 
@@ -399,10 +415,31 @@ class Exam extends Model
         ];
     }
 
+    /**
+     * 考生班级是否属于本场考试的参考班级。
+     *
+     * 与 pendingForStudent() 的 `FIND_IN_SET(class_id, exam.stu_class)` 同口径。
+     * 考场入口此前**完全不校验**班级归属，任意已注册考生（注册接口是公开的）
+     * 只要猜中 4–10 位纯数字口令，就能进入他人班级的考试：createScore() 会为其
+     * 写入名单、污染监考名单与成绩单，同时回传该场考试信息。
+     *
+     * 若考试未配置参考班级、或考生本人未填写班级，则无从判定，返回 true 不做限制，
+     * 以免历史数据把考生整体挡在考场之外。
+     */
+    public static function isStudentEligible(array $exam, string $classId): bool
+    {
+        $scope = trim((string) ($exam['stu_class'] ?? ''));
+        $classId = trim($classId);
+        if ($scope === '' || $classId === '') {
+            return true;
+        }
+        $set = array_filter(array_map('trim', explode(',', $scope)), static fn ($v) => $v !== '');
+        return in_array($classId, $set, true);
+    }
+
     /** 已登录考生的待考考试（按班级匹配 + 交卷状态） */
     public static function pendingForStudent(string $stuId, string $classId): array
-    {
-        $stuId = trim($stuId);
+    {        $stuId = trim($stuId);
         $classId = trim($classId);
         if ($stuId === '' || $classId === '') {
             return [];

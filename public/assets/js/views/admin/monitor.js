@@ -127,7 +127,14 @@ export async function MonitorView({ router, query }) {
     const seg = segmented(
       [{ key: '0', label: '全部考试' }, ...items],
       String(examId),
-      (k) => { examId = Number(k) || 0; router.navigate(`/monitor${examId ? `?exam_id=${examId}` : ''}`); reload(); }
+      (k) => {
+        examId = Number(k) || 0;
+        const next = `/monitor${examId ? `?exam_id=${examId}` : ''}`;
+        // 切换考试时路由会重建视图并重新取数；只有 hash 未变（选中当前项）
+        // 时才需要手动 reload，否则一次点击会发出两个重复请求。
+        if (location.hash.replace(/^#/, '') === next) reload();
+        else router.navigate(next);
+      }
     );
     seg.style.overflowX = 'auto';
     seg.style.maxWidth = '100%';
@@ -354,24 +361,25 @@ export async function MonitorView({ router, query }) {
             if (r.stu_status !== 'over') return el('span.c-tertiary', { text: '—' });
             return el('span.mono.fw-600', { text: fmtScore(r.stu_score) });
           } },
+        // 行内操作必须作为「列」渲染：table() 并不支持 rowActions 参数，
+        // 此前传进去被静默忽略 —— 锁定/解锁/收卷按钮从不出现，doOne() 成为死代码。
+        { key: '_acts', title: '操作', width: '170px', align: 'right',
+          render: (r) => {
+            if (!examId) return el('span.fs-xs.c-tertiary', { text: '—' });
+            const st = r.stu_status;
+            const sid = r.stu_id;
+            if (st === 'over') return el('span.fs-xs.c-tertiary', { text: '已结束' });
+            return el('div.row.gap-xs.end', {}, [
+              st === 'locked'
+                ? button('解锁', { variant: 'secondary', size: 'xs', iconName: 'unlock',
+                  onClick: () => doOne('unlock', sid, r) })
+                : button('锁定', { variant: 'warning', size: 'xs', iconName: 'lock',
+                  onClick: () => doOne('lock', sid, r) }),
+              button('收卷', { variant: 'ghost', size: 'xs', iconName: 'send',
+                onClick: () => doOne('submit', sid, r) }),
+            ]);
+          } },
       ],
-      rowActions: examId ? (row) => {
-        const st = row.stu_status;
-        const sid = row.stu_id;
-        if (st === 'over') {
-          return [el('span.fs-xs.c-tertiary', { text: '已结束' })];
-        }
-        if (st === 'locked') {
-          return [button('解锁', { variant: 'secondary', size: 'sm', iconName: 'unlock',
-            onClick: () => doOne('unlock', sid, row) })];
-        }
-        return [
-          button('锁定', { variant: 'warning', size: 'sm', iconName: 'lock',
-            onClick: () => doOne('lock', sid, row) }),
-          button('收卷', { variant: 'secondary', size: 'sm', iconName: 'send',
-            onClick: () => doOne('submit', sid, row) }),
-        ];
-      } : null,
     }));
   }
 

@@ -85,6 +85,11 @@ class ExamController extends BaseController
         $inRoom = $score !== null && in_array($stuStatus, ['online', 'locked'], true);
 
         if (!$inRoom) {
+            // 班级归属校验（首次入场）。已在本场考试内（online/locked）的考生走续考，
+            // 不再校验，避免历史数据把在考考生挡在门外。
+            if (!Exam::isStudentEligible($exam, (string) ($student['class_id'] ?? ''))) {
+                throw new HttpException(403, '你不在本场考试的参考范围内，请联系监考教师', 40307);
+            }
             // 首次入场：需已开放入场 + 口令正确 + 处于入场窗口
             if (!Exam::isOpenForEntry($exam)) {
                 throw new HttpException(403, '考场尚未开放入场，请向监考教师确认', 40302);
@@ -121,6 +126,10 @@ class ExamController extends BaseController
             $scores->updateStatus($examId, (string) $in['stu_id'], 'online');
         }
 
+        // 考场登录是从「匿名」提升为「可读写本场试卷」的权限提升，
+        // 必须与 AuthSession::login 一致地换发会话 ID，防会话固定（CWE-384）：
+        // 否则攻击者预置一个已知 session id 即可在考生登录后复用该 id 读取试题。
+        sess_regenerate();
         sess_set(self::SESS_EXAM, [
             'exam_id'  => $examId,
             'stu_id'   => (string) $in['stu_id'],

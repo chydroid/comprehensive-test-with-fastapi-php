@@ -96,11 +96,13 @@ export function ScoreView({ router, query }) {
     const seg = segmented(
       [{ key: '0', label: '全部考试' }, ...exams.map((e) => ({ key: String(e.id), label: e.exam_name }))],
       String(examId),
-      (k) => {
-        examId = Number(k) || 0;
-        router.navigate(`/scores${examId ? `?exam_id=${examId}` : ''}`);
-        init();
-      }
+        (k) => {
+          examId = Number(k) || 0;
+          const next = `/scores${examId ? `?exam_id=${examId}` : ''}`;
+          // 同 monitor：hash 变化时由路由重建视图取数，避免一次点击发两个请求
+          if (location.hash.replace(/^#/, '') === next) init();
+          else router.navigate(next);
+        }
     );
     seg.style.overflowX = 'auto';
     seg.style.maxWidth = '100%';

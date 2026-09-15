@@ -333,7 +333,38 @@ export function openModal({ title, body, footer = null, size = '', onClose, clos
   const bodyEl = el('div.modal-body');
   mount(bodyEl, ...(Array.isArray(body) ? body : [body]));
   modal.append(head, bodyEl);
-  if (footer) modal.append(el('div.modal-footer', {}, Array.isArray(footer) ? footer : [footer]));
+
+  if (footer) {
+    const footerEl = el('div.modal-footer', {}, Array.isArray(footer) ? footer : [footer]);
+    modal.append(footerEl);
+
+      // 让 footer 里的提交按钮真正能提交 body 中的表单。
+      // .modal-footer 是 .modal-body 的兄弟节点，按钮并不在 <form> 内，
+      // 而按 HTML 规范 <button type=submit> 的 form owner 只由「自身 form 属性」
+      // 或「最近的 form 祖先」决定——两者都没有时点击不会触发任何提交
+      // （既不报错也不关弹窗），表现为「点保存没反应」。
+      // 这里为 body 内唯一的表单补 id，并给 footer 的提交按钮补上 form 属性。
+      //
+      // 注意：必须用 getAttribute/setAttribute，不能写 form.id ——
+      // HTMLFormElement 的具名访问会把 name="id" 的控件提升为 form 的自身属性，
+      // 于是 form.id 返回的是那个 <input> 而不是字符串 id：既导致 id 永远补不上，
+      // 又让 setAttribute('form', inputElement) 写成 "[object HTMLInputElement]"，
+      // 按钮的 form owner 仍为 null。「考生管理」的表单正好有 name="id"（准考证号），
+      // 曾因此点「保存」完全无反应。
+      const forms = bodyEl.querySelectorAll('form');
+      if (forms.length === 1) {
+        const form = forms[0];
+        let fid = form.getAttribute('id');
+        if (!fid) {
+          fid = uid('mf');
+          form.setAttribute('id', fid);
+        }
+        for (const btn of footerEl.querySelectorAll('button[type="submit"], input[type="submit"]')) {
+          if (!btn.getAttribute('form')) btn.setAttribute('form', fid);
+        }
+      }
+  }
+
   backdrop.append(modal);
 
   let released = null;
@@ -412,8 +443,12 @@ export function openDrawer({ title, body, footer = null, onClose } = {}) {
   if (footer) drawer.append(el('div.modal-footer', {}, Array.isArray(footer) ? footer : [footer]));
   backdrop.append(drawer);
 
+  let released = null;
   function close() {
     if (!backdrop.isConnected) return;
+    // 释放焦点陷阱必须放在内部 close 里（ESC / 右上角 X / 点击遮罩走的都是这条路径），
+    // 否则 keydown 监听会残留在已移除的 drawer 上。
+    released?.();
     backdrop.remove();
     document.removeEventListener('keydown', onKey);
     if (!$('.modal-backdrop')) document.body.style.overflow = '';
@@ -425,8 +460,8 @@ export function openDrawer({ title, body, footer = null, onClose } = {}) {
   document.addEventListener('keydown', onKey);
   document.body.append(backdrop);
   document.body.style.overflow = 'hidden';
-  const released = trapFocus(drawer);
-  return { close: () => { released(); close(); }, root: drawer, body: bodyEl };
+  released = trapFocus(drawer);
+  return { close, root: drawer, body: bodyEl };
 }
 
 /* ============================ Toast ============================ */

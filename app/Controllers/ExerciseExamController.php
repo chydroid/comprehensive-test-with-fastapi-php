@@ -416,9 +416,10 @@ class ExerciseExamController extends BaseController
                     $right++;
                 }
             }
+            // 幂等门禁：已交卷的不再覆盖成绩（与 ExamEngine::autoGrade 对齐）
             Database::query(
                 "UPDATE `stuscore` SET stu_score = ?, stu_status = 'over'
-                 WHERE exam_id = ? AND stu_id = ?",
+                 WHERE exam_id = ? AND stu_id = ? AND LEFT(stu_status, 4) <> 'over'",
                 [$score, $examId, $stuId]
             );
             // 模拟考试结束，阶段流转到 over

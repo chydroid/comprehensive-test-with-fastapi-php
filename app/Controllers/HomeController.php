@@ -20,10 +20,28 @@ use Core\Response;
  */
 class HomeController extends BaseController
 {
+    /**
+     * /api/public/site 允许对外暴露的站点配置键（纯展示信息，无安全语义）。
+     * siteconfig 表同时存放 App\Services\Setting 的运行参数，故必须白名单过滤。
+     */
+    private const PUBLIC_SITE_KEYS = [
+        'site_title', 'title', 'site_desc', 'copyright', 'icp', 'phone', 'address',
+    ];
+
     /** GET /api/public/site —— 站点配置（标题/版权/联系方式）+ 基础统计 */
     public function site(): Response
     {
-        $config = (new SiteConfig())->allAsMap();
+        // 只下发站点展示类字段。此前直接把整张 siteconfig 表 allAsMap() 抛出去，
+        // 而 App\Services\Setting 把运行参数写在**同一张表**里 —— 管理员一保存
+        // 「系统设置」，限流阈值 / 密码最小长度等安全参数就会从这个无鉴权接口泄露，
+        // Setting::publicSubset() 的白名单设计也被架空。
+        $all = (new SiteConfig())->allAsMap();
+        $config = [];
+        foreach (self::PUBLIC_SITE_KEYS as $key) {
+            if (array_key_exists($key, $all)) {
+                $config[$key] = $all[$key];
+            }
+        }
         $quizStats = Database::fetch(
             "SELECT
                 SUM(CASE WHEN quiz_class='radio1'   THEN 1 ELSE 0 END) AS radio1,

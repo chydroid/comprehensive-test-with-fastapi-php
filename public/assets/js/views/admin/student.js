@@ -122,20 +122,22 @@ export async function StudentView() {
           options: [{ value: '男', label: '男' }, { value: '女', label: '女' }] },
         { name: 'grade_id', label: '单位', type: 'select', placeholder: '请选择单位', options: gradeOptions },
         { name: 'class_id', label: '班级', type: 'select', placeholder: '请选择班级', options: classOptions },
-        { name: 'stu_pwd', label: '登录密码', type: 'password', required: !isEdit,
-          placeholder: isEdit ? '留空表示不修改' : '留空则默认为准考证号',
-          hint: isEdit ? '不修改请留空' : '建议使用强密码' },
-      ],
-      values: isEdit ? {
-        id: row.id, stu_name: row.stu_name, stu_sex: row.stu_sex,
-        grade_id: row.grade_id, class_id: row.class_id,
-      } : {},
-      transform: (v) => {
-        const out = { ...v };
-        if (!out.stu_pwd) delete out.stu_pwd;
-        if (isEdit) out.id = row.id;
-        return out;
-      },
+          // 字段名必须是 password：后端 Admin\StudentController 校验/读取的是 'password'。
+          // 此前发 stu_pwd，后端读不到 → 管理员设置的密码被静默丢弃、回退成「准考证号」。
+          { name: 'password', label: '登录密码', type: 'password', required: !isEdit,
+            placeholder: isEdit ? '留空表示不修改' : '留空则默认为准考证号',
+            hint: isEdit ? '不修改请留空' : '建议使用强密码' },
+        ],
+        values: isEdit ? {
+          id: row.id, stu_name: row.stu_name, stu_sex: row.stu_sex,
+          grade_id: row.grade_id, class_id: row.class_id,
+        } : {},
+        transform: (v) => {
+          const out = { ...v };
+          if (!out.password) delete out.password;
+          if (isEdit) out.id = row.id;
+          return out;
+        },
       onSubmit: (payload) => (isEdit ? adminApi.updateStudent(row.id, payload) : adminApi.createStudent(payload)),
       onSaved: () => list.load(),
       size: 'lg',

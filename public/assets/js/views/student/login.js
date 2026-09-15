@@ -83,13 +83,14 @@ export function StudentRegisterView({ router }) {
     submitBtn,
   ]);
 
-  // 加载下拉数据
-  (async () => {
-    const res = await studentApi.registerOptions().catch(() => null);
-    if (!res) return;
-    fill(gradeSel, (res.grades || []).map((g) => ({ value: g.grade_name || String(g.id), label: g.grade_name || g.id })), '请选择单位');
-    fill(classSel, (res.classes || []).map((c) => ({ value: c.class_name || String(c.id), label: c.class_name || c.id })), '请选择班级');
-  })();
+    // 加载下拉数据（value 用 ID：后端排卷/待考列表一律按 class_id 的 ID 匹配，
+    // 提交名称会让该考生此后匹配不到任何考试）
+    (async () => {
+      const res = await studentApi.registerOptions().catch(() => null);
+      if (!res) return;
+      fill(gradeSel, (res.grades || []).map((g) => ({ value: String(g.id), label: g.grade_name || String(g.id) })), '请选择单位');
+      fill(classSel, (res.classes || []).map((c) => ({ value: String(c.id), label: c.class_name || String(c.id) })), '请选择班级');
+    })();
 
   function fill(sel, opts, placeholder) {
     clear(sel);
