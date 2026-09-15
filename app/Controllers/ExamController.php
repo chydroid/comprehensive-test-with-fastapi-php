@@ -61,9 +61,16 @@ class ExamController extends BaseController
         }
 
         // 校验考生凭据
-        $student = (new \App\Models\Student())->find($in['stu_id']);
+        $students = new \App\Models\Student();
+        $student = $students->find($in['stu_id']);
         if ($student === null || !Password::verify($in['password'], (string) $student['stu_pwd'])) {
             throw new HttpException(401, '准考证号或密码不正确', 40101);
+        }
+
+        // 旧 md5 哈希验证成功后自动升级为 bcrypt（与门户/考生登录保持一致，
+        // 否则只用考场入口登录的旧账号会一直是 md5）
+        if (Password::needsRehash((string) $student['stu_pwd'])) {
+            $students->update($student['id'], ['stu_pwd' => Password::hash($in['password'])]);
         }
 
         $scores = new StuScore();

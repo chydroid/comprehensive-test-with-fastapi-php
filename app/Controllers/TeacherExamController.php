@@ -339,7 +339,10 @@ class TeacherExamController extends BaseController
     public function scores(): Response
     {
         $examId = (int) $this->request->query('exam_id', $this->request->query('id', 0));
-        $exams = (new Exam())->finishedList();
+        // 只列本教师名下的已结束考试：否则下拉里会出现他人考试，
+        // 选中后 assertOwnExam 404 且前端静默失败成空白页。
+        $teaName = (string) ($this->authTeacher()['tea_name'] ?? '');
+        $exams = (new Exam())->finishedList($teaName);
 
         if ($examId <= 0) {
             return $this->ok(['exams' => $exams, 'exam_id' => 0, 'list' => []]);

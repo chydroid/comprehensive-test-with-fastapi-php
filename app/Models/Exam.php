@@ -131,17 +131,28 @@ class Exam extends Model
         );
     }
 
-    /** 已结束的正式考试（排除模拟考试），供成绩模块选择 */
-    public function finishedList(): array
+    /**
+     * 已结束的正式考试（排除模拟考试），供成绩模块选择。
+     *
+     * @param string|null $teaName 传入监考教师姓名时，只返回该教师名下的考试。
+     *   教师端成绩查询此前用无参版本，导致下拉里出现**其他教师**的考试，
+     *   选中后 assertOwnExam 直接 404（且前端静默失败成空白页），
+     *   同时也把他人考试的名称泄露给了无权限的教师。
+     */
+    public function finishedList(?string $teaName = null): array
     {
-        return \Core\Database::fetchAll(
-            "SELECT e.id, e.exam_name, e.exam_status, e.exam_score, s.subj_name
+        $sql = "SELECT e.id, e.exam_name, e.exam_status, e.exam_score, s.subj_name
              FROM `examinfo` e
              INNER JOIN `subject` s ON s.id = e.subj_id
              WHERE LEFT(e.exam_status, 4) = 'over'
-               AND COALESCE(e.exam_class, '') != '模拟考试'
-             ORDER BY e.id DESC"
-        );
+               AND COALESCE(e.exam_class, '') != '模拟考试'";
+        $params = [];
+        if ($teaName !== null && $teaName !== '') {
+            $sql .= ' AND e.exam_tea = ?';
+            $params[] = $teaName;
+        }
+        $sql .= ' ORDER BY e.id DESC';
+        return \Core\Database::fetchAll($sql, $params);
     }
 
     /**

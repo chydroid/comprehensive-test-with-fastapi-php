@@ -615,10 +615,24 @@ export function TeacherScoresView({ router, query }) {
 
   async function load() {
     const res = await withLoading(tableSlot, () => teacherApi.scores(state.examId ? { exam_id: state.examId } : {}));
-    if (!res.ok) return;
+    if (!res.ok) {
+      // 此前直接 return，页面只剩空白，用户无从判断发生了什么（表现为"点开就是白板"）。
+      mount(tableSlot, alertBox(res.error?.message || '成绩加载失败，请稍后重试', { type: 'danger' }));
+      return;
+    }
     state.exams = res.result.exams || [];
     state.list = res.result.list || [];
     state.exam = res.result.exam || null;
+
+    // 名下没有已结束的考试时给出明确空态，而不是留一片空白
+    if (!state.exams.length) {
+      mount(tableSlot, emptyStated('暂无已结束的考试', {
+        iconName: 'calendar',
+        desc: '只有由您监考的考试结束后，成绩才会出现在这里',
+      }));
+      return;
+    }
+
     if (!state.examId && state.exams.length) {
       state.examId = state.exams[0].id;
       return load();
