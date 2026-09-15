@@ -207,7 +207,7 @@ export function MockReviewView({ router, query }) {
       const body = el('div.card-body.stack');
       body.append(el('div.question-stem', { text: w.quiz_title }));
       if (w.quiz_pic_name) {
-        const img = el('img.question-pic', { src: `/uploads/pic/${w.quiz_pic_name}`, alt: '题目配图' });
+        const img = el('img.question-pic', { src: `/uploads/${w.quiz_pic_name}`, alt: '题目配图', onerror: function () { this.style.display = 'none'; } });
         img.addEventListener('error', () => img.remove());
         body.append(img);
       }

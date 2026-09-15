@@ -167,7 +167,7 @@ export function createExamRunner(cfg) {
 
     // 配图
     const pic = q.quiz_pic_name
-      ? el('img.question-pic', { src: `/uploads/pic/${q.quiz_pic_name}`, alt: '题目配图', loading: 'lazy' })
+      ? el('img.question-pic', { src: `/uploads/${q.quiz_pic_name}`, alt: '题目配图', loading: 'lazy', onerror: function () { this.style.display = 'none'; } })
       : null;
     if (pic) {
       pic.addEventListener('error', () => pic.remove());

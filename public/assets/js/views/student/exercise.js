@@ -143,7 +143,7 @@ export function ExerciseView() {
 
     const body = el('div.stack');
     if (q.quiz_pic_name) {
-      const img = el('img.question-pic', { src: `/uploads/pic/${q.quiz_pic_name}`, alt: '题目配图' });
+      const img = el('img.question-pic', { src: `/uploads/${q.quiz_pic_name}`, alt: '题目配图', onerror: function () { this.style.display = 'none'; } });
       img.addEventListener('error', () => img.remove());
       body.append(img);
     }

@@ -293,7 +293,7 @@ export function openModal({ title, body, footer = null, size = '', onClose, clos
   ].filter(Boolean));
 
   const bodyEl = el('div.modal-body');
-  mount(bodyEl, Array.isArray(body) ? body : [body]);
+  mount(bodyEl, ...(Array.isArray(body) ? body : [body]));
   modal.append(head, bodyEl);
   if (footer) modal.append(el('div.modal-footer', {}, Array.isArray(footer) ? footer : [footer]));
   backdrop.append(modal);
@@ -369,7 +369,7 @@ export function openDrawer({ title, body, footer = null, onClose } = {}) {
     el('button.modal-close', { type: 'button', 'aria-label': '关闭', on: { click: () => close() } }, [icon('x', { size: 18 })]),
   ]);
   const bodyEl = el('div.modal-body');
-  mount(bodyEl, Array.isArray(body) ? body : [body]);
+  mount(bodyEl, ...(Array.isArray(body) ? body : [body]));
   drawer.append(head, bodyEl);
   if (footer) drawer.append(el('div.modal-footer', {}, Array.isArray(footer) ? footer : [footer]));
   backdrop.append(drawer);

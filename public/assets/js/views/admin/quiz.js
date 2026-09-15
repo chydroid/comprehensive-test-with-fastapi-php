@@ -384,7 +384,9 @@ export async function QuizView({ router, can }) {
           src: `/uploads/${row.quiz_pic_name}`,
           style: { maxHeight: '220px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' },
           alt: '题目配图',
-          onerror: function () { this.style.display = 'none'; },
+          onerror: function () {
+            this.replaceWith(el('span.fs-sm.c-danger', { text: '图片缺失（文件未找到：/uploads/' + row.quiz_pic_name + '）' }));
+          },
         }),
       ]));
     }
