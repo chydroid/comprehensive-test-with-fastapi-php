@@ -54,7 +54,7 @@ export function el(tag, attrs = {}, children = []) {
     }
   }
 
-  for (const c of [].concat(children)) {
+  for (const c of flattenChildren([children])) {
     if (c === null || c === undefined || c === false) continue;
     node.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
@@ -68,6 +68,21 @@ export function svg(markup) {
   return tpl.content.firstElementChild;
 }
 
+/**
+ * 展平子节点入参：支持任意层级的嵌套数组，并过滤 null/undefined/布尔占位。
+ * 说明：mount(...) / el(...) 允许调用方直接传数组（如 mount(slot, cards.map(...))），
+ * 若只做一层 concat，嵌套数组本身会被 String() 成 "[object HTMLDivElement],..." 渲染出来。
+ */
+function flattenChildren(children) {
+  const out = [];
+  for (const c of children) {
+    if (c === null || c === undefined || c === false || c === true) continue;
+    if (Array.isArray(c)) out.push(...flattenChildren(c));
+    else out.push(c);
+  }
+  return out;
+}
+
 /** 清空子节点 */
 export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
@@ -77,8 +92,7 @@ export function clear(node) {
 /** 替换内容 */
 export function mount(node, ...children) {
   clear(node);
-  for (const c of [].concat(children)) {
-    if (c === null || c === undefined || c === false) continue;
+  for (const c of flattenChildren(children)) {
     node.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
   return node;

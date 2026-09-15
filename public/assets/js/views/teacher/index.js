@@ -324,18 +324,23 @@ export function TeacherMonitorView({ router, query }) {
   async function load() {
     // 自动刷新间隔来自后台设置；取回后再建立轮询
     await loadAppSettings();
-    const res = await withLoading(tableSlot, () => teacherApi.monitor(state.examId ? { exam_id: state.examId } : {}));
+    let res = await withLoading(tableSlot, () => teacherApi.monitor(state.examId ? { exam_id: state.examId } : {}));
     if (!res.ok) return;
     if (!state.examId) {
       state.exams = res.result.exams || [];
       renderPicker();
-      if (state.exams.length) {
-        state.examId = state.exams[0].id;
-        return init();
+      if (!state.exams.length) {
+        clear(statsSlot); clear(controlSlot); clear(toolbarSlot);
+        mount(tableSlot, emptyStated('暂无需要监考的考试', { iconName: 'shield' }));
+        return;
       }
-      clear(statsSlot); clear(controlSlot); clear(toolbarSlot);
-      mount(tableSlot, emptyStated('暂无需要监考的考试', { iconName: 'shield' }));
-      return;
+      // 默认选中第一场监考，并在同一次调用内把详情取回来。
+      // 注意：这里不能写 `return init()` —— init() 的并发保护此刻仍持有 inflight，
+      // 递归进去会被 `if (inflight) return` 直接拦掉，导致统计卡 / 考场控制 / 考生名单
+      // 全部不渲染，点「监考中心」只看到一个空壳（无 exam_id 进入时必然触发）。
+      state.examId = state.exams[0].id;
+      res = await withLoading(tableSlot, () => teacherApi.monitor({ exam_id: state.examId }));
+      if (!res.ok) return;
     }
     state.exams = res.result.exams || state.exams;
     state.list = res.result.list || [];
