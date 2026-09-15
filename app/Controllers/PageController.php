@@ -80,6 +80,7 @@ class PageController extends BaseController
 <link rel="stylesheet" href="/assets/css/shell.css?v={$version}">
 <link rel="stylesheet" href="/assets/css/login.css?v={$version}">
 <link rel="stylesheet" href="/assets/css/portal.css?v={$version}">
+<link rel="stylesheet" href="/assets/css/mobile.css?v={$version}">
 <script>
 // 尽早应用主题，避免首屏白闪
 (function () {

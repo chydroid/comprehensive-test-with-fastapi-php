@@ -77,9 +77,12 @@ export function createExamRunner(cfg) {
   const prevBtn = button('上一题', { variant: 'secondary', iconName: 'chevron-left', onClick: () => go(state.paperId - 1) });
   const nextBtn = button('下一题', { variant: 'primary', iconName: 'chevron-right', onClick: () => go(state.paperId + 1) });
   const submitBtn = button('交卷', { variant: 'danger', iconName: 'check-circle', onClick: () => confirmSubmit() });
+  // 移动端：底部「答题卡」按钮（桌面端由 CSS 隐藏，答题卡在右栏常显），
+  // 点击切换底部抽屉式答题卡。
+  const sheetBtn = button('答题卡', { variant: 'ghost', iconName: 'grid', class: 'sheet-toggle', onClick: () => root.classList.toggle('is-sheet-open') });
   const bottomBar = el('div.exam-bottombar', {}, [
     el('div.exam-bottombar-left', {}, [prevBtn]),
-    el('div.exam-bottombar-right', {}, [nextBtn, submitBtn]),
+    el('div.exam-bottombar-right', {}, [sheetBtn, nextBtn, submitBtn]),
   ]);
 
   /* ---------- 答题卡 ---------- */
@@ -107,7 +110,9 @@ export function createExamRunner(cfg) {
   }
 
   const main = el('div.stack', {}, [questionCard, bottomBar]);
-  root.append(topbar, el('div.exam-body', {}, [main, sheetCard]));
+  // 移动端底部抽屉答题卡的蒙层：点击关闭
+  const sheetScrim = el('div.answer-sheet-scrim', { on: { click: () => root.classList.remove('is-sheet-open') } });
+  root.append(topbar, el('div.exam-body', {}, [main, sheetCard]), sheetScrim);
 
   /* ---------- 逻辑 ---------- */
 
@@ -146,7 +151,7 @@ export function createExamRunner(cfg) {
           class: cls,
           text: String(it.paper_id),
           title: `${g.type_label} 第 ${it.paper_id} 题`,
-          on: { click: () => { if (state.dirty) saveCurrent().then(() => go(it.paper_id)); else go(it.paper_id); } },
+          on: { click: () => { root.classList.remove('is-sheet-open'); if (state.dirty) saveCurrent().then(() => go(it.paper_id)); else go(it.paper_id); } },
         }));
       }
       sheetGrid.append(row);

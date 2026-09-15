@@ -1,0 +1,168 @@
+/* ==========================================================================
+   移动端适配 —— 考生 / 练习 / 模拟考试 / 正式考试 等考试用户界面
+   --------------------------------------------------------------------------
+   说明：
+   - 本文件在 PageController 中于其它样式之后加载，可安全覆盖既有规则。
+   - 仅包含响应式与移动布局规则，桌面端（>768px）基本不受影响。
+   - 视口标签已在 PageController 输出：width=device-width, initial-scale=1。
+   ========================================================================== */
+
+/* ==========================================================================
+   1. 答题界面骨架修正（桌面 / 移动通用）
+   --------------------------------------------------------------------------
+   原 .exam-layout 是两列网格，但 DOM 中 topbar 与 exam-body 同为直接子节点，
+   导致 topbar 被挤进左列、答题正文被压到 280px 右列——桌面即错、移动更不可用。
+   改为纵向流式：topbar 居顶（可吸顶），exam-body 才是「题干 | 答题卡」两列网格。
+   ========================================================================== */
+.exam-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg-app);
+}
+.exam-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.exam-title {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-weight: 600; min-width: 0;
+}
+.exam-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exam-topbar-right { display: flex; align-items: center; gap: var(--sp-3); flex-shrink: 0; }
+.exam-progress { font-size: var(--fs-sm); color: var(--text-secondary); white-space: nowrap; }
+
+.exam-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 288px;
+  gap: var(--sp-6);
+  align-items: start;
+  padding: var(--sp-5);
+}
+.exam-bottombar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-top: var(--sp-5);
+}
+.exam-bottombar-left,
+.exam-bottombar-right { display: flex; align-items: center; gap: var(--sp-2); }
+/* 答题卡按钮：桌面端隐藏（答题卡在右侧栏常显），移动端显示 */
+.exam-bottombar .sheet-toggle { display: none; }
+.answer-sheet { position: sticky; top: var(--sp-6); }
+/* 答题卡蒙层：默认隐藏，仅在移动端抽屉打开时出现（见下方媒体查询） */
+.answer-sheet-scrim { display: none; }
+
+@media (max-width: 1024px) {
+  .exam-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ==========================================================================
+   2. 移动端（≤768px）：固定底栏 + 答题卡底部抽屉
+   --------------------------------------------------------------------------
+   - 上一题 / 下一题 / 交卷 常驻屏幕底部，单手可达；
+   - 答题卡改为从底部上滑的抽屉，由底部「答题卡」按钮或蒙层开关；
+   - 适配 iPhone 安全区（home indicator）。
+   ========================================================================== */
+@media (max-width: 768px) {
+  .exam-body {
+    padding: var(--sp-4);
+    /* 给固定底栏留出空间，避免最后一题被遮挡 */
+    padding-bottom: calc(var(--sp-4) + 76px + env(safe-area-inset-bottom, 0px));
+    gap: var(--sp-4);
+  }
+  .question-card { padding: var(--sp-4); }
+  .question-stem { font-size: var(--fs-base); }
+  .option-item { padding: var(--sp-3); }
+  .option-text { font-size: var(--fs-base); }
+
+  .exam-bottombar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 50;
+    margin: 0;
+    padding: var(--sp-3) var(--sp-4) calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-subtle);
+    box-shadow: 0 -6px 18px -8px rgba(16, 24, 40, .22);
+  }
+  .exam-bottombar-left  { flex: 0 0 auto; }
+  .exam-bottombar-right { flex: 1 1 auto; justify-content: flex-end; }
+  .exam-bottombar .sheet-toggle { display: inline-flex; }
+  /* 让底部按钮在窄屏下不过度拥挤 */
+  .exam-bottombar .btn { padding: 0 var(--sp-3); }
+
+  /* 答题卡：默认隐藏在屏幕下方，打开时上滑为底部抽屉 */
+  .answer-sheet {
+    position: fixed;
+    left: 0; right: 0; bottom: 0; top: auto;
+    max-height: 74vh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    border: 1px solid var(--border-subtle);
+    border-bottom: 0;
+    box-shadow: 0 -12px 32px -8px rgba(16, 24, 40, .34);
+    transform: translateY(100%);
+    transition: transform var(--dur-slow) var(--ease-out);
+    z-index: 40;
+    overflow-y: auto;
+    /* 底部内容避开固定底栏 + 安全区 */
+    padding-bottom: calc(var(--sp-4) + 80px + env(safe-area-inset-bottom, 0px));
+  }
+  .exam-layout.is-sheet-open .answer-sheet { transform: translateY(0); }
+
+  .answer-sheet-scrim {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay);
+    z-index: 35;
+    display: none;
+    animation: fade-in var(--dur-base) var(--ease-out);
+  }
+  .exam-layout.is-sheet-open .answer-sheet-scrim { display: block; }
+
+  .sheet-grid { grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); }
+  .sheet-cell { aspect-ratio: 1; font-size: var(--fs-base); }
+}
+
+@media (max-width: 480px) {
+  .exam-progress { display: none; }
+  .exam-topbar { padding: var(--sp-2) var(--sp-3); }
+  .exam-bottombar .sheet-toggle > span:last-child { display: none; }
+  .exam-bottombar .btn { padding: 0 var(--sp-2); }
+}
+
+/* ==========================================================================
+   3. 考生中心 / 通用卡片 移动微调
+   ========================================================================== */
+.exam-notice .card-body { flex-wrap: wrap; }
+.exam-notice .card-body > .exam-notice-icon { flex-shrink: 0; }
+@media (max-width: 560px) {
+  .exam-notice .card-body { gap: var(--sp-3); }
+  .exam-notice .card-body > button { width: 100%; }
+  .exam-card-head { flex-wrap: wrap; gap: var(--sp-2); }
+  .exam-card-foot { margin-top: var(--sp-3); }
+  /* 表格在窄屏允许换行，避免横向挤压 */
+  .table thead th,
+  .table tbody td { padding: var(--sp-2) var(--sp-3); white-space: normal; }
+  .result-hero { padding: var(--sp-8) var(--sp-4); }
+}
+
+/* ==========================================================================
+   4. 登录 / 注册 移动微调
+   ========================================================================== */
+.login-extra-row {
+  display: flex; align-items: center; justify-content: center;
+  gap: var(--sp-2); flex-wrap: wrap;
+}
+@media (max-width: 380px) {
+  .login-panel { padding: var(--sp-5); }
+}
