@@ -9,15 +9,17 @@
 import { el, clear } from '../../core/dom.js';
 import {
   button, card, openModal, notify, alertBox, table, field, input, select,
-  emptyStated, confirmDialog, badge,
+  emptyStated, confirmDialog, badge, checkboxGroup,
 } from '../../ui/components.js';
 import { teacherApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
-import { fmtScore, fmtNumber, normalizeTime, today, nowTime } from '../../core/format.js';
+import { fmtScore, fmtNumber, normalizeTime, defaultExamWindow } from '../../core/format.js';
 
 const PAPER_TYPES = ['radio1', 'radio2', 'checkbox', 'text'];
 const DIFFS = ['easy', 'mid', 'hard'];
 const DIFF_LABELS = { easy: '易', mid: '中', hard: '难' };
+/** 难度字段名 → 题库 quiz_diff 代码（与 Exam::checkStock 一致） */
+const DIFF_CODES = { easy: 'Y', mid: 'Z', hard: 'N' };
 const TYPE_LABELS = {
   radio1: '判断题', radio2: '单选题', checkbox: '多选题', text: '填空题', longtext: '问答题',
 };
@@ -42,6 +44,25 @@ function extractTime(dt) {
 }
 
 /**
+ * 参考班级取值归一为班级 ID 数组。
+ * 旧系统（及历史测试数据）把班级「名称」存进 examinfo.stu_class，
+ * 而班级匹配走的是 stuinfo.class_id（班级 ID），名称无法命中，
+ * 因此这里把名称折算回对应的班级 ID；两边都认不出时原样保留。
+ */
+function toClassIds(value, classes) {
+  return String(value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .map((token) => {
+      const byId = classes.find((c) => String(c.id) === token);
+      if (byId) return String(byId.id);
+      const byName = classes.find((c) => String(c.class_name) === token);
+      return byName ? String(byName.id) : token;
+    });
+}
+
+/**
  * 打开考试编辑弹窗
  * @param {object}   opts
  * @param {number|null} opts.id       为 null 表示新增
@@ -59,17 +80,33 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
   const subjects = options.subjects || [];
   const categories = options.categories || [];
   const teachers = options.teachers || [];
+  const classes = options.classes || [];
 
   const nameInput = input({ value: row.exam_name || '', placeholder: '如：2026 年秋季驾驶理论考试' });
   const subjSelect = select(subjects.map((s) => ({ value: s.id, label: s.subj_name })),
     { value: String(row.subj_id ?? ''), placeholder: '请选择科目' });
   const catSelect = select(categories.map((c) => ({ value: c.id, label: c.category_name })),
     { value: String(row.exam_category_id ?? ''), placeholder: '请选择类别' });
-  const dateInput = input({ type: 'date', value: (row.exam_start || today()).slice(0, 10) });
-  const startInput = input({ value: extractTime(row.exam_start) || nowTime(), placeholder: '如 17:50' });
-  const endInput = input({ value: extractTime(row.exam_end) || '', placeholder: '如 19:50（跨天自动识别）' });
+
+  // 新建时的时间默认值：开始 = 当前 + 10 分钟，结束 = 开始 + 1 小时；编辑时沿用原有时间
+  const def = defaultExamWindow();
+  const dateInput = input({ type: 'date', value: (isEdit ? row.exam_start : def.date)?.slice(0, 10) || def.date });
+  const startInput = input({ value: extractTime(isEdit ? row.exam_start : '') || def.start, placeholder: '如 17:50' });
+  const endInput = input({
+    value: extractTime(isEdit ? row.exam_end : '') || (isEdit ? '' : def.end),
+    placeholder: '如 19:50（跨天自动识别）',
+  });
   const teacherInput = input({ value: row.exam_tea || '', placeholder: '留空默认填自己' });
-  const classInput = input({ value: row.stu_class || '', placeholder: '多个班级用逗号分隔，留空表示全部' });
+
+  // 参考班级：多选（提交班级 ID 列表）。仅有一个班级时默认选中该班级。
+  const classCtrl = checkboxGroup(
+    classes.map((c) => ({ value: c.id, label: c.class_name })),
+    {
+      values: isEdit
+        ? toClassIds(row.stu_class, classes)
+        : (classes.length === 1 ? [classes[0].id] : []),
+    },
+  );
 
   /* ---------- 组卷矩阵 ---------- */
   const counts = {};
@@ -81,9 +118,10 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     const countCtls = [];
     for (const d of DIFFS) {
       const key = `${t}_${d}_sum`;
-      const ctl = input({ type: 'number', value: row[key] ?? 0, class: 'input-sm' });
-      ctl.min = '0';
+      // 题目数量只允许数字：text + inputmode 而非 number（number 仍可输入 - . e）
+      const ctl = input({ type: 'text', value: row[key] ?? 0, class: 'input-sm', inputmode: 'numeric' });
       ctl.style.width = '72px';
+      bindCountControl(ctl, t, d);
       counts[key] = ctl;
       countCtls.push(ctl);
       tds.push(el('td', { align: 'center' }, [ctl]));
@@ -139,6 +177,51 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     return out;
   }
 
+  /**
+   * 数量输入框：① 只允许数字（粘贴/输入法也会被过滤）；② 失焦校验题库存量。
+   * 过滤挂在 input 上、recalc 挂在其后注册，故 recalc 读到的总是过滤后的值。
+   */
+  function bindCountControl(ctl, type, diff) {
+    ctl.addEventListener('beforeinput', (e) => {
+      if (e.data != null && /\D/.test(String(e.data))) e.preventDefault();
+    });
+    ctl.addEventListener('input', () => {
+      const digits = String(ctl.value).replace(/\D+/g, '').replace(/^0+(?=\d)/, '');
+      if (digits !== ctl.value) ctl.value = digits;
+      ctl.classList.remove('is-invalid');
+    });
+    ctl.addEventListener('blur', () => { void checkCellStock(ctl, type, diff); });
+  }
+
+  /**
+   * 失焦校验：该「题型 × 难度」在所选科目下的题库存量是否够用。
+   * 不足时 toast 提醒并把焦点交还该输入框，避免用户误以为数量已生效。
+   */
+  async function checkCellStock(ctl, type, diff) {
+    const need = Number(ctl.value) || 0;
+    const subjId = Number(subjSelect.value) || 0;
+    // 数量为 0 无需求；未选科目则无从判断（保存时后端仍会兜底校验）
+    if (need <= 0 || subjId <= 0) return;
+
+    // 失焦可能连续发生，用序号丢弃过期响应，避免慢请求把焦点抢回来
+    const seq = String(Number(ctl.dataset.stockSeq || 0) + 1);
+    ctl.dataset.stockSeq = seq;
+    const res = await teacherApi.examQuizCount(0, { subj_id: subjId, ...collectMatrix() })
+      .catch(() => null);
+    if (ctl.dataset.stockSeq !== seq || !ctl.isConnected) return;
+
+    const miss = (res?.shortfall || []).find((s) => s.type === type && s.diff === DIFF_CODES[diff]);
+    if (miss === undefined) { ctl.classList.remove('is-invalid'); return; }
+
+    ctl.classList.add('is-invalid');
+    notify.warning(
+      `${TYPE_LABELS[type] || type}（${DIFF_LABELS[diff]}）题量不足：题库仅 ${miss.have} 道，当前需要 ${miss.need} 道`,
+      { title: '题量不足' },
+    );
+    ctl.focus();
+    ctl.select?.();
+  }
+
   const checkBtn = button('检测题库库存', {
     variant: 'secondary', iconName: 'database',
     onClick: (e) => withLoading(e.currentTarget, async () => {
@@ -169,8 +252,12 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
       field('考试日期', dateInput, { required: true }),
       field('监考教师', teacherInput, { hint: '留空则默认填当前登录教师' }),
       field('开始时间', startInput, { required: true, hint: '支持 1750 / 17:50 等写法' }),
-      field('结束时间', endInput, { hint: '跨天会自动加一天' }),
-      el('div.span-2', {}, [field('参考班级', classInput, { hint: '留空表示所有班级' })]),
+      field('结束时间', endInput, { required: true, hint: '默认开始后 1 小时；跨天会自动加一天' }),
+      el('div.span-2', {}, [field('参考班级', classCtrl, {
+        hint: classes.length
+          ? '可多选，仅选中的班级考生参加本场考试；不选则考生看不到该考试，也无法出题'
+          : '暂无班级数据，请先联系管理员在「班级管理」中添加班级',
+      })]),
     ]),
     card({
       title: '组卷参数',
@@ -205,7 +292,7 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
       exam_start_time: normalizeTime(startInput.value),
       exam_end_time: normalizeTime(endInput.value),
       exam_tea: teacherInput.value.trim(),
-      stu_class: classInput.value.trim(),
+      stu_class: classCtrl.values().join(','),
       ...collectMatrix(),
     };
     if (!payload.exam_name) { errSlot.append(alertBox('请填写考试名称', { type: 'warning' })); return; }

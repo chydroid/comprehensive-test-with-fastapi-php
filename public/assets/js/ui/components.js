@@ -94,6 +94,44 @@ export function checkbox(label, { name, checked = false, value = '1', disabled =
   return el('label.checkbox', { for: id }, [box, el('span', { text: label })]);
 }
 
+/**
+ * 多选组：一组并排复选框，用于「多选」类字段（如考试的参考班级）。
+ * 通过返回节点的 `values()` 读取当前选中值数组（并按选项顺序排列）。
+ * @param {{value:string|number,label:string,disabled?:boolean}[]} options
+ * @param {{name?:string, values?:string|number|(string|number)[]}} [opts]
+ *        values 支持数组或逗号分隔字符串，作为初始选中项
+ */
+export function checkboxGroup(options, { name = '', values = [] } = {}) {
+  const picked = new Set(
+    (Array.isArray(values) ? values : String(values ?? '').split(','))
+      .map((v) => String(v ?? '').trim())
+      .filter((v) => v !== ''),
+  );
+
+  const node = el('div.checkbox-group', { role: 'group' });
+  for (const opt of options) {
+    const id = uid('cbg');
+    node.append(el('label.checkbox', { for: id }, [
+      el('input', {
+        type: 'checkbox',
+        id,
+        name,
+        value: String(opt.value),
+        checked: picked.has(String(opt.value)),
+        disabled: opt.disabled || false,
+      }),
+      el('span', { text: opt.label }),
+    ]));
+  }
+
+  /** 当前选中的值（按选项渲染顺序） */
+  node.values = () => $$('input[type="checkbox"]', node)
+    .filter((box) => box.checked)
+    .map((box) => box.value);
+
+  return node;
+}
+
 export function switchToggle(label, { name, checked = false, disabled = false, onChange } = {}) {
   const id = uid('sw');
   const cb = el('input', { type: 'checkbox', id, name, checked, disabled });

@@ -157,3 +157,21 @@ export function nowTime() {
   const d = new Date();
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+/** 新建考试默认提前量：开始时间取「当前 + 10 分钟」 */
+export const DEFAULT_EXAM_LEAD_MINUTES = 10;
+/** 新建考试默认时长：结束时间取「开始 + 1 小时」 */
+export const DEFAULT_EXAM_DURATION_MINUTES = 60;
+
+/**
+ * 新建考试的默认时间窗：开始 = now + 10 分钟，结束 = 开始 + 1 小时。
+ * 开始时间跨天时日期顺延到次日；结束时间跨天由后端按「加一天」处理，
+ * 故 end 只取 HH:mm（与表单的结束时间字段一致）。
+ * @param {Date} [now]
+ * @returns {{date:string, start:string, end:string}} date=YYYY-MM-DD，start/end=HH:mm
+ */
+export function defaultExamWindow(now = new Date()) {
+  const start = new Date(now.getTime() + DEFAULT_EXAM_LEAD_MINUTES * 60000);
+  const end = new Date(start.getTime() + DEFAULT_EXAM_DURATION_MINUTES * 60000);
+  return { date: fmtDate(start), start: fmtTime(start), end: fmtTime(end) };
+}
