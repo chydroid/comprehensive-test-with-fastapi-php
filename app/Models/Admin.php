@@ -41,6 +41,27 @@ class Admin extends Model
         }
         unset($row['password']);
         $row['admin_power_label'] = self::ROLE_LABELS[$row['admin_power'] ?? ''] ?? '未知';
+        // 头像规范化：数据库可能只存裸文件名（旧数据位于 /uploads/avatars/），
+        // 前端需要完整同源 URL；空值交由前端回退到首字母占位。
+        $row['avatar'] = self::normalizeAvatar($row['avatar'] ?? '');
         return $row;
+    }
+
+    /**
+     * 把头像字段规范化为可直出的同源 URL
+     * - 空字符串 -> 空（前端显示首字母）
+     * - 已是 /、http、data: 开头 -> 原样返回
+     * - 裸文件名 -> 补 /uploads/avatars/ 前缀（与旧数据落盘位置一致）
+     */
+    public static function normalizeAvatar(string $avatar): string
+    {
+        $avatar = trim($avatar);
+        if ($avatar === '') {
+            return '';
+        }
+        if (preg_match('#^(/|https?://|data:)#i', $avatar)) {
+            return $avatar;
+        }
+        return '/uploads/avatars/' . ltrim($avatar, '/');
     }
 }

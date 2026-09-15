@@ -427,7 +427,13 @@ export function ProfileView({ shell, session }) {
   function renderAvatar() {
     clear(avatarBox);
     if (avatarUrl) {
-      avatarBox.append(el('img', { src: avatarUrl, alt: '头像' }));
+      const img = el('img', { src: avatarUrl, alt: '头像' });
+      img.onerror = () => {
+        img.remove();
+        avatarBox.textContent = (admin.username || '?').slice(0, 1).toUpperCase();
+        avatarBox.style.background = '';
+      };
+      avatarBox.append(img);
     } else {
       avatarBox.textContent = (admin.username || '?').slice(0, 1).toUpperCase();
       avatarBox.style.background = '';

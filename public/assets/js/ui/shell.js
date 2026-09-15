@@ -119,6 +119,12 @@ export function createShell(cfg) {
     const av = el('div.avatar');
     if (user.avatar) {
       const img = el('img', { src: user.avatar, alt: '' });
+      // 头像加载失败（如文件缺失）时回退到首字母占位，避免破图与重复 404
+      img.onerror = () => {
+        img.remove();
+        av.style.background = hashTone(user.name || '', AVATAR_TONES);
+        av.textContent = initials(user.name);
+      };
       av.append(img);
     } else {
       av.style.background = hashTone(user.name || '', AVATAR_TONES);

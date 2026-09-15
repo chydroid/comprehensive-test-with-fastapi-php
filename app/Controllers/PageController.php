@@ -81,16 +81,7 @@ class PageController extends BaseController
 <link rel="stylesheet" href="/assets/css/login.css?v={$version}">
 <link rel="stylesheet" href="/assets/css/portal.css?v={$version}">
 <link rel="stylesheet" href="/assets/css/mobile.css?v={$version}">
-<script>
-// 尽早应用主题，避免首屏白闪
-(function () {
-  try {
-    var saved = localStorage.getItem('csip:theme');
-    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    document.documentElement.setAttribute('data-theme', saved || (dark ? 'dark' : 'light'));
-  } catch (e) {}
-})();
-</script>
+<script src="/assets/js/theme.js?v={$version}"></script>
 </head>
 <body>
 <div id="app" data-page="{$key}" data-subtitle="{$subtitle}">
@@ -105,13 +96,7 @@ class PageController extends BaseController
     本系统需要启用 JavaScript 才能正常使用，请在浏览器设置中启用后刷新页面。
   </div>
 </noscript>
-<script>
-// 入口脚本挂载后清掉启动占位（各端首次渲染即移除）
-window.__APP_READY__ = function () {
-  var s = document.querySelector('.boot-splash');
-  if (s) { s.remove(); }
-};
-</script>
+<script src="/assets/js/app-ready.js?v={$version}"></script>
 <script type="module" src="{$entry}?v={$version}"></script>
 </body>
 </html>
