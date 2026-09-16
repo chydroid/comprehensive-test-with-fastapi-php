@@ -3,7 +3,7 @@
  */
 
 import { el, clear } from '../core/dom.js';
-import { icon } from '../core/icons.js';
+import { logoMark } from '../core/logo.js';
 import { button, field, input, alertBox } from './components.js';
 
 /**
@@ -11,8 +11,6 @@ import { button, field, input, alertBox } from './components.js';
  * @param {object} cfg
  * @param {string} cfg.title
  * @param {string} cfg.subtitle
- * @param {string} [cfg.accent]        品牌图标名
- * @param {string} [cfg.brandMark]     品牌字（单字）
  * @param {{name:string,label:string,type?:string,placeholder?:string,value?:string,autocomplete?:string,inputmode?:string}[]} cfg.fields
  * @param {(values:object)=>Promise<any>} cfg.onSubmit
  * @param {Node[]} [cfg.extra]         底部附加内容
@@ -20,7 +18,7 @@ import { button, field, input, alertBox } from './components.js';
  * @param {{hint?:string, demo?:Node}} [cfg.aside]      侧栏补充
  */
 export function renderLogin(cfg) {
-  const { title, subtitle, accent = 'shield', brandMark = '考', fields, onSubmit, extra = [], beforeSubmit } = cfg;
+  const { title, subtitle, fields, onSubmit, extra = [], beforeSubmit } = cfg;
 
   const form = el('form', { class: 'login-form' });
   const controls = {};
@@ -80,8 +78,8 @@ export function renderLogin(cfg) {
 
   const panel = el('div.login-panel', {}, [
     el('div.login-brand', {}, [
-      el('div.brand-mark', { style: { width: '42px', height: '42px', fontSize: 'var(--fs-lg)' } },
-        [icon(accent, { size: 22 })]),
+      // 品牌标识：墨色取 --logo-ink（亮底深蓝 / 暗底浅蓝，见 tokens.css）
+      logoMark({ height: 42 }),
       el('div', {}, [
         el('h1', { style: { fontSize: 'var(--fs-xl)', marginBottom: '2px' }, text: title }),
         el('p.c-secondary.fs-sm', { style: { margin: '0' }, text: subtitle }),

@@ -63,6 +63,7 @@ class PageController extends BaseController
     {
         [$title, $entry, $subtitle] = self::PAGES[$key] ?? self::PAGES['portal'];
         $version = $this->assetVersion();
+        $logo = $this->bootLogo();
 
         $html = <<<HTML
 <!DOCTYPE html>
@@ -86,7 +87,7 @@ class PageController extends BaseController
 <body>
 <div id="app" data-page="{$key}" data-subtitle="{$subtitle}">
   <div class="boot-splash">
-    <div class="boot-logo">考</div>
+    <div class="boot-logo">{$logo}</div>
     <div class="boot-spinner"></div>
     <div class="boot-text">正在加载 {$title}…</div>
   </div>
@@ -103,6 +104,25 @@ class PageController extends BaseController
 HTML;
 
         return $this->response->html($html);
+    }
+
+    /**
+     * 启动闪屏用的 LOGO。
+     *
+     * 直接读取矢量资产内联进 HTML，而不是 <img src>：
+     *   1. 闪屏要在 JS 执行之前就画出来，用 <img> 会晚一拍、还可能闪一下；
+     *   2. 内联的 SVG 才能吃到主题变量（--logo-ink / --logo-accent），
+     *      暗色主题下墨色自动变浅，<img> 加载的独立文档继承不到。
+     * 读取文件而不是把路径数据再抄一份到 PHP，保证几何只有一处定义。
+     */
+    private function bootLogo(): string
+    {
+        static $svg = null;
+        if ($svg === null) {
+            $path = BASE_PATH . '/public/assets/img/logo-mark.svg';
+            $svg = is_file($path) ? trim((string) file_get_contents($path)) : '';
+        }
+        return $svg;
     }
 
     /**

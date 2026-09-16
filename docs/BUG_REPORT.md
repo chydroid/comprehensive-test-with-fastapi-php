@@ -882,3 +882,110 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 
 **遗留**：`BUG-220`（N+1 查询与 `limit 200` 硬编码）仍未实施；第一轮记录的限流、密码策略
 两项加固仍待产品决策。
+
+---
+
+# 第六轮：品牌标识统一（LOGO）+ 门户页布局缺陷（2026-09-16）
+
+本轮由一条需求驱动：「把 `logo.png` 作为本项目的 LOGO，其主形象和文字的颜色
+可以根据背景色进行变化」。落地过程中顺带查出并修复了一处既有的门户页布局缺陷。
+
+## 一、LOGO 统一（需求实现）
+
+**原状**：全站没有真正的品牌图形，各端用「方块 + 单字」的字号牌充当品牌位
+（管理端「管」、教师端「师」、考生端「考」、练习端「练」），门户页用 `graduation-cap`
+线性图标；favicon 是一枚紫色方块 + 学士帽。四处视觉互不相干。
+
+**做法**：把源图 `public/uploads/logo.png`（256×333，DEEPBLUE 锚形标）
+**矢量化**为可无损缩放、且颜色可由 CSS 驱动的标识。
+
+1. **矢量化**（`temp/logo/vectorize.py`）
+   - 不用 potrace：本机 `potracer` 端口不回传内孔（`Curve.children` 恒为 `None`），
+     青绿环与字母 `D/P/B` 的镂空会整体丢失。改为自实现 **crack-following 轮廓追踪**
+     （沿像素格边界走，内孔天然是独立闭合环，配 `fill-rule="evenodd"` 还原）
+     \+ **RDP 简化**（容差 1.2 格 = 0.3 源像素）。
+   - 关键细节：alpha 先做 4× LANCZOS 上采样再二值化，轮廓落在亚像素位置，
+     避免低分辨率源图带来的方块锯齿；青绿/墨色交界处的抗锯齿像素会污染出一圈
+     「墨色细毛刺」，用「青绿外扩 2px 后扣除 + 开运算」清掉。
+   - 结果：墨色 13 条轮廓（锚体 1 + 8 个字母 + 4 个内孔）、青绿 3 条（外圈 + 内孔 + 箭头）。
+   - **保真度实测**：把生成的 SVG 以 1:1 渲染回 256×333 与原图逐像素比对，
+     覆盖率 IoU = **0.9507**，差异仅分布在抗锯齿边界（矢量侧多出约 1px 的软化边）。
+   - 产出 `logo.svg`（完整标识，含 DEEPBLUE 文字）、`logo-mark.svg`（仅环 + 锚）、
+     `favicon.svg`（深蓝圆角块 + 白锚 + 青绿环，标签栏亮暗底都可辨）。
+
+2. **颜色如何「随背景变化」**（核心设计）
+   - 内联 SVG 而非 `<img src>`：`<img>` 加载的外部 SVG 是**独立文档**，
+     拿不到宿主的 `currentColor` 与 CSS 变量，颜色只能写死。
+   - `core/logo.js` 用 `createElementNS` 把 SVG 直接构建进当前文档，两条路径分别取
+     `var(--logo-ink, currentColor)`（锚体 + DEEPBLUE 文字）与
+     `var(--logo-accent, ...)`（青绿环）。
+   - 于是 `tokens.css` 按主题给出默认值即可：亮主题墨色 `#133464`、暗主题提到 `#cfe0ff`；
+     `var(..., currentColor)` 的兜底还保证「扔进任意深色卡片也自动变浅」。
+   - 实测取色：亮主题 `rgb(19, 52, 100)`（亮度 48）、暗主题 `rgb(207, 224, 255)`（亮度 223）。
+
+3. **落位**（7 处）
+   - 启动闪屏：`PageController::bootLogo()` **读取矢量资产内联进 HTML**——
+     闪屏要在 JS 执行前画出来，且内联才能吃到主题变量；读文件而非抄一份路径数据到
+     PHP，保证几何只有一处定义。
+   - 侧边栏（`ui/shell.js`）、通用登录页（`ui/login.js`）、考生注册 / 考场入口
+     （`views/student/login.js`、`views/student/exam.js`）、门户导航与页脚
+     （`views/portal.js` ×3）。
+   - 退役旧的 `.brand-mark` 字号牌：删除其 CSS 与全部调用，并清理随之失效的
+     `brandMark`、`accent` 配置项（6 个调用点）。
+
+## 二、BUG-234　【P1】门户页导航纵向溢出、统计卡塌成单列（既有缺陷）
+
+- **现象**：门户首页 `/` 的导航条内容竖排并溢出 64px 高度压住 hero 区；
+  「题库总量 / 已开考试 / 注册考生 / 题型覆盖」四张统计卡挤成一列；
+  页脚品牌行与联系方式不并排。
+- **根因**：**JS 用的类名与 CSS 里定义的类名不是同一批**，且没有任何机制会报错——
+  元素只是退化成 `display: block` 的默认布局：
+
+  | JS 中的类名 | CSS 是否有规则 | 后果 |
+  |---|---|---|
+  | `.portal-nav-inner` | ✗ 无 | 导航内容竖排、溢出 |
+  | `.portal-nav-brand` | ✗ 无 | LOGO 与站名上下堆叠 |
+  | `.portal-nav-links` | 仅 `.portal-nav-links a.is-active` | 链接竖排 |
+  | `.portal-stats-inner` | ✗ 无 | 统计卡不进栅格 → 单列 |
+  | `.portal-footer-inner` / `.portal-footer-brand` | ✗ 无 | 页脚不并排 |
+  | `.hero-sub` | ✗（CSS 里叫 `.hero-lead`） | 引导语失去排版 |
+  | `.muted` | ✗（全站未定义） | 弱化文字色失效 |
+
+  更隐蔽的是 `.portal-stats`：CSS 把栅格写在了外层槽位 div 上，而内层容器没有参与栅格，
+  于是 `grid-template-columns` 算出 `1214px 0px 0px 0px 0px 0px`——看着「有栅格」，
+  实际是单列。
+- **为什么此前没被抓到**：既有巡检的断言是「文本存在 + 无 JS 报错」，
+  而这类缺陷既不报错、文本也都在。**静态检查、后端测试、jsdom 冒烟全都抓不到**。
+- **修复**：补齐容器布局（导航内层 flex 行 + 品牌位间距 + 链接靠右、统计区内层栅格、
+  页脚两栏）；把 CSS 里那条从未命中的 `.portal-nav .nav-links` 改名为
+  `.portal-nav .portal-nav-links` 使其真正生效；`.hero-sub` 对齐为 `.hero-lead`；
+  `.muted` 按门户页局部定义（避免波及其他端的既有观感）。
+- **顺带修掉一处移动端可达性问题**：原 `@media (max-width:820px)` 里
+  `.portal-nav .nav-links { display:none }` 会把「首页 / 成绩榜 / 在线练习」三个入口
+  在手机上彻底隐藏（无汉堡菜单兜底）。改为横向滚动，入口保持可达。
+- **新增巡检手段**：`temp/domtest/css_coverage_audit.mjs` —— 在真实浏览器里收集
+  DOM 用到的全部类名，再枚举样式表里出现过的类名求差集，直接列出「用了但没有规则」
+  的类名。全部 9 个入口现已归零。
+
+## 三、第六轮验证结果
+
+| 验证 | 结果 |
+|---|---|
+| 后端回归（8 个用例文件） | **372 PASS / 0 FAIL / 0 SKIP**（较上轮 +33，全部为新增 LOGO 契约断言） |
+| 全站浏览器巡检 `temp/domtest/browser_sweep_v6.mjs` | **103 PASS / 0 FAIL** |
+| 匿名首屏巡检 `temp/domtest/verify_me_401.mjs` | **64 PASS / 0 FAIL** |
+| LOGO 专项 `temp/logo/verify.mjs` | **22 PASS / 0 FAIL**（13 个品牌位 × 亮暗双主题的取色与尺寸、闪屏内联、导航/页脚布局） |
+| CSS 覆盖率审计 `temp/domtest/css_coverage_audit.mjs` | 9 个入口共 **0** 个「无规则类名」 |
+| 静态检查 `temp/check_frontend.mjs` | 41 文件，0 语法错误、0 未解析导入 |
+| 图标检查 `temp/check_icons.py` | 88 图标，无非法引用 |
+| 路由审计 `temp/domtest/api_route_audit.mjs` | 前端 145 个调用 vs 后端 156 条路由，无缺失 |
+
+**本轮新增回归防线**：`test/cases/frontend_contract_test.php` 第六节锁定
+「三份 LOGO 资产存在且为矢量」「墨色必须走 `var(--logo-ink, currentColor)` 且暗色主题有覆盖」
+「无视图再使用旧的 `.brand-mark`」「六端闪屏均在服务端内联 LOGO」。
+
+**遗留**：`BUG-220`（N+1 查询与 `limit 200` 硬编码）仍未实施；第一轮记录的限流、密码策略
+两项加固仍待产品决策。另：`login.css` 中 `.portal-stat`（单数）与其子元素
+`.portal-stat .value/.label` 是一批从未命中的死规则（JS 用的是 `.stat-card/.stat-value/.stat-label`），
+本轮未清理以控制改动面，建议后续单独整理。
+

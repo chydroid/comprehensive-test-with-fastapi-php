@@ -35,17 +35,11 @@
   border-bottom: 1px solid var(--sidebar-border);
   overflow: hidden;
 }
-.brand-mark {
-  width: 34px; height: 34px;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
-  color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700;
-  font-size: var(--fs-md);
-  flex-shrink: 0;
-  box-shadow: var(--shadow-brand);
-}
+/* 品牌标识（LOGO）：由 core/logo.js 内联构建，尺寸以 width/height 属性给定，
+   这里只负责它在 flex 行里不被压扁。颜色见 tokens.css 的 --logo-ink / --logo-accent。 */
+.logo { display: block; flex-shrink: 0; }
+/* 需要 LOGO 完全跟随所在位置的文字色时（例如放在彩色/深色区块内），加这个类 */
+.logo--inherit { --logo-ink: currentColor; --logo-ink-strong: currentColor; }
 .brand-text { min-width: 0; }
 .brand-name {
   font-weight: 700;

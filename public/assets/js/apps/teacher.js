@@ -59,8 +59,6 @@ function renderLoginPage() {
   const page = renderLogin({
     title: '教师工作台',
     subtitle: '请使用教师账号登录',
-    accent: 'teacher',
-    brandMark: '师',
     fields: [
       { name: 'username', label: '教师姓名', placeholder: '请输入教师姓名', autocomplete: 'username' },
       { name: 'password', label: '密码', type: 'password', placeholder: '请输入密码', autocomplete: 'current-password' },
@@ -101,7 +99,6 @@ function startShell() {
   shell = createShell({
     brandName: APP_NAME,
     brandSub: '教师',
-    brandMark: '师',
     nav: NAV,
     groups: GROUPS,
     can: () => true,

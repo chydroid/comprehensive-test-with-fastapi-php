@@ -5,6 +5,7 @@
 
 import { el, clear, mount } from '../core/dom.js';
 import { icon } from '../core/icons.js';
+import { logoMark } from '../core/logo.js';
 import { button, badge, emptyStated } from '../ui/components.js';
 import { withLoading } from '../core/bootstrap.js';
 import { siteApi } from '../api/index.js';
@@ -58,7 +59,7 @@ export function PortalView({ router }) {
           el('span', { text: '高效、安全、专业的' }),
           el('span.gradient-text', { text: '在线考核系统' }),
         ]),
-        el('p.hero-sub', {
+        el('p.hero-lead', {
           text: `覆盖题库管理、智能组卷、考场监考与成绩分析的完整闭环，已收录 ${fmtNumber(total)} 道题目、支撑 ${fmtNumber(exams)} 场考试。`,
         }),
         el('div.hero-actions', {}, [
@@ -156,7 +157,7 @@ export function PortalView({ router }) {
     mount(footSlot, el('div.portal-footer-inner', {}, [
       el('div', {}, [
         el('div.portal-footer-brand', {}, [
-          el('div.brand-mark', {}, [icon('graduation-cap', { size: 18 })]),
+          logoMark({ height: 22 }),
           el('span', { text: cfg.title || '在线考试系统' }),
         ]),
         el('p.muted', { text: cfg.copyright || '' }),
@@ -184,7 +185,7 @@ function renderNav({ router, active = 'home' }) {
   return el('nav.portal-nav', {}, [
     el('div.portal-nav-inner', {}, [
       el('div.portal-nav-brand', {}, [
-        el('div.brand-mark', {}, [icon('graduation-cap', { size: 20 })]),
+        logoMark({ height: 30 }),
         el('span', { text: '在线考试系统' }),
       ]),
       el('div.portal-nav-links', {}, [
@@ -284,7 +285,7 @@ export function HeroPageView({ router }) {
   mount(foot, el('div.portal-footer-inner', {}, [
     el('div', {}, [
       el('div.portal-footer-brand', {}, [
-        el('div.brand-mark', {}, [icon('graduation-cap', { size: 18 })]),
+        logoMark({ height: 22 }),
         el('span', { text: '成绩公布 · 历届英雄榜' }),
       ]),
       el('p.muted', { text: '姓名已做脱敏处理，仅展示单位与成绩。' }),

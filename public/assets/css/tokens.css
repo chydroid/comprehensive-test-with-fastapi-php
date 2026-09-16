@@ -16,6 +16,19 @@
   --brand-800: #3730a3;
   --brand-900: #312e81;
 
+  /* ---------- 品牌标识（LOGO）取色 ----------
+     LOGO 由 core/logo.js 内联成 SVG 注入，两条路径分别取：
+       墨色（锚体 + DEEPBLUE 文字） fill: var(--logo-ink[, --logo-ink-strong])
+       青绿环                     fill: var(--logo-accent)
+     墨色刻意「留一个 currentColor 兜底」：任何地方只要没定义这两个变量，
+     就回落到该元素自身的 color —— 于是放在深色卡片里的 LOGO 会自动变浅，
+     放在亮底上的会自动变深，无需为每种背景准备一套图。
+     下面按主题给出的默认值，是为了让 LOGO 在亮/暗底上保持自身的品牌调性
+     （亮底用原本的深蓝、暗底提亮），而不是一味取中性灰。 */
+  --logo-accent: #0bbc9e;
+  --logo-ink: #133464;
+  --logo-ink-strong: #0b2a58;
+
   /* ---------- 语义色 ---------- */
   --success-50:  #ecfdf5;
   --success-500: #10b981;
@@ -168,6 +181,11 @@
 
   --brand-50:  #1c2033;
   --brand-100: #232a4d;
+
+  /* LOGO：暗底把墨色提亮，并让青绿环略提饱和，保证在 #12161c 上的对比度 */
+  --logo-accent: #1ad0b3;
+  --logo-ink: #cfe0ff;
+  --logo-ink-strong: #f2f7ff;
   --success-50: #10281f;
   --warning-50: #2b2110;
   --danger-50:  #2c1416;

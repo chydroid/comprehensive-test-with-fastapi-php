@@ -53,6 +53,37 @@ php bin/setup_db.php
 php bin/server.php
 ```
 
+## 品牌标识（LOGO）
+
+全站 LOGO 为 **DEEPBLUE** 标识（锚 + 青绿环 + 字标），几何取自
+`public/uploads/logo.png` 的矢量化结果，路径数据见 `temp/logo/vectorize.py`。
+
+**它的主形象与文字颜色会随背景自动变化**，这是靠 `currentColor` 实现的：
+
+- `core/logo.js` 把 SVG **内联**进文档（不用 `<img src>`——外部 SVG 拿不到
+  `currentColor` 与 CSS 变量，颜色只能写死），两条路径分别取
+  `var(--logo-ink, currentColor)` 与 `var(--logo-accent, ...)`；
+- `tokens.css` 按主题给出默认墨色（亮底 `#133464` / 暗底 `#cfe0ff`），
+  未定义变量时回落到 `currentColor`，跟随所在上下文的文字色。
+
+因此同一份图形放在白底卡片、深色侧栏、启动闪屏上都自动取到合适的颜色。
+需要临时改色时，在祖先元素上设 `color`，或覆盖 `--logo-ink` / `--logo-accent`。
+
+```js
+import { logoMark, logoLockup } from '../core/logo.js';
+
+logoMark({ height: 30 });    // 环 + 锚，用于已有文字品牌名的位置
+logoLockup({ height: 56 });  // 含 DEEPBLUE 字标，用于独立展示品牌
+```
+
+更换源图后重新生成资产：
+
+```bash
+temp/logo/vectorize.py   # 追踪轮廓 -> temp/logo/trace_raw.json
+temp/logo/gen.py         # -> public/assets/img/{logo,logo-mark,favicon}.svg
+temp/logo/gen_logo_js.mjs # -> public/assets/js/core/logo.js
+```
+
 ## 许可证
 
 MIT

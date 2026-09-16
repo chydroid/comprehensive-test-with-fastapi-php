@@ -91,7 +91,6 @@ function startShell() {
   shell = createShell({
     brandName: APP_NAME,
     brandSub: '考生',
-    brandMark: '考',
     nav: NAV,
     groups: GROUPS,
     can: () => true,

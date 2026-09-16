@@ -3,7 +3,7 @@
  */
 
 import { el, clear, mount } from '../../core/dom.js';
-import { icon } from '../../core/icons.js';
+import { logoMark } from '../../core/logo.js';
 import { renderLogin } from '../../ui/login.js';
 import { button, field, input, select, notify } from '../../ui/components.js';
 import { studentApi } from '../../api/index.js';
@@ -20,8 +20,6 @@ export function StudentLoginView({ router, query, onDone }) {
   const page = renderLogin({
     title: '考生登录',
     subtitle: '使用准考证号或姓名登录',
-    accent: 'graduation-cap',
-    brandMark: '考',
     fields: [
       { name: 'username', label: '准考证号 / 姓名', placeholder: '请输入准考证号或姓名', autocomplete: 'username' },
       { name: 'password', label: '密码', type: 'password', placeholder: '请输入密码', autocomplete: 'current-password' },
@@ -132,7 +130,7 @@ export function StudentRegisterView({ router }) {
   root.append(el('div.login-aurora'));
   root.append(el('div.login-panel', {}, [
     el('div.login-brand', {}, [
-      el('div.brand-mark', { style: { width: '42px', height: '42px' } }, [icon('user-plus', { size: 21 })]),
+      logoMark({ height: 42 }),
       el('div', {}, [
         el('h1', { text: '考生注册' }),
         el('p.muted', { text: '填写真实信息完成注册' }),

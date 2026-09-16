@@ -60,7 +60,6 @@ function startShell() {
   shell = createShell({
     brandName: '在线练习',
     brandSub: '考生',
-    brandMark: '练',
     nav: NAV,
     groups: GROUPS,
     can: () => true,

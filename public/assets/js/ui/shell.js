@@ -5,6 +5,7 @@
 
 import { el, $, mount, clear } from '../core/dom.js';
 import { icon } from '../core/icons.js';
+import { logoMark } from '../core/logo.js';
 import { initials, hashTone } from '../core/format.js';
 import { dropdown, notify, confirmDialog } from '../ui/components.js';
 
@@ -22,7 +23,6 @@ const AVATAR_TONES = [
  * @param {object} cfg
  * @param {string} cfg.brandName
  * @param {string} cfg.brandSub
- * @param {string} [cfg.brandMark]
  * @param {{key:string,label:string,icon:string,badge?:()=>number,perm?:string}[]} cfg.nav
  * @param {{key:string,label:string,icon?:string}[]} [cfg.groups]  分组：nav 项可带 group 字段
  * @param {object} cfg.user     { name, role, avatar }
@@ -32,7 +32,7 @@ const AVATAR_TONES = [
  * @param {number} [cfg.activeCount]  顶栏实时提示
  */
 export function createShell(cfg) {
-  const { brandName, brandSub, brandMark = '考', nav, user, onNavigate, onLogout, can, groups, profileKey = 'profile' } = cfg;
+  const { brandName, brandSub, nav, user, onNavigate, onLogout, can, groups, profileKey = 'profile' } = cfg;
 
   const persistKey = 'csip:sidebar:collapsed';
 
@@ -88,7 +88,8 @@ export function createShell(cfg) {
   }
 
   const brand = el('div.sidebar-brand', {}, [
-    el('div.brand-mark', { text: brandMark }),
+    // 品牌标识：墨色自动适配侧栏底色（亮主题侧栏为白、暗主题为 #12161c）
+    logoMark({ height: 30 }),
     el('div.brand-text', {}, [
       el('div.brand-name.truncate', { text: brandName }),
       el('div.brand-sub.truncate', { text: brandSub || '' }),

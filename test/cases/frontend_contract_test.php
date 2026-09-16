@@ -266,4 +266,92 @@ foreach ($guardedPaths as $guardedPath) {
     });
 }
 
+/* ============================================================
+ * 六、品牌标识（LOGO）契约
+ *
+ * 背景：全站 LOGO 已统一为 DEEPBLUE 矢量标识（几何取自
+ * public/uploads/logo.png 的矢量化结果）。这里锁死四点，防止回退：
+ *
+ *  1) 资产存在且是矢量路径 —— 位图在 16px favicon 与高分屏上都会糊；
+ *  2) 墨色（锚体 + 文字）走 var(--logo-ink, currentColor)。
+ *     这正是「主形象与文字颜色随背景色变化」的实现方式：内联后跟随所在
+ *     上下文的文字色，亮底变深、暗底变浅。一旦被改成硬编码色，
+ *     暗色主题下 LOGO 会直接看不见 —— 而这是纯视觉问题，静态检查抓不到；
+ *  3) 旧的 .brand-mark「方块字号牌」已全面退役，避免两套品牌视觉并存；
+ *  4) 各端首屏（启动闪屏）已经在服务端内联 LOGO，JS 执行前就可见。
+ * ============================================================ */
+$t->guard('LOGO 资产与取色契约', function () use ($t, $base) {
+    $img = $base . '/public/assets/img';
+
+    foreach (['logo.svg', 'logo-mark.svg', 'favicon.svg'] as $f) {
+        $path = "{$img}/{$f}";
+        $t->assertTrue("  {$f} 存在", is_file($path), $path);
+        if (!is_file($path)) {
+            continue;
+        }
+        $svg = (string) file_get_contents($path);
+        $t->assertTrue("  {$f} 含 viewBox", str_contains($svg, 'viewBox='));
+        $t->assertTrue("  {$f} 为矢量路径", str_contains($svg, '<path'));
+    }
+
+    foreach (['logo.svg', 'logo-mark.svg'] as $f) {
+        if (!is_file("{$img}/{$f}")) {
+            continue;
+        }
+        $svg = (string) file_get_contents("{$img}/{$f}");
+        $t->assertTrue(
+            "  {$f} 墨色取 --logo-ink 且以 currentColor 兜底",
+            str_contains($svg, 'var(--logo-ink, currentColor)')
+        );
+        $t->assertTrue("  {$f} 青绿环取 --logo-accent", str_contains($svg, 'var(--logo-accent'));
+    }
+
+    $logoJs = $base . '/public/assets/js/core/logo.js';
+    $t->assertTrue('  core/logo.js 存在（内联 SVG 模块）', is_file($logoJs));
+    if (is_file($logoJs)) {
+        $js = (string) file_get_contents($logoJs);
+        $t->assertTrue('    导出 logoMark', str_contains($js, 'export function logoMark'));
+        $t->assertTrue('    导出 logoLockup', str_contains($js, 'export function logoLockup'));
+        $t->assertTrue('    墨色使用 currentColor 兜底', str_contains($js, 'var(--logo-ink, currentColor)'));
+    }
+
+    $tokens = (string) file_get_contents($base . '/public/assets/css/tokens.css');
+    $t->assertTrue('  tokens.css 定义 --logo-ink', str_contains($tokens, '--logo-ink:'));
+    $t->assertTrue('  tokens.css 定义 --logo-accent', str_contains($tokens, '--logo-accent:'));
+    $t->assertTrue(
+        '  tokens.css 暗色主题覆盖 LOGO 取色',
+        preg_match('/\[data-theme="dark"\][\s\S]*?--logo-ink:/', $tokens) === 1
+    );
+
+    // 旧字号牌必须已退役：全站 JS 里不应再出现 brand-mark
+    $stale = [];
+    $it = new \RecursiveIteratorIterator(
+        new \RecursiveDirectoryIterator($base . '/public/assets/js', \FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($it as $file) {
+        if (!$file->isFile() || $file->getExtension() !== 'js') {
+            continue;
+        }
+        if (str_contains((string) file_get_contents($file->getPathname()), 'brand-mark')) {
+            $stale[] = basename($file->getPathname());
+        }
+    }
+    $t->assertTrue('  已无视图使用旧的 .brand-mark 字号牌', count($stale) === 0, implode(',', $stale));
+});
+
+$t->guard('各端启动闪屏在服务端内联 LOGO', function () use ($t) {
+    $cls = \App\Controllers\PageController::class;
+    foreach (['portal', 'student', 'exam', 'exercise', 'teacher', 'admin'] as $page) {
+        $ctrl = new $cls(new \Core\Request(), new \Core\Response());
+        try {
+            $html = $ctrl->{$page}()->body();
+        } catch (\Throwable $e) {
+            $t->assertTrue("  /{$page} 渲染无异常", false, $e->getMessage());
+            continue;
+        }
+        $t->assertTrue("  /{$page} 闪屏内联了 SVG LOGO", preg_match('/class="boot-logo">\s*<svg/u', $html) === 1);
+        $t->assertTrue("  /{$page} 闪屏 LOGO 带品牌取色", str_contains($html, 'logo-accent'));
+    }
+});
+
 exit($t->finish());

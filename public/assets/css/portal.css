@@ -16,16 +16,13 @@
   z-index: 2000;
 }
 .boot-logo {
-  width: 52px; height: 52px;
+  /* 启动闪屏的品牌标识：服务端内联的矢量 LOGO，高度由这里的 CSS 决定
+     （SVG 上的 width/height 属性优先级低于 CSS 规则）。 */
   display: flex; align-items: center; justify-content: center;
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
-  color: #fff;
-  font-size: var(--fs-2xl);
-  font-weight: 700;
-  box-shadow: var(--shadow-brand);
+  height: 56px;
   animation: pop-in var(--dur-slow) var(--ease-out) both;
 }
+.boot-logo svg { height: 56px; width: auto; display: block; }
 .boot-spinner {
   width: 24px; height: 24px;
   border: 2.5px solid var(--border-default);
@@ -120,9 +117,87 @@
   color: var(--brand-600);
 }
 
-/* 门户头部导航激活态 */
-.portal-nav .brand-link { display: flex; align-items: center; gap: var(--sp-3); color: inherit; }
-.portal-nav-links a.is-active { color: var(--brand-600); font-weight: 600; }
+/* 门户头部导航品牌位（LOGO + 站名） */
+.portal-nav .portal-nav-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  max-width: 1140px;
+  margin: 0 auto;
+}
+.portal-nav .portal-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: var(--fs-md);
+  white-space: nowrap;
+}
+/* 导航链接靠右；品牌在左 */
+.portal-nav .portal-nav-links { margin-left: auto; }
+.portal-nav .portal-nav-links a.is-active { font-weight: 600; }
+
+/* ==========================================================================
+   门户页布局补全（2026-09-16）
+
+   以下容器在 portal.js 里已被使用，但此前没有任何样式规则命中，于是退化成
+   block，产生两处可见缺陷：
+     · .portal-nav-inner / .portal-nav-brand —— 导航内容纵向堆叠，溢出 64px
+       高的导航条并压住 hero 区；
+     · .portal-stats-inner —— 未参与栅格，4 张统计卡挤成一列；
+     · .portal-footer-inner / .portal-footer-brand —— 页脚两栏与品牌行不并排。
+   属既有缺陷（静态检查与文本断言都抓不到），本次一并补齐。
+   复查脚本：temp/domtest/css_coverage_audit.mjs
+   ========================================================================== */
+
+/* 统计区：外层降级为居中容器，真正的四列栅格交给内层 */
+.portal-stats {
+  display: block;
+  max-width: 1140px;
+  margin: var(--sp-8) auto 0;
+  padding: var(--sp-6);
+}
+.portal-stats-inner {
+  display: grid;
+  gap: var(--sp-4);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+/* 页脚：品牌信息在左、联系方式在右 */
+.portal-footer-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  max-width: 1140px;
+  margin: 0 auto;
+  text-align: left;
+}
+.portal-footer-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+@media (max-width: 640px) {
+  .portal-footer-inner { flex-direction: column; text-align: center; }
+  .portal-footer-brand { justify-content: center; }
+}
+
+/* 帮助文档块 */
+.portal-section-inner { display: grid; gap: var(--sp-4); margin-top: var(--sp-8); }
+.help-block { text-align: left; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.help-list { margin: 0; padding-left: var(--sp-5); }
+.help-list li { margin-bottom: var(--sp-2); font-size: var(--fs-sm); color: var(--text-secondary); }
+.help-list li:last-child { margin-bottom: 0; }
+
+/* .muted 在全局没有定义，这里只作用于门户页，避免波及其他端的既有观感 */
+.portal .muted, .portal-footer .muted { color: var(--text-tertiary); }
 
 /* ==========================================================================
    成绩英雄榜

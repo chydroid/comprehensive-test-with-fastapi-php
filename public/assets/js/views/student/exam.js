@@ -8,6 +8,7 @@
 
 import { el, clear, mount } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
+import { logoMark } from '../../core/logo.js';
 import { button, card, field, input, notify, alertBox } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { examApi } from '../../api/index.js';
@@ -68,7 +69,7 @@ export function ExamLoginView({ router, query }) {
   root.append(el('div.login-aurora'));
   root.append(el('div.login-panel', {}, [
     el('div.login-brand', {}, [
-      el('div.brand-mark', {}, [icon('shield-check', { size: 22 })]),
+      logoMark({ height: 38 }),
       el('div', {}, [
         el('h2', { text: '进入考场' }),
         windowHint,

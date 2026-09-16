@@ -121,8 +121,6 @@ function renderLoginPage() {
   const page = renderLogin({
     title: '考试管理后台',
     subtitle: '请使用管理员账号登录',
-    accent: 'shield',
-    brandMark: '管',
     fields: [
       { name: 'username', label: '账号', placeholder: '请输入管理员账号', autocomplete: 'username' },
       { name: 'password', label: '密码', type: 'password', placeholder: '请输入密码', autocomplete: 'current-password' },
@@ -151,7 +149,6 @@ function startShell() {
   shell = createShell({
     brandName: APP_NAME,
     brandSub: 'fastapi-php',
-    brandMark: '管',
     nav: NAV,
     groups: GROUPS,
     can,
