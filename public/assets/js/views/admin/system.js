@@ -30,7 +30,7 @@ export function ConfigView() {
 
   /** 站点展示信息（与运行参数分开维护，键名不重叠） */
   const SITE_FIELDS = [
-    { name: 'site_title', label: '站点标题', placeholder: '如：网上理论考核系统', maxlength: 100, colSpan: 2 },
+    { name: 'site_title', label: '站点标题', placeholder: '如：深蓝网上考试系统', hint: '留空则显示系统内置产品名', maxlength: 100, colSpan: 2 },
     { name: 'copyright', label: '版权信息', placeholder: '如：XX 海事局 版权所有', maxlength: 255, colSpan: 2 },
     { name: 'icp', label: '备案号', placeholder: '如：京 ICP 备 12345678 号', maxlength: 100 },
     { name: 'phone', label: '联系电话', placeholder: '如：010-12345678', maxlength: 50 },
@@ -90,7 +90,7 @@ export function ConfigView() {
         ? textarea({ name: f.name, value: values[f.name] ?? '', placeholder: f.placeholder || '', rows: f.rows || 4 })
         : input({ name: f.name, value: values[f.name] ?? '', placeholder: f.placeholder || '', maxlength: f.maxlength || '' });
       state.siteCtl[f.name] = ctl;
-      const wrap = field(f.label, ctl);
+      const wrap = field(f.label, ctl, { hint: f.hint });
       if (f.colSpan === 2) wrap.classList.add('span-2');
       form.append(wrap);
     }

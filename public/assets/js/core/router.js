@@ -9,6 +9,8 @@
  *   router.start();
  */
 
+import { appName } from './brand.js';
+
 export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }) {
   let current = null;
   let disposer = null;  // 上一个视图的清理函数
@@ -108,8 +110,8 @@ export function createRouter({ routes, outlet, notFound, beforeEach, afterEach }
     }
 
     document.title = target.route.meta?.title
-      ? `${target.route.meta.title} · ${window.__APP_NAME__ || '在线考试系统'}`
-      : (window.__APP_NAME__ || '在线考试系统');
+      ? `${target.route.meta.title} · ${appName()}`
+      : appName();
 
     try {
       const result = await target.route.view({ params: target.params, query: target.query, router: api, route: target.route });

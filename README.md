@@ -1,6 +1,6 @@
 # comprehensive-test-with-fastapi-php
 
-网上理论考核系统 —— 基于 **fastapi-php** 后端框架 + **现代前端**的整体重建版。
+**深蓝网上考试系统** —— 基于 **fastapi-php** 后端框架 + **现代前端**的整体重建版。
 
 > 本项目由 `comprehensive-php-exam-system`（原生 PHP MVC 版）整体重建而来，
 > 目标是在**保留并提升全部现有功能**的前提下，获得更清晰的架构、更严格的安全边界与更现代的交互体验。
@@ -52,6 +52,19 @@ php bin/setup_db.php
 # 3. 启动开发服务器
 php bin/server.php
 ```
+
+## 产品名
+
+产品名（**深蓝网上考试系统**）只有一处定义：`config/config.php` 的 `app.name`。
+
+服务端渲染 SPA 外壳时把它写进 `<html data-app-name="…">`（不能用内联 `<script>`——
+站点 CSP 是 `script-src 'self'`，内联脚本会被拦掉），前端统一从
+`core/brand.js#appName()` 读取，用于各端 `document.title`、门户导航品牌位、
+页脚与登录页页脚。
+
+改名只需改那一行，**不要**再往视图/脚本里写死产品名。
+后台「系统设置 → 站点标题」是另一回事（可选的展示标题，落库 `siteconfig.site_title`，
+留空则回落产品名）。
 
 ## 品牌标识（LOGO）
 

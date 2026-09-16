@@ -6,6 +6,7 @@
 import { applyInitialTheme } from '../core/bootstrap.js';
 import { createRouter } from '../core/router.js';
 import { el, appRoot } from '../core/dom.js';
+import { appName } from '../core/brand.js';
 import { emptyStated, button } from '../ui/components.js';
 import { studentSession } from '../core/student-session.js';
 
@@ -15,7 +16,7 @@ import { MockSetupView, MockTakeView, MockReviewView } from '../views/student/mo
 import { StudentLoginView, StudentRegisterView } from '../views/student/login.js';
 
 applyInitialTheme();
-document.title = '在线考试系统';
+document.title = appName();
 
 const appEl = appRoot();
 const outlet = document.createElement('div');

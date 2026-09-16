@@ -85,8 +85,12 @@ class HomeController extends BaseController
     public function help(): Response
     {
         $site = (new SiteConfig())->allAsMap();
+        // 站点标题优先取后台「系统设置 → 站点标题」，未配置（或空串）则回落产品名。
+        // 注意必须用 ?? 取键：siteconfig 里可能压根没有 site_title 行，
+        // 而本项目的错误处理会把「未定义数组键」告警升级成异常，直接用 ?: 会 500。
+        $siteTitle = trim((string) ($site['site_title'] ?? ''));
         return $this->ok([
-            'title'  => $site['site_title'] ?? '网上理论考核系统',
+            'title'  => $siteTitle !== '' ? $siteTitle : (string) config('app.name', '深蓝网上考试系统'),
             'blocks' => [
                 [
                     'heading' => '考试流程',

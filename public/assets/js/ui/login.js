@@ -4,6 +4,7 @@
 
 import { el, clear } from '../core/dom.js';
 import { logoMark } from '../core/logo.js';
+import { appName } from '../core/brand.js';
 import { button, field, input, alertBox } from './components.js';
 
 /**
@@ -92,6 +93,6 @@ export function renderLogin(cfg) {
   return el('div.login-page', {}, [
     el('div.login-aurora'),
     panel,
-    el('div.login-foot', { text: `© ${new Date().getFullYear()} 在线考试系统 · fastapi-php` }),
+    el('div.login-foot', { text: `© ${new Date().getFullYear()} ${appName()} · fastapi-php` }),
   ]);
 }

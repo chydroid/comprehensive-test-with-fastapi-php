@@ -354,4 +354,66 @@ $t->guard('各端启动闪屏在服务端内联 LOGO', function () use ($t) {
     }
 });
 
+/* ============================================================
+ * 七、产品名契约（深蓝网上考试系统）
+ *
+ * 背景：产品名只有一处定义 —— config/config.php 的 app.name。
+ * 服务端渲染外壳时把它注入到 <html data-app-name>（不能塞内联 <script>：
+ * 站点 CSP 是 script-src 'self'），前端统一由 core/brand.js#appName() 读取。
+ *
+ * 这里锁死三点，防止「改名只改一半」：
+ *  1) config 里的产品名就是当前产品名；
+ *  2) 各端外壳都带 data-app-name，门户 <title> 就是产品名
+ *     —— 漏注入时前端只会静默回落到 brand.js 里的兜底常量，
+ *     标题看似正常、其实已经和服务端脱钩；
+ *  3) 前端 JS 里不再残留写死的旧产品名（「在线考试系统」/
+ *     「网上理论考核系统」）。这类字符串以前散在 6 个文件里，
+ *     漏一处就会出现「导航是新名、页脚是旧名」的不一致。
+ * ============================================================ */
+$t->guard('产品名单一来源契约', function () use ($t, $base) {
+    $name = (string) config('app.name', '');
+    $t->assertSame('  config app.name 为当前产品名', '深蓝网上考试系统', $name);
+
+    $cls = \App\Controllers\PageController::class;
+    $render = static function (string $page) use ($cls): string {
+        $ctrl = new $cls(new \Core\Request(), new \Core\Response());
+        return $ctrl->{$page}()->body();
+    };
+
+    foreach (['portal', 'student', 'exam', 'exercise', 'teacher', 'admin'] as $page) {
+        $t->assertTrue(
+            "  /{$page} 注入 data-app-name",
+            str_contains($render($page), 'data-app-name="' . $name . '"')
+        );
+    }
+
+    $portal = $render('portal');
+    $t->assertTrue('  门户 <title> 即产品名', str_contains($portal, "<title>{$name}</title>"));
+    $t->assertTrue('  门户闪屏文案含产品名', str_contains($portal, "正在加载 {$name}"));
+
+    $brand = $base . '/public/assets/js/core/brand.js';
+    $t->assertTrue('  core/brand.js 存在（前端唯一读取口）', is_file($brand));
+    if (is_file($brand)) {
+        $js = (string) file_get_contents($brand);
+        $t->assertTrue('    导出 appName', str_contains($js, 'export function appName'));
+        $t->assertTrue('    从 data-app-name 读取', str_contains($js, 'dataset?.appName'));
+    }
+
+    // 前端 JS 不得再写死旧产品名
+    $stale = [];
+    $it = new \RecursiveIteratorIterator(
+        new \RecursiveDirectoryIterator($base . '/public/assets/js', \FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($it as $file) {
+        if (!$file->isFile() || $file->getExtension() !== 'js') {
+            continue;
+        }
+        $src = (string) file_get_contents($file->getPathname());
+        if (str_contains($src, '在线考试系统') || str_contains($src, '网上理论考核系统')) {
+            $stale[] = basename($file->getPathname());
+        }
+    }
+    $t->assertTrue('  前端已无写死的旧产品名', count($stale) === 0, implode(',', $stale));
+});
+
 exit($t->finish());

@@ -24,13 +24,18 @@ class DocController extends Controller
     /** GET /api/docs —— Swagger UI 在线调试页面 */
     public function swagger(): Response
     {
-        $html = <<<'HTML'
+        // 产品名走 config('app.name') 单一来源；页面里保留 nowdoc（不写 ${} 插值），
+        // 用占位符替换，避免以后往这段 HTML 里加 $ 变量时被意外求值。
+        $html = str_replace(
+            '__APP_NAME__',
+            htmlspecialchars((string) config('app.name', '深蓝网上考试系统'), ENT_QUOTES, 'UTF-8'),
+            <<<'HTML'
         <!DOCTYPE html>
         <html lang="zh-CN">
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>API 文档 · 网上理论考核系统</title>
+            <title>API 文档 · __APP_NAME__</title>
             <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist/swagger-ui.css">
             <style>html,body{height:100%;margin:0}#swagger-ui{height:100%}</style>
         </head>
@@ -48,7 +53,8 @@ class DocController extends Controller
             </script>
         </body>
         </html>
-        HTML;
+        HTML
+        );
         return $this->response->html($html);
     }
 }

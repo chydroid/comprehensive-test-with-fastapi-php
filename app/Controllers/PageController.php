@@ -15,9 +15,14 @@ use Core\Response;
  */
 class PageController extends BaseController
 {
-    /** 各端页面配置：[标题, 入口脚本, 品牌副标题] */
+    /**
+     * 各端页面配置：[标题, 入口脚本, 品牌副标题]
+     *
+     * 标题为 null 表示「用产品名」（config('app.name')）：门户是全站入口，
+     * 标题就该是产品名本身，而不是某个功能名。改名只需改 config/config.php。
+     */
     private const PAGES = [
-        'portal'  => ['在线考试系统', '/assets/js/apps/portal.js', '考试 · 练习 · 成绩'],
+        'portal'  => [null, '/assets/js/apps/portal.js', '考试 · 练习 · 成绩'],
         'student' => ['考生中心', '/assets/js/apps/student.js', '个人中心'],
         'exam'    => ['在线考场', '/assets/js/apps/exam.js', '考试进行中'],
         'exercise'=> ['在线练习', '/assets/js/apps/exercise.js', '题库练习与模拟'],
@@ -62,12 +67,15 @@ class PageController extends BaseController
     private function render(string $key): Response
     {
         [$title, $entry, $subtitle] = self::PAGES[$key] ?? self::PAGES['portal'];
+        $appName = $this->appName();
+        // 标题为 null 的端直接用产品名（见 PAGES 注释）
+        $title = $title ?? $appName;
         $version = $this->assetVersion();
         $logo = $this->bootLogo();
 
         $html = <<<HTML
 <!DOCTYPE html>
-<html lang="zh-CN" data-page="{$key}">
+<html lang="zh-CN" data-page="{$key}" data-app-name="{$appName}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -104,6 +112,18 @@ class PageController extends BaseController
 HTML;
 
         return $this->response->html($html);
+    }
+
+    /**
+     * 产品名（唯一来源：config('app.name')）。
+     *
+     * 已做 HTML 转义，可同时安全用于 <title> 文本与 data-app-name 属性值。
+     * 前端 JS 不直接读这个值，而是读 <html data-app-name>（见 core/brand.js）——
+     * 因为 CSP 是 script-src 'self'，不能往页面里塞内联 <script> 传变量。
+     */
+    private function appName(): string
+    {
+        return htmlspecialchars((string) config('app.name', '深蓝网上考试系统'), ENT_QUOTES, 'UTF-8');
     }
 
     /**

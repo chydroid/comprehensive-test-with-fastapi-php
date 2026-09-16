@@ -6,6 +6,7 @@
 import { el, clear, mount } from '../core/dom.js';
 import { icon } from '../core/icons.js';
 import { logoMark } from '../core/logo.js';
+import { appName } from '../core/brand.js';
 import { button, badge, emptyStated } from '../ui/components.js';
 import { withLoading } from '../core/bootstrap.js';
 import { siteApi } from '../api/index.js';
@@ -57,7 +58,7 @@ export function PortalView({ router }) {
         el('span.hero-badge', {}, [icon('sparkles', { size: 14 }), el('span', { text: '新一代在线考试平台' })]),
         el('h1', {}, [
           el('span', { text: '高效、安全、专业的' }),
-          el('span.gradient-text', { text: '在线考核系统' }),
+          el('span.gradient-text', { text: appName() }),
         ]),
         el('p.hero-lead', {
           text: `覆盖题库管理、智能组卷、考场监考与成绩分析的完整闭环，已收录 ${fmtNumber(total)} 道题目、支撑 ${fmtNumber(exams)} 场考试。`,
@@ -158,7 +159,9 @@ export function PortalView({ router }) {
       el('div', {}, [
         el('div.portal-footer-brand', {}, [
           logoMark({ height: 22 }),
-          el('span', { text: cfg.title || '在线考试系统' }),
+          // siteconfig.site_title 是后台可改的「站点标题」（接口原样下发该键名），
+          // 未配置时回落产品名
+          el('span', { text: cfg.site_title || appName() }),
         ]),
         el('p.muted', { text: cfg.copyright || '' }),
       ]),
@@ -186,7 +189,7 @@ function renderNav({ router, active = 'home' }) {
     el('div.portal-nav-inner', {}, [
       el('div.portal-nav-brand', {}, [
         logoMark({ height: 30 }),
-        el('span', { text: '在线考试系统' }),
+        el('span', { text: appName() }),
       ]),
       el('div.portal-nav-links', {}, [
         link('#/portal', '首页', 'home'),

@@ -7,7 +7,10 @@ declare(strict_types=1);
  */
 return [
     'app' => [
-        'name'          => '网上理论考核系统',
+        // 产品名（唯一来源）：门户标题、各端 document.title 后缀、登录页页脚、
+        // API 文档标题都取自这里（服务端）或 PageController 注入的 <html data-app-name>（前端）。
+        // 改名只需改这一行，不要在视图/脚本里再写死产品名。
+        'name'          => '深蓝网上考试系统',
         'version'       => '2.0.0',
         'debug'         => (bool) env('APP_DEBUG', false),
         'timezone'      => 'Asia/Shanghai',

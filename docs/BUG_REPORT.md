@@ -989,3 +989,70 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 `.portal-stat .value/.label` 是一批从未命中的死规则（JS 用的是 `.stat-card/.stat-value/.stat-label`），
 本轮未清理以控制改动面，建议后续单独整理。
 
+# 第七轮：产品名统一为「深蓝网上考试系统」+ 两处名称相关缺陷（2026-09-16）
+
+## 一、需求
+
+> 项目名字改为深蓝网上考试系统。
+
+## 二、做法：产品名收敛到一处
+
+此前产品名散落在 6 个前端脚本与 3 处 PHP 里（「在线考试系统」/「网上理论考核系统」两种写法混用），
+改一次名要满仓库找，且极易只改一半。本轮把它收敛成单一来源：
+
+- **服务端**：`config/config.php` 的 `app.name` = `深蓝网上考试系统`。
+  `PageController` 渲染外壳时把它注入 `<html data-app-name="…">`。
+  **为什么不注入内联 `<script>window.APP_NAME=…`**：站点 CSP 是 `script-src 'self'`，
+  内联脚本会被浏览器直接拦掉（早前修 CSP 相关缺陷时踩过同样的坑），所以走 `data-*` 属性。
+- **前端**：新增 `public/assets/js/core/brand.js`（`APP_NAME` 常量 + `appName()`），
+  读取优先级 `data-app-name` → `window.__APP_NAME__`（历史手工覆盖钩子）→ 常量。
+  改由它取名的位置：`core/router.js`（`document.title` 后缀）、`apps/portal.js`、
+  `views/portal.js`（导航品牌位 / 页脚 / 英雄区标题）、`ui/login.js`（页脚）。
+- **门户标题**：`PageController::PAGES` 里 portal 的标题改为 `null`，语义是「用产品名」——
+  门户是全站入口，标题就该是产品名本身；其余各端保留功能名（考生中心 / 教师工作台 / 考试管理后台…）。
+- **API 文档页**：`DocController` 改用占位符替换（保留 nowdoc，避免以后往那段 HTML 里加 `$` 变量被意外求值）。
+- 后台「系统设置 → 站点标题」是**另一个**东西（可选的展示标题，落库 `siteconfig.site_title`），
+  留空则回落产品名，字段加了 hint 说明。
+
+> 已核实：`siteconfig` 表当前**没有** `site_title` 行，因此线上显示的名字完全由 `app.name` 决定。
+
+## 三、BUG-235　【P2】门户页脚永远显示不出后台配置的「站点标题」
+
+- **现象**：后台「系统设置 → 站点标题」填了也没用，门户页脚永远是一句硬编码兜底文案。
+- **根因**：`/api/public/site` 把 siteconfig 的键**原样**下发（`site_title`），
+  而门户页脚读的是 `cfg.title` —— 这个键从来不存在，于是永远走 `||` 兜底。
+  （`copyright` / `address` / `phone` 三个键名对得上，只有标题这一项坏掉，极不容易发现。）
+- **修复**：改读 `cfg.site_title`，未配置时回落 `appName()`。
+
+## 四、BUG-236　【P1，本轮自伤后修复】`?:` 读未定义键触发告警 → 帮助接口 500
+
+- **背景**：本轮把 `HomeController::help()` 的标题兜底从 `?? '旧名'` 改成
+  `$site['site_title'] ?: config('app.name')`，想表达「空串也回落产品名」。
+- **后果**：`siteconfig` 里没有 `site_title` 行 → `$site['site_title']` 触发
+  **未定义数组键告警**；本项目的错误处理会把告警升级成异常 → `/api/public/help` 直接 500。
+  契约测试里 `blocks 为数组` 立刻变红（这正是契约测试的价值）。
+- **修复**：先 `?? ''` 取值，再判空串：
+
+  ```php
+  $siteTitle = trim((string) ($site['site_title'] ?? ''));
+  'title' => $siteTitle !== '' ? $siteTitle : (string) config('app.name', '…'),
+  ```
+
+- **教训**：本项目**不要用 `?:` 直接读可能不存在的数组键**，必须先 `??` 兜住 ——
+  这里的告警等于异常。
+
+## 五、验证结果
+
+| 验证 | 结果 |
+|---|---|
+| 后端回归（8 个用例文件） | **385 PASS / 0 FAIL / 0 SKIP**（较上轮 +13，全部为新增「产品名单一来源」契约断言） |
+| 全站浏览器巡检 `temp/domtest/browser_sweep_v6.mjs` | **103 PASS / 0 FAIL** |
+| 匿名首屏巡检 `temp/domtest/verify_me_401.mjs` | **64 PASS / 0 FAIL** |
+| 静态检查 `temp/check_frontend.mjs` | 42 文件，0 语法错误、0 未解析导入 |
+| 实测取名 `temp/domtest/shot_brand.mjs` | 门户亮/暗两版 `title` / 导航 / 英雄区 / 页脚均为「深蓝网上考试系统」；管理端页脚「© 2026 深蓝网上考试系统 · fastapi-php」，各端标题仍为功能名 |
+
+**本轮新增回归防线**：`test/cases/frontend_contract_test.php` 第七节锁定
+「`config('app.name')` 就是当前产品名」「六端外壳都注入 `data-app-name`」
+「门户 `<title>` 即产品名」「`core/brand.js` 为前端唯一读取口」
+「前端 JS 里不再残留写死的旧产品名」——最后一条是防「改名只改一半」的关键。
+
