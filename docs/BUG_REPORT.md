@@ -1095,3 +1095,71 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 | 静态检查 `check_frontend.mjs` | 42 文件，0 语法错误、0 未解析导入 |
 「前端 JS 里不再残留写死的旧产品名」——最后一条是防「改名只改一半」的关键。
 
+---
+
+# 第九轮：全项目审计（权限点推导缺陷）
+
+审计范围：`app/`（54 个 PHP 文件）、`public/assets/js`（42 个）、`config/` 路由与 RBAC，
+并跑通既有全部检查作为基线（后端 385 PASS / 0 FAIL；`browser_sweep_v6` 103/103；
+`css_coverage_audit` 9 入口 0 缺失；`verify_me_401` 64/64；`check_frontend` 42 文件 0 错误）。
+
+审计结论：**未发现阻断级（P0）缺陷**。SQL 全部走预处理（仅 `LIMIT/OFFSET` 拼接整数且已钳位、
+`DELETE FROM {$table}` 的表名来自硬编码常量、`IN ({$ph})` 为占位符）；XSS 面已封堵
+（路径走 `textContent`，全项目无 `html:` 调用）；定时器 4 处全部有 `dispose` 清理；
+教师端 `{id}` 接口均有 `assertOwnExam` 归属校验；密码修改校验旧密码并轮换会话。
+但发现 **2 处权限点推导缺陷**，其中 1 处会直接让功能 403。
+
+## 一、BUG-238　【P1】监考页「收卷」单个考生恒 403，却允许「全部收卷」
+
+**现象**：管理后台 → 考场监控，考生名单每一行的「收卷」按钮点击后报无权限；
+同一页面右上角的「全部收卷」却正常可用。
+
+**根因**：`SessionAuthMiddleware::WRITE_POINTS` 未登记 `POST /api/admin/monitor/submit-one`。
+未显式登记的写操作会走 `writePoint()` 的推导分支：`POST` → 取模块名 `monitor` → 拼成
+`monitor.add`。而 `config('rbac')` 里 `testAdmin` 只被授予 `monitor.view` + `monitor.control`，
+**没有 `monitor.add`** —— 于是 `can()` 判定失败返回 403。
+
+同页「全部收卷」走的是 `POST /api/admin/monitor/submit`，它**有**显式登记
+`=> 'monitor.control'`，所以正常。同一个业务逻辑（强制交卷并判分）因为
+「单个 / 全员」两个入口的登记情况不同，衍生出两套权限要求。
+
+| 入口 | 路由 | 修复前实际要求 | 应要求 |
+|---|---|---|---|
+| 单个收卷 | `POST /api/admin/monitor/submit-one` | `monitor.add`（推导） | `monitor.control` |
+| 全部收卷 | `POST /api/admin/monitor/submit` | `monitor.control`（显式） | `monitor.control` |
+
+**修复**：在 `WRITE_POINTS` 补 `'POST /api/admin/monitor/submit-one' => 'monitor.control'`。
+
+## 二、BUG-239　【P3】「开放入场」被当成「新增考试」鉴权（潜在缺陷）
+
+`POST /api/admin/exams/{id}/open` 同样漏登记，被推导成 `exam.add`（新增考试）。
+它实际只写入考场口令（`exam_pwd`）、状态仍为未开考，属**考试信息更新**而非新建。
+当前 `testAdmin` 恰好同时拥有 `exam.add`，所以功能可用、缺陷未暴露；
+但凡出现「可查看/开考但不可新建考试」的角色配置，就会误拒。
+
+**修复**：显式登记 `'POST /api/admin/exams/{id}/open' => 'exam.edit'`（对现有角色无行为变化）。
+
+## 三、审计中确认**不是**缺陷的两处（避免误改）
+
+1. **被锁定的考生仍可交卷**：`savePaper()` 会拒绝 `locked` 状态，但 `submitPaper()` 不拦。
+   这是**有意为之**——考试到点时客户端倒计时触发的自动交卷走的正是 `submitPaper()`，
+   若在此处加 `locked` 拦截，被锁定的考生将永远无法完成超时自动交卷。
+2. **教师可修改自己考试的 `exam_tea`**：会把考试过户给他人、自己随即失去访问权，
+   不构成提权，且 `assertOwnExam` 已阻止修改他人考试。
+
+## 四、验证结果（本轮）
+
+| 验证 | 结果 |
+|---|---|
+| 新增 `test/cases/rbac_points_test.php`（反射断言 `writePoint()` 推导结果 + 角色是否具备） | **8 PASS / 0 FAIL** |
+| 后端全量（9 个用例文件，较基线 +8） | **393 PASS / 0 FAIL / 0 SKIP** |
+| 全站浏览器巡检 `browser_sweep_v6.mjs` | **103 PASS / 0 FAIL** |
+| CSS 覆盖率审计 `css_coverage_audit.mjs`（9 入口） | **0** 个无规则类名 |
+| 匿名首屏 `verify_me_401.mjs` | **64 PASS / 0 FAIL** |
+| 静态检查 `check_frontend.mjs` / `check_icons.py` | 42 文件 0 错误 / 88 图标 OK |
+| 专项扫描：SQL 拼接、`?:` 读未定义键、`innerHTML`、定时器泄漏 | 均未发现风险点 |
+
+**本轮新增回归防线**：`rbac_points_test.php` 直接反射调用中间件私有方法 `writePoint()`，
+锁定「写操作 → 权限点」的推导结果，并同时断言目标角色确实具备该权限点——
+专防「新增控制类接口却忘了登记权限点」这一类静默缺陷。
+

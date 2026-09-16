@@ -140,9 +140,17 @@ class SessionAuthMiddleware implements Middleware
         'GET /api/admin/quizzes/clean/preview'  => 'quiz.clean',
         'POST /api/admin/exams/{id}/start'      => 'exam.start',
         'POST /api/admin/exams/{id}/generate'   => 'exam.generate',
+        // 「开放入场」只写 exam_pwd（生成考场口令，状态仍为未开考），是一次考试信息更新，
+        // 而非新增考试。不显式登记时会被 writePoint() 推导成 exam.add，语义错位。
+        'POST /api/admin/exams/{id}/open'       => 'exam.edit',
         'POST /api/admin/monitor/lock'          => 'monitor.control',
         'POST /api/admin/monitor/unlock'        => 'monitor.control',
         'POST /api/admin/monitor/submit'        => 'monitor.control',
+        // 单个考生强制交卷与全员收卷同属监考控制动作，必须同样走 monitor.control。
+        // 此前漏登记，被推导成 monitor.add（POST → 模块 .add）：testAdmin 只被授予
+        // monitor.view + monitor.control，点行内「收卷」会 403，而「全部收卷」正常，
+        // 形成「能收全场、收不了单人」的怪象。
+        'POST /api/admin/monitor/submit-one'    => 'monitor.control',
         'POST /api/admin/monitor/lock-all'      => 'monitor.control',
         'POST /api/admin/monitor/unlock-all'    => 'monitor.control',
         'POST /api/admin/monitor/over-all'      => 'monitor.control',
