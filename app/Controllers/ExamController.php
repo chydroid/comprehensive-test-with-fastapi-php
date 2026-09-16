@@ -162,10 +162,39 @@ class ExamController extends BaseController
     /**
      * GET /api/exam/status —— 等待室与答题页轮询用：返回本场考试当前阶段。
      * 顺带触发惰性自动开考与超时自动交卷。
+     *
+     * 未入场时返回 200 + phase:null（而不是 401），原因见方法内注释。
      */
     public function status(): Response
     {
-        $sess = $this->examSession();
+        $sess = $this->examSessionOrNull();
+        if ($sess === null) {
+            // 未入场（或考场会话已过期）不是错误：本接口是**状态查询**，
+            // 与三端 /me 同构，应当如实回答「当前没有进行中的考场会话」。
+            //
+            // 早期实现直接抛 401，后果被放大成 P1：
+            //   1. 公开的考场入口页 /exam 一打开，控制台就出现红色 401；
+            //   2. 该页 installErrorHandlers 的 onUnauthorized 是
+            //      router.navigate('/')，而 router.navigate 对「同一路径」
+            //      不会早退，而是直接重新渲染入口视图（见 core/router.js），
+            //      于是形成「重渲染 → 再探测 → 又 401 → 再跳转」的自激环，
+            //      实测 6 秒内发出 997 次 /api/exam/status，页面彻底卡死。
+            //
+            // 客户端三处调用点（入口探测 / 等待室轮询 / 答题页 boot）本来就
+            // 以「phase 为空 = 未入场」处理，返回 200 与既有约定完全一致。
+            // 响应字段与已登录分支保持一致，避免调用方按会话状态分支解析。
+            return $this->ok([
+                'phase'             => null,
+                'paper_ready'       => false,
+                'score_visible'     => Setting::bool('exam_show_score_immediately', true),
+                'allow_view_answer' => Setting::bool('exam_allow_view_answer', true),
+                'exam'              => null,
+                'stu_name'          => '',
+                'csrf_token'        => AuthSession::csrfToken(),
+                'server_ts'         => time(),
+            ]);
+        }
+
         $examId = (int) $sess['exam_id'];
         $stuId = (string) $sess['stu_id'];
 
@@ -484,11 +513,23 @@ class ExamController extends BaseController
     /** 读取考试会话，未登录抛 401 */
     private function examSession(): array
     {
-        $s = sess_get(self::SESS_EXAM);
-        if (!is_array($s) || !isset($s['exam_id'], $s['stu_id'])) {
+        $s = $this->examSessionOrNull();
+        if ($s === null) {
             throw new HttpException(401, '请先登录考场', 40102);
         }
         return $s;
+    }
+
+    /**
+     * 读取考试会话，未入场返回 null（不抛异常）。
+     * 供「状态查询」类接口使用：这类接口把「没有会话」当作一种正常结果回答，
+     * 而不是当作鉴权失败——否则公开页面会在控制台报 401，且容易被前端的
+     * 401 全局跳转放大成请求风暴（见 status() 内注释）。
+     */
+    private function examSessionOrNull(): ?array
+    {
+        $s = sess_get(self::SESS_EXAM);
+        return is_array($s) && isset($s['exam_id'], $s['stu_id']) ? $s : null;
     }
 
     private function examEnd(int $examId): ?string

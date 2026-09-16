@@ -215,4 +215,55 @@ foreach (['portal', 'student', 'exam', 'exercise', 'teacher', 'admin'] as $page)
     });
 }
 
+/* ============================================================
+ * 五、会话探测接口契约：未登录必须 200 + logged_in:false
+ *
+ * 背景（回归）：三端 me 接口的路径天然落在受保护前缀之下
+ * （/api/student/me ⊂ /api/student/、/api/teacher/me ⊂ /api/teacher/、
+ *  /api/admin/me ⊂ /api/admin/），若鉴权中间件只按前缀匹配，就会在控制器
+ * 之前把它们拦成 401「登录已过期，请重新登录」。后果有两处：
+ *   1. 门户首页 / 注册页等公开页面每次打开都有一条控制台 401 报错；
+ *   2. 前端 boot 的登录态恢复只能走异常分支，csrf_token 永远取不到
+ *      （bootstrapSession 里 setCsrfToken(data.csrf_token) 成为死代码）。
+ * 修复方式：SessionAuthMiddleware::EXACT_RULES 精确放行。
+ * 这里锁死契约，防止被改回前缀匹配。
+ * ============================================================ */
+foreach (['/api/student/me', '/api/teacher/me', '/api/admin/me'] as $mePath) {
+    $t->guard("未登录 {$mePath} 返回 200 而非 401", function () use ($t, $mePath) {
+        $res = Http::get($mePath);
+        $t->assertSame("  {$mePath} 状态码为 200", 200, $res['status']);
+        $data = Http::data($res) ?? [];
+        $t->assertSame("  {$mePath} logged_in 为 false", false, $data['logged_in'] ?? null);
+        $t->assertTrue(
+            "  {$mePath} 下发 csrf_token",
+            is_string($data['csrf_token'] ?? null) && $data['csrf_token'] !== '',
+            json_encode(array_keys($data))
+        );
+    });
+}
+
+/* 考场状态查询同属「会话探测」：未入场必须 200 + phase 为空（不得 401）。
+ * 否则公开的考场入口页 /exam 首屏就会在控制台报 401，并被该页的
+ * onUnauthorized(router.navigate('/')) 放大成自激请求风暴。 */
+$t->guard('未入场 GET /api/exam/status 返回 200 且 phase 为空', function () use ($t) {
+    $res = Http::get('/api/exam/status');
+    $t->assertSame('  状态码为 200', 200, $res['status']);
+    $data = Http::data($res) ?? [];
+    $t->assertSame('  phase 为空', null, $data['phase'] ?? null);
+    $t->assertTrue('  exam 为空', array_key_exists('exam', $data) && $data['exam'] === null);
+    $t->assertTrue(
+        '  下发 csrf_token',
+        is_string($data['csrf_token'] ?? null) && $data['csrf_token'] !== '',
+        json_encode(array_keys($data))
+    );
+});
+
+/* 反向：同前缀下的真实受保护接口必须仍然 401（防止精确规则被写成前缀规则） */
+$guardedPaths = ['/api/student/info', '/api/teacher/monitor', '/api/admin/dashboard', '/api/exam/paper', '/api/exam/answer'];
+foreach ($guardedPaths as $guardedPath) {
+    $t->guard("未登录 {$guardedPath} 仍为 401", function () use ($t, $guardedPath) {
+        $t->assertSame("  {$guardedPath} 受保护", 401, Http::get($guardedPath)['status']);
+    });
+}
+
 exit($t->finish());

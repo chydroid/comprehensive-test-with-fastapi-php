@@ -28,8 +28,16 @@ export class ApiError extends Error {
 let csrfToken = '';
 const listeners = { unauthorized: [], forbidden: [] };
 
-/** 这些路径上的 401 不触发全局未登录跳转（见 request() 中的说明） */
-const NO_AUTH_REDIRECT = [/\/login$/i, /\/me$/i];
+/**
+ * 这些路径上的 401 不触发全局未登录跳转（见 request() 中的说明）。
+ * 共同特征：它们的 401 表示「调用方尚未建立该类会话」这一**正常事实**，
+ * 各视图已用局部 catch 自行处理，不需要全局跳转介入。
+ */
+const NO_AUTH_REDIRECT = [
+  /\/login$/i,          // 登录接口本身：401 = 凭据错误，应由调用方给出真实提示
+  /\/me$/i,             // 会话探测：未登录时如实回答（后端已改为 200，此处兜底）
+  /^\/exam\/status$/i,  // 考场会话探测：未入场时如实回答（见下方注释）
+];
 
 export function setCsrfToken(token) { csrfToken = token || ''; }
 export function getCsrfToken() { return csrfToken; }
@@ -97,11 +105,21 @@ async function request(method, path, { query, body, headers = {}, raw = false, r
 
   // 以下两类 401 属于「预期内」的结果，不触发全局未登录跳转：
   //  1. 登录接口自身：401 = 账号/密码错误，应交给调用方显示真实提示；
-  //  2. 会话探测接口（*/me）：未登录时必然 401，这正是引导流程判断登录态的依据。
-  //     若也触发跳转，门户首页 / 注册页 / 英雄页等**公开页面**一打开就被弹到
-  //     #/login（考生因此无法自助注册），且后台端会在登录页上多弹一次
-  //     「登录状态已失效」。各端 boot 里已有显式的未登录分支（渲染自己的登录页），
-  //     门户侧则由 studentSession.require() 守卫受保护视图。
+  //  2. 会话探测接口（*/me、/exam/status）：作为兜底白名单保留（见下）。
+  //     后端已把三端 /me 从鉴权中间件的受保护前缀中摘出
+  //     （SessionAuthMiddleware::EXACT_RULES），未登录时会返回 200 +
+  //     { logged_in:false }；/exam/status 仍是 401，但它的语义同样是
+  //     「尚未入场」这一正常回答，考场两处视图都已 .catch(() => null) 自行处理。
+  //     若放进全局跳转，后果有两层：
+  //       a) 公开页面（门户首页 / 注册页 / 英雄页）一打开就被弹到 #/login，
+  //          考生无法自助注册，后台端还会在登录页上多弹一次「登录状态已失效」；
+  //       b) 考场入口页更严重——它在无考场会话时必然探测一次 /exam/status，
+  //          而该页的 onUnauthorized 是 router.navigate('/')；当 hash 已是 #/ 时
+  //          navigate 会直接重渲染入口视图，于是「重渲染 → 再探测 → 又 401 → 再跳转」
+  //          形成请求风暴（实测 6 秒内 997 次请求，页面卡死）。
+  //          白名单切断该环路的起点，apps/exam.js 另加了幂等守卫作为第二道防线。
+  //     各端 boot 已有显式的未登录分支（渲染自己的登录页），门户侧则由
+  //     studentSession.require() 守卫受保护视图。
   if (res.status === 401 && !NO_AUTH_REDIRECT.some((re) => re.test(path))) {
     emit('unauthorized', { path });
   }

@@ -141,7 +141,11 @@ export function ExamTakeView({ router, query }) {
       polling = true;
       try {
         const r = await examApi.status().catch(() => null);
-        if (!r || !r.phase) return;
+        // 会话已失效 / 被清理（phase 为空）：结束空转并回考场入口。
+        // 以前这里靠 http.js 的 401 全局跳转负责，但该接口已从全局跳转白名单
+        // 中排除（否则入口页会因「重渲染→再探测→再跳转」自激成请求风暴），
+        // 因此退场逻辑必须由本视图自己承担。
+        if (!r || !r.phase) { stopPoll(); router.navigate('/'); return; }
         if (r.csrf_token) setCsrfToken(r.csrf_token);
         if (r.phase === 'answering') { stopPoll(); startRunner(); }
         else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }

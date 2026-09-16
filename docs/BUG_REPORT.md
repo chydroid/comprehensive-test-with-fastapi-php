@@ -729,6 +729,10 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
   门户侧由 `studentSession.require()` 守卫受保护视图，因此不依赖这个全局跳转。
 - **实证**：`C8` 探针 —— `/#/register` 渲染出 7 个控件的注册表单且 hash 保持 `#/register`；
   `/` 渲染落地页；`/#/exercise` 仍正确走守卫跳 `#/login?redirect=%2Fexercise`。
+- **补充（第五轮更正）**：本条当时把 `/me` 的 401 记为「预期内、由前端兜底」。第五轮查明
+  **真正的根因在后端**：鉴权中间件按前缀把 `/api/{student,teacher,admin}/me` 判为受保护接口，
+  各 `AuthController::me()` 里「未登录返回 200 + `logged_in:false`」的分支其实是**死代码**。
+  因此这里的 `NO_AUTH_REDIRECT` 只是**兜底**而非根治，详见 **BUG-232**。
 
 ### BUG-231　【P1】「单位 / 班级」引用名称与 ID 两套写法并存 → 考生匹配不到考试
 
@@ -772,3 +776,109 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 
 **遗留**：`BUG-220`（N+1 查询与 `limit 200` 硬编码）未实施；第一轮记录的限流、密码策略
 两项加固仍待产品决策。以上均不影响功能正确性。
+
+---
+
+# 第五轮：用户报障驱动的定点排查（2026-09-16）
+
+**报障原文**：进入首页时控制台有一条报错 —— `GET http://127.0.0.1:8099/api/student/me 401 (Unauthorized)`
+（浏览器把失败的 `fetch` 归属到 `http.js:76`，即 `res = await fetch(url, init)` 那一行）。
+
+顺着这条线索查下去，发现**表象背后是两处后端契约缺陷**，其中一处的实际危害远超用户看到的「一行红字」。
+
+## 一、第五轮发现与修复
+
+### BUG-232　【P1】鉴权中间件把「会话探测接口」当成受保护接口 → 公开页面首屏必现 401（BUG-230 的真根因）
+
+- **位置**：`app/Middlewares/SessionAuthMiddleware.php`（`IDENTITY_RULES`）
+- **现象**：未登录访问门户首页 / 注册页 / 英雄页，控制台必有一条 `/api/student/me` 的 401；
+  后台端、教师端同理（`/api/admin/me`、`/api/teacher/me`）。
+- **根因**：`IDENTITY_RULES` 里 `['/api/student/', 'student']` 是**前缀**匹配，
+  而 `/api/student/me` 天然落在该前缀之下 → 请求在中间件层就被
+  `deny(401, '登录已过期，请重新登录')` 拦掉，**控制器根本没被执行**：
+
+  ```php
+  // StudentAuthController::me() —— 这段编写正确的分支实际上是死代码
+  $sess = AuthSession::get(AuthSession::STUDENT);
+  if ($sess === null) {
+      return $this->ok(['logged_in' => false, 'csrf_token' => AuthSession::csrfToken()]);
+  }
+  ```
+
+  三端 `me()` 都实现了「未登录如实回答 200 + `logged_in:false`」，中间件却把它们判成鉴权失败。
+  连带后果：
+  1. 公开页面一打开就有红色 401，观感等同故障；
+  2. 前端 `bootstrapSession()` 里 `setCsrfToken(data.csrf_token)` 永远取不到值
+     —— 恢复逻辑只能靠抛异常走 `catch` 分支，匿名访客拿不到 CSRF 令牌。
+- **修复**：新增 `EXACT_RULES`（**精确路径**匹配，先于前缀规则判定），把
+  `/api/student/me`、`/api/teacher/me`、`/api/admin/me` 声明为 `public`。
+  刻意不写成又一条前缀规则：否则将来新增 `/api/student/members` 之类的路径会被
+  `/api/student/me` 前缀误放行。
+- **安全性**：三者均为只读 GET，只返回「调用者自己的会话」；未登录时返回 `logged_in:false`，
+  不泄露任何数据；`csrf_token` 与 `/api/health` 同源下发，无新增暴露面。
+- **实证**：
+
+  | 探针 | 修复前 | 修复后 |
+  |---|---|---|
+  | `GET /api/student/me`（匿名） | 401 | **200** `{logged_in:false, csrf_token:…}` |
+  | `GET /api/teacher/me` / `/api/admin/me` | 401 | **200** |
+  | `GET /api/student/info`（同前缀受保护） | 401 | **401**（未被误放行） |
+
+### BUG-233　【P0】考场入口页 `/exam` 自激请求风暴：6 秒发出 997 次 `/api/exam/status`
+
+- **位置**：`public/assets/js/apps/exam.js`、`public/assets/js/core/http.js`、
+  `public/assets/js/views/student/exam.js`、`app/Controllers/ExamController.php`、`core/router.js`
+- **现象**：匿名打开考场入口页 `/exam`（**这是每位考生的必经入口**），页面陷入死循环请求：
+  实测 6 秒内对 `/api/exam/status` 发起 **997 次**请求，间隔从 26ms 退化到 5ms，
+  `networkidle` 永不达成、页面卡死、服务端日志被 401 刷屏。
+- **根因**：三方约定互相踩踏形成的自激环：
+
+  1. `ExamLoginView` 挂载时会探测一次 `/api/exam/status`（用于「已入场则直接回考场」）；
+  2. 无考场会话时该接口**抛 401**；
+  3. `http.js` 对 401 一律 `emit('unauthorized')`（白名单里只有 `/login`、`/me`）；
+  4. `apps/exam.js` 的 `onUnauthorized` 是 `router.navigate('/')`；
+  5. `core/router.js` 的 `navigate()` 在**目标等于当前 hash 时不早退**，而是直接 `handle()`
+     重新渲染（本意是支持「原地刷新」）：
+     ```js
+     } else if (location.hash.replace(/^#/, '') === target) {
+       handle();      // ← 已在 #/ 时，这行会重新挂载入口视图
+     }
+     ```
+  6. 重渲染 → 又探测 → 又 401 → 又跳转 → 循环。
+
+  服务端日志显示该风暴在报障前一日（09-16 07:44:43）就已发生过数百次，**与本次修复无关，属既存缺陷**。
+- **修复（三层，缺一不可）**：
+  1. **后端语义归位**：`/api/exam/status` 是**状态查询**，与 `/me` 同构，
+     未入场应如实回答。`ExamController::status()` 改为在无考场会话时返回
+     `200 + { phase:null, exam:null, csrf_token }`（新增 `examSessionOrNull()`，
+     原 `examSession()` 仍抛 401 供取卷 / 交卷等真正受保护的接口使用）；
+     同时在 `EXACT_RULES` 放行 `/api/exam/status`。
+  2. **前端白名单**：`NO_AUTH_REDIRECT` 增加 `^/exam/status$`，切断自激环起点。
+  3. **幂等守卫**：`apps/exam.js` 的两个处理器改为 `if (!atExamRoot()) router.navigate('/')`
+     —— 已站在入口页时不再触发重渲染，作为第二道防线。
+- **配套调整**：等待室轮询原先依赖「401 全局跳转」负责会话失效退场；
+  该路径取消后，改由视图自己承担（`if (!r || !r.phase) { stopPoll(); router.navigate('/'); }`）。
+  已核对 `phaseOf()` 的返回值域（`waiting`/`answering`/`submitted`/`closed`，**不存在空值**），
+  因此该分支只会在「会话真的没了」时触发，不会误踢正在等待开考的考生。
+- **实证**：`temp/domtest/diag_exam_poll.mjs` 抓取调用栈定位到 `views/student/exam.js:85`；
+  `temp/domtest/verify_exam_flow.mjs` 真实浏览器走完
+  「凭口令入场 → 等待室（12 秒轮询 4 次，有界）→ 会话失效 → 回落入口并停止轮询」全程 12 项通过。
+
+## 二、第五轮验证结果
+
+| 验证 | 结果 |
+|---|---|
+| 后端回归（8 个用例文件，逐文件独立进程） | **339 PASS / 0 FAIL / 0 SKIP**（较上轮 +18，全部为新增契约断言） |
+| 匿名首屏巡检 `temp/domtest/verify_me_401.mjs` | **64 PASS / 0 FAIL**（10 个入口：零 4xx/5xx、零 console 错误、探测次数有界） |
+| 考场端到端 `temp/domtest/verify_exam_flow.mjs` | **12 PASS / 0 FAIL** |
+| 受保护接口反向校验 | `/api/student/info`、`/api/teacher/monitor`、`/api/admin/dashboard`、`/api/admin/students` 仍为 401 |
+| 登录态恢复 | 登录后刷新页面凭 cookie 正常恢复（`/me` → `logged_in:true`，外壳直接渲染、不回落登录表单） |
+| 静态检查 `temp/check_frontend.mjs` | 40 文件，0 语法错误、0 未解析导入 |
+| 路由审计 `temp/domtest/api_route_audit.mjs` | 前端 145 个调用 vs 后端 156 条路由，无缺失 |
+
+**本轮新增回归防线**：`test/cases/frontend_contract_test.php` 第五节锁定
+「未登录时三端 `me` 与考场 `status` 必须 200 且字段正确」+「同前缀受保护接口必须仍 401」，
+防止精确规则被改回前缀匹配、或反向被误写成前缀规则。
+
+**遗留**：`BUG-220`（N+1 查询与 `limit 200` 硬编码）仍未实施；第一轮记录的限流、密码策略
+两项加固仍待产品决策。

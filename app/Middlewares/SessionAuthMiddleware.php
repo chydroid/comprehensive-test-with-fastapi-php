@@ -30,6 +30,38 @@ use Core\Response;
 class SessionAuthMiddleware implements Middleware
 {
     /**
+     * 精确匹配规则（先于前缀规则判定）：路径 => 身份标识。
+     *
+     * 用于「会话探测接口」（各端 AuthController::me）。这类接口的正确语义是
+     * 「未登录就如实回答 logged_in:false」——控制器里也确实这么实现了，返回 200。
+     * 但它们的路径同时又落在受保护前缀之下：
+     *     /api/student/me  ⊂  /api/student/
+     *     /api/teacher/me  ⊂  /api/teacher/
+     *     /api/admin/me    ⊂  /api/admin/
+     * 若只按前缀匹配，请求会在中间件层就被拦成 401「登录已过期，请重新登录」，
+     * 控制器里那段 anonymous 分支变成死代码。后果有两点：
+     *   1. 公开页面（门户首页 / 注册页 / 英雄页）一打开，浏览器控制台就有一条
+     *      红色 401 报错，看起来像故障；实际只是「访客尚未登录」这一正常事实。
+     *   2. 前端 http.js 的 401 全局跳转虽已用路径白名单豁免了 me 接口，但登录态
+     *      恢复只能靠抛异常走到 catch 分支，永远取不到 csrf_token。
+     *
+     * 这里用**精确路径**而不是再写一条前缀规则，是为了避免将来出现
+     * /api/student/members 这类新路径被 '/api/student/me' 前缀误放行。
+     *
+     * 安全性：三者均为只读 GET，只会返回「调用者自己的会话」；未登录时返回
+     * logged_in:false，不泄露任何数据；csrf_token 与 /api/health 同源下发，
+     * 不新增暴露面。
+     */
+    private const EXACT_RULES = [
+        '/api/student/me'   => 'public',
+        '/api/teacher/me'   => 'public',
+        '/api/admin/me'     => 'public',
+        // 考场状态查询：与 /me 同构，未入场如实回答 phase:null（见 ExamController::status）。
+        // 注意它同样落在受保护前缀 /api/exam/ 之下，必须显式放行才不会被拦成 401。
+        '/api/exam/status'  => 'public',
+    ];
+
+    /**
      * 身份规则：[前缀, 身份标识, 权限点(可选)，'{' 表示从路径段提取条件]
      * 数组顺序即匹配顺序，先匹配到的生效。
      *
@@ -43,7 +75,7 @@ class SessionAuthMiddleware implements Middleware
         ['/api/docs',            'public'],
         ['/api/metrics',         'public'],
 
-        // 考生端登录/注册/登出（未登录可访问，但登出后 /api/student/me 需登录）
+        // 考生端登录/注册/登出（未登录可访问；/api/student/me 见 EXACT_RULES）
         ['/api/student/register', 'public'],
         ['/api/student/login',    'public'],
         ['/api/student/logout',   'public'],
@@ -199,6 +231,10 @@ class SessionAuthMiddleware implements Middleware
     /** 返回 [identity|null, point|null] */
     private function resolveRule(string $path): array
     {
+        // 精确规则优先：会话探测接口的路径是受保护前缀的子串，必须先判定
+        if (isset(self::EXACT_RULES[$path])) {
+            return [self::EXACT_RULES[$path], null];
+        }
         foreach (self::IDENTITY_RULES as $rule) {
             if (str_starts_with($path, $rule[0])) {
                 return [$rule[1], $rule[2] ?? null];
