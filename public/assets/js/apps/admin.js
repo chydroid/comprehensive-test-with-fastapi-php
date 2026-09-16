@@ -97,6 +97,7 @@ const router = createRouter({
 
 let shell = null;
 let session = null;
+let authInvalidated = false; // 会话失效只处理一次，避免并发 401 下重复渲染登录页
 
 /** 权限判定 */
 function can(perm) {
@@ -107,7 +108,9 @@ function can(perm) {
 
 installErrorHandlers({
   onUnauthorized: () => {
-    // 登录态失效：回到登录页
+    // 登录态失效：回到登录页。幂等保护：并发 401 只处理一次。
+    if (authInvalidated) return;
+    authInvalidated = true;
     session = null;
     if (shell) { shell.destroy(); shell = null; }
     renderLoginPage();
@@ -145,6 +148,7 @@ function renderLoginPage() {
 
 /* ============================ 后台外壳 ============================ */
 function startShell() {
+  authInvalidated = false; // 重新登录后允许再次响应 401
 
   shell = createShell({
     brandName: APP_NAME,
@@ -201,11 +205,15 @@ function renderErrorNode(err, label) {
  * 关键：返回 undefined，告知 router「视图已自行挂载」，不要再把它塞进游离 outlet。
  */
 async function guardView(item, view, ctx) {
+  // 渲染途中会话可能已失效（onUnauthorized 会销毁 shell 并切回登录页），
+  // 此时外壳已不存在，直接交还控制权即可，不要再触碰已销毁的 shell。
+  if (!shell) return undefined;
   shell.setActive(item.key);
   shell.setTitle(item.label);
   shell.setActions([]);
 
   if (item.perm && !can(item.perm)) {
+    if (!shell) return undefined;
     shell.setContent(emptyStated('无权访问', {
       iconName: 'lock',
       desc: '当前账号没有访问该模块的权限，请联系超级管理员分配。',
@@ -216,8 +224,10 @@ async function guardView(item, view, ctx) {
 
   try {
     const node = await view({ router, can, query: ctx.query, params: ctx.params, shell, session, item });
+    if (!shell) return undefined; // 渲染途中会话失效，登录页已接管
     shell.setContent(node);
   } catch (e) {
+    if (!shell) return undefined; // 会话失效导致的中断，不再触碰已销毁外壳
     console.error('[admin] view render failed:', item.key, e);
     shell.setContent(renderErrorNode(e, item.label));
   }

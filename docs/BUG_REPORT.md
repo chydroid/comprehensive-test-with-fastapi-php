@@ -1054,5 +1054,44 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 **本轮新增回归防线**：`test/cases/frontend_contract_test.php` 第七节锁定
 「`config('app.name')` 就是当前产品名」「六端外壳都注入 `data-app-name`」
 「门户 `<title>` 即产品名」「`core/brand.js` 为前端唯一读取口」
+
+---
+
+# 第八轮：管理后台会话失效时的 401 级联崩溃（2026-09-16）
+
+## 一、BUG-237　【P1】后台 token 过期后控制台报「Cannot read properties of null (reading 'setContent')」
+
+- **现象**：管理员登录后台后放着不动，过一段时间（会话 token 过期）切到「考试管理」等页面，
+  控制台连报 `GET /api/admin/classes?per_page=200 401 (Unauthorized)` 等，随后抛
+  `TypeError: Cannot read properties of null (reading 'setContent')`，
+  来自 `guardView → view → ExamView → loadRefs`。
+- **根因**：`exam.js` 的 `loadRefs()` 用 `Promise.all` 并发请求 `subjects / exam-categories / classes`；
+  三者同时 401。`http.js` 按设计 `emit('unauthorized')`，`admin.js` 的 `onUnauthorized` 正确执行了
+  「`session=null` + `shell.destroy(); shell=null` + 渲染登录页」。**但**该回调在
+  `guardView` 的 `await view(...)` **执行途中同步触发**，shell 已被置空；等 `await` 返回后，
+  `guardView` 的 `catch` 仍执行 `shell.setContent(...)` → 触碰已销毁的 null 外壳而崩溃。
+  同时 3 个并发 401 会让 `onUnauthorized` 重入 3 次，叠出 3 张登录页。
+- **修复**（3 处，纯前端）：
+  1. `apps/admin.js` —— `onUnauthorized` 加**幂等保护**（`authInvalidated` 标志），并发 401 只处理一次；
+     重新登录后 `startShell()` 复位该标志。
+  2. `apps/admin.js` —— `guardView` 全程对 `shell` 做空值守卫：渲染前、无权限分支、渲染后、catch 内
+     一旦 `!shell` 立即交还控制权，不再触碰已销毁外壳（登录页已被 `onUnauthorized` 接管）。
+  3. `views/admin/exam.js` —— `loadRefs()` 出错时标记 `refCache.loaded = true` 再上抛，
+     避免筛选下拉等懒加载路径反复重发 401；初始调用的 `.catch(() => {})` 照常吞掉，视图降级渲染空参考。
+- **附带说明**：控制台里那行 `reportAllChanges … startTime` 的报错**不是本项目代码**——
+  全仓 grep 不到 `reportAllChanges` / `PerformanceObserver` / 任何埋点注入，且 CSP 为 `script-src 'self'`
+  也无法加载外部脚本；该 `VMxxx` 脚本是浏览器扩展（如 web-vitals 类 RUM 扩展）注入的，与本次无关，可忽略。
+- **新增回归防线**：`temp/domtest/admin_401_guard.mjs` —— 登录后台 → 拦截三个参考接口返回 401 →
+  进入 `#/exams`，断言「无 setContent 崩溃 / 无 pageerror / 登录页出现且仅一次 / 旧外壳已销毁」，**8 PASS / 0 FAIL**。
+
+## 二、验证结果（本轮）
+
+| 验证 | 结果 |
+|---|---|
+| 401 守卫回归 `temp/domtest/admin_401_guard.mjs` | **8 PASS / 0 FAIL** |
+| 全站浏览器巡检 `browser_sweep_v6.mjs`（含 `#/exams` 渲染 + 新建考试浮层） | **103 PASS / 0 FAIL** |
+| 后台真实数据渲染 `admin_live_smoke.mjs`（16 视图，含 ExamView） | **16 PASS / 0 FAIL** |
+| 后端回归（8 用例文件） | **385 PASS / 0 FAIL / 0 SKIP** |
+| 静态检查 `check_frontend.mjs` | 42 文件，0 语法错误、0 未解析导入 |
 「前端 JS 里不再残留写死的旧产品名」——最后一条是防「改名只改一半」的关键。
 

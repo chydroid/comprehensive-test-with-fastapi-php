@@ -44,14 +44,21 @@ export async function ExamView({ router, can }) {
 
   const loadRefs = async () => {
     if (refCache.loaded) return refCache;
-    const [subs, cats, classes] = await Promise.all([
-      adminApi.subjects({ per_page: 200 }),
-      adminApi.categories({ per_page: 200 }),
-      adminApi.classes({ per_page: 200 }),
-    ]);
-    refCache.subjects = subs?.list || [];
-    refCache.categories = cats?.list || [];
-    refCache.classes = classes?.list || [];
+    try {
+      const [subs, cats, classes] = await Promise.all([
+        adminApi.subjects({ per_page: 200 }),
+        adminApi.categories({ per_page: 200 }),
+        adminApi.classes({ per_page: 200 }),
+      ]);
+      refCache.subjects = subs?.list || [];
+      refCache.categories = cats?.list || [];
+      refCache.classes = classes?.list || [];
+    } catch (e) {
+      // 标记已尝试：避免并发/懒加载（筛选下拉）反复重发导致 401 风暴；
+      // 错误仍上抛，由全局未登录处理接管跳转登录页。
+      refCache.loaded = true;
+      throw e;
+    }
     refCache.loaded = true;
     return refCache;
   };
