@@ -13,8 +13,15 @@ use Core\Response;
 /**
  * 在线练习（随机抽一题、逐题练习）
  *
- * 业务约束（沿用旧系统）：存在进行中的正式考试（exam_status = 'testing'）时，
- * 为避免泄露同题库题目，暂停练习功能。
+ * 与正式考试的隔离策略由后台「系统设置 → 模拟考试与练习」控制
+ * （`exercise_allow_during_exam`，默认**开启**即互不影响）：
+ *  - 开启：存在进行中的正式考试时，练习照常可用；
+ *  - 关闭：开考期间暂停练习抽题与答案校验。
+ *
+ * 关闭项存在的原因：本接口按 quiz_id 即可换取任意题目答案，而开考期间
+ * /api/exam/paper 会向考生下发其所考题目的 quiz_id —— 若不加限制，
+ * 考生可用另一标签页「练习」反查正在考的题目答案（击穿「考试中不下发答案」）。
+ * 是否接受该风险属考场纪律取舍，故做成开关而非写死。
  *
  * 安全改进：练习模式同样不下发 quiz_key —— 答案通过独立的
  * POST /api/exercise/answer 校验后才返回，且前端不预置答案。
@@ -36,10 +43,11 @@ class ExerciseController extends BaseController
 
         $subjects = (new Subject())->all('id ASC');
 
-        // 进行中的正式考试会锁定练习（防题目泄露）。
-        // 注意排除模拟考试（它同样以 exam_status='testing' 落库），
-        // 否则学生自己开一场模拟考试就会把练习误判为「已暂停」。
+        // 进行中的正式考试事实（排除模拟考试——它同样以 exam_status='testing'
+        // 落库，否则学生自己开一场模拟考试就会把练习误判为「已暂停」）。
         $hasOngoingExam = Exam::hasOngoingFormalExam();
+        // 是否因「考场纪律策略」暂停练习：事实 + 后台开关共同决定。
+        $practicePaused = $hasOngoingExam && !Exam::allowExerciseDuringExam();
 
         $question = null;
         $quizCount = 0;
@@ -57,7 +65,7 @@ class ExerciseController extends BaseController
             }
         }
 
-        if (!$hasOngoingExam && $subjId > 0 && $quizClass !== '') {
+        if (!$practicePaused && $subjId > 0 && $quizClass !== '') {
             $quizCount = $types[$quizClass] ?? 0;
             if ($quizCount === 0) {
                 throw new HttpException(404, '该科目下此题型暂无题目', 40400);
@@ -85,7 +93,11 @@ class ExerciseController extends BaseController
             'subj_id'          => $subjId,
             'quiz_class'       => $quizClass,
             'quiz_count'       => $quizCount,
+            // has_ongoing_exam 是「事实」：当前是否有正式考试在进行。
             'has_ongoing_exam' => $hasOngoingExam,
+            // practice_paused 是「策略结论」：练习当前是否被禁用。
+            // 前端据此决定是否拦截操作（二者不再等价，必须分开下发）。
+            'practice_paused'  => $practicePaused,
         ]);
     }
 
@@ -95,11 +107,12 @@ class ExerciseController extends BaseController
      */
     public function check(): Response
     {
-        // 正式考试进行中必须同样暂停练习答案校验：本接口按 quiz_id 即可换取
-        // 任意题目的正确答案，而 /api/exam/paper 又向考生下发了所考题目
-        // 的 quiz_id —— 若不拦截，考生可在开考期间用另一标签页「练习」反查
-        // 正在考的题目答案，等于绕过 P0-4「考试中不下发答案」的防护。
-        if (Exam::hasOngoingFormalExam()) {
+        // 仅当后台关闭「正式考试期间开放在线练习」时才拦截。
+        // 拦截原因见类注释：本接口按 quiz_id 即可换取任意题目的正确答案，
+        // 而 /api/exam/paper 又向考生下发了所考题目的 quiz_id —— 若不拦截，
+        // 考生可在开考期间用另一标签页「练习」反查正在考的题目答案，
+        // 等于绕过「考试中不下发答案」的防护。
+        if (Exam::hasOngoingFormalExam() && !Exam::allowExerciseDuringExam()) {
             throw new HttpException(403, '当前有正在进行的正式考试，练习功能已临时暂停', 40308);
         }
 

@@ -18,6 +18,11 @@ use Core\Response;
  * 实现要点：
  * - 模拟考试在 examinfo 中以 exam_class='模拟考试' 标记，examinfo.exam_status 随答题流转
  *   （testing → over），与正式考试的区分完全靠 exam_class。
+ * - **与正式考试互不影响**：模拟考试整体排除在管理端/教师端的考试管理、监考列表之外
+ *   （Exam::adminList / TeacherMonitorController），也不计入「进行中的正式考试」。
+ * - 是否允许在正式考试进行中组织模拟，由后台 `mock_allow_during_exam` 控制（默认允许）。
+ * - 数据上限同样走后台：`mock_daily_limit`（每人每日场次，默认 5）、
+ *   `mock_max_questions`（单场题目总数，默认 100）。
  * - 组卷不区分难度（与旧系统一致），按题型抽取指定数量。
  * - 分值：判断题 2 / 单选 2 / 多选 3 / 填空 5（沿用旧系统模拟考试默认分值）。
  *
@@ -34,15 +39,38 @@ class ExerciseExamController extends BaseController
     /** 模拟考试默认分值 */
     private const VALUE_MAP = ['radio1' => 2, 'radio2' => 2, 'checkbox' => 3, 'text' => 5, 'longtext' => 0];
 
-    /** 单题型抽题上限 */
-    private const MAX_PER_TYPE = 100;
-
-    /** GET /api/exercise/mock/config —— 可选科目与各题型题量 */
+    /**
+     * GET /api/exercise/mock/config —— 可选科目 + 当前考生可用的模拟考试配额
+     *
+     * 配额放在这里而非 counts()：进入组卷页时就要据此禁用按钮并给出
+     * 「今日剩余 N 场 / 单场上限 M 题」的提示，避免考生配好卷才被拒。
+     */
     public function config(): Response
     {
+        $sess = $this->authStudent();
         return $this->ok([
             'subjects' => (new Subject())->all('id ASC'),
+            'limits'   => self::quota((string) $sess['id']),
         ]);
+    }
+
+    /**
+     * 当前考生的模拟考试配额视图（供前端展示与按钮控制）。
+     *
+     * @return array{daily_limit:int,used_today:int,remaining:int,max_questions:int,paused:bool}
+     */
+    private static function quota(string $stuId): array
+    {
+        $limit = Exam::mockDailyLimit();
+        $used = Exam::mockUsedToday($stuId);
+        return [
+            'daily_limit'   => $limit,
+            'used_today'    => $used,
+            'remaining'     => max(0, $limit - $used),
+            'max_questions' => Exam::mockMaxQuestions(),
+            // 正式考试进行中且后台关闭了「开考期间开放模拟考试」时为 true
+            'paused'        => Exam::hasOngoingFormalExam() && !Exam::allowMockDuringExam(),
+        ];
     }
 
     /** GET /api/exercise/mock/counts?subj_id=N —— 指定科目各题型可用题量 */
@@ -71,18 +99,23 @@ class ExerciseExamController extends BaseController
         $sess = $this->authStudent();
         $stuId = (string) $sess['id'];
 
-        // 正式考试进行中暂停模拟考试：模拟考试同样从 quizlib 抽题，
-        // 交卷后 review() 会整卷下发 quiz_key —— 开考期间可用它批量导出题库答案。
-        if (Exam::hasOngoingFormalExam()) {
+        // 正式考试进行中是否暂停模拟，由后台「模拟考试与练习」决定（默认不暂停）。
+        // 关闭该项的原因：模拟考试同样从 quizlib 抽题，交卷后 review() 会整卷
+        // 下发 quiz_key —— 开考期间可用它批量导出题库答案。
+        $paused = Exam::hasOngoingFormalExam() && !Exam::allowMockDuringExam();
+        if ($paused) {
             throw new HttpException(403, '当前有正在进行的正式考试，模拟考试已临时暂停', 40308);
         }
 
+        // 单场题目总数上限（后台可配，默认 100）
+        $maxQuestions = Exam::mockMaxQuestions();
+
         $in = $this->validate([
             'subj_id'        => 'required|integer',
-            'radio1_count'   => 'integer|min:0|max:' . self::MAX_PER_TYPE,
-            'radio2_count'   => 'integer|min:0|max:' . self::MAX_PER_TYPE,
-            'checkbox_count' => 'integer|min:0|max:' . self::MAX_PER_TYPE,
-            'text_count'     => 'integer|min:0|max:' . self::MAX_PER_TYPE,
+            'radio1_count'   => 'integer|min:0|max:' . $maxQuestions,
+            'radio2_count'   => 'integer|min:0|max:' . $maxQuestions,
+            'checkbox_count' => 'integer|min:0|max:' . $maxQuestions,
+            'text_count'     => 'integer|min:0|max:' . $maxQuestions,
         ]);
         $subjId = (int) $in['subj_id'];
 
@@ -95,6 +128,25 @@ class ExerciseExamController extends BaseController
         $total = array_sum($wanted);
         if ($total <= 0) {
             throw new HttpException(400, '请至少配置一道题目', 40000);
+        }
+        if ($total > $maxQuestions) {
+            throw new HttpException(
+                400,
+                "单场模拟考试题目总数不能超过 {$maxQuestions} 题（当前 {$total} 题）",
+                40002,
+                ['max' => $maxQuestions, 'requested' => $total]
+            );
+        }
+
+        // 每人每日场次上限（后台可配，默认 5）
+        $dailyLimit = Exam::mockDailyLimit();
+        if (Exam::mockUsedToday($stuId) >= $dailyLimit) {
+            throw new HttpException(
+                429,
+                "你今天的模拟考试场次已用完（每日上限 {$dailyLimit} 场），请明天再试",
+                42901,
+                ['daily_limit' => $dailyLimit]
+            );
         }
 
         // 题库是否够用（提前显式校验，避免生成残缺试卷）
@@ -116,16 +168,27 @@ class ExerciseExamController extends BaseController
             throw new HttpException(400, '题库数量不足，请调整题目数量', 40001, $short);
         }
 
-        // 创建模拟考试记录
-        $examId = (int) ExamEngine::createPracticeExam([
-            'exam_name' => '模拟考试_' . date('Y-m-d_H-i-s'),
-            'subj_id'   => $subjId,
-        ]);
-
-        // 组卷（不区分难度）
+        // 组卷（不区分难度）。考试记录创建也纳入同一事务：
+        // 既保证「记录 + 试卷 + 成绩」三者原子，也便于在事务内复检每日场次。
         $paperId = 1;
+        $examId  = 0;
         Database::beginTransaction();
         try {
+            // 事务内复检：两次请求几乎同时通过预检时，把上限守住（降低并发双开概率）。
+            if (Exam::mockUsedToday($stuId) >= $dailyLimit) {
+                throw new HttpException(
+                    429,
+                    "你今天的模拟考试场次已用完（每日上限 {$dailyLimit} 场），请明天再试",
+                    42901,
+                    ['daily_limit' => $dailyLimit]
+                );
+            }
+
+            $examId = (int) ExamEngine::createPracticeExam([
+                'exam_name' => '模拟考试_' . date('Y-m-d_H-i-s'),
+                'subj_id'   => $subjId,
+            ]);
+
             foreach ($wanted as $type => $n) {
                 if ($n <= 0) {
                     continue;
@@ -162,7 +225,7 @@ class ExerciseExamController extends BaseController
             'exam_id'       => $examId,
             'total'         => $paperId - 1,
             'total_score'   => self::computeTotalScore($wanted),
-        ], '模拟考试已开始');
+        ] + self::quota($stuId), '模拟考试已开始');
     }
 
     /** GET /api/exercise/mock/paper?exam_id=N&paper_id=M */
@@ -293,10 +356,10 @@ class ExerciseExamController extends BaseController
         $examId = (int) $this->request->query('exam_id', 0);
         $this->assertMockExam($examId, $stuId);
 
-        // 错题回顾会整卷下发 quiz_key。正式考试进行中禁止查看：
-        // 模拟考试可自由组卷，若不拦截，考生可组一场覆盖某科目全部题目的
-        // 模拟考试并立即交卷，再借复盘导出该科目答案（可能是本场考试用题）。
-        if (Exam::hasOngoingFormalExam()) {
+        // 错题回顾会整卷下发 quiz_key。当后台关闭「正式考试期间开放模拟考试」时，
+        // 开考期间禁止查看：模拟考试可自由组卷，若不拦截，考生可组一场覆盖某科目
+        // 全部题目的模拟考试并立即交卷，再借复盘导出该科目答案（可能是本场考试用题）。
+        if (Exam::hasOngoingFormalExam() && !Exam::allowMockDuringExam()) {
             throw new HttpException(403, '当前有正在进行的正式考试，暂不能查看错题回顾', 40308);
         }
 

@@ -61,9 +61,75 @@ class Exam extends Model
         return (int) ($row['c'] ?? 0) > 0;
     }
 
+    /* ==================================================================
+     * 模拟考试 / 在线练习 ↔ 正式考试 的隔离策略
+     *
+     * 默认「互不影响」：正式考试进行中不暂停练习与模拟。是否暂停由后台
+     * 「系统设置 → 模拟考试与练习」决定（见 Setting::SCHEMA），因为
+     * 「开考期间开放练习/模拟」存在客观的答案泄露面，属考场纪律取舍。
+     * ================================================================== */
+
+    /** 正式考试进行中是否允许在线练习（默认允许） */
+    public static function allowExerciseDuringExam(): bool
+    {
+        return Setting::bool('exercise_allow_during_exam', true);
+    }
+
+    /** 正式考试进行中是否允许模拟考试（默认允许） */
+    public static function allowMockDuringExam(): bool
+    {
+        return Setting::bool('mock_allow_during_exam', true);
+    }
+
+    /** 每人每日模拟考试场次上限（后台可配，默认 5） */
+    public static function mockDailyLimit(): int
+    {
+        return max(1, Setting::int('mock_daily_limit', 5));
+    }
+
+    /** 单场模拟考试题目总数上限（后台可配，默认 100） */
+    public static function mockMaxQuestions(): int
+    {
+        return max(1, Setting::int('mock_max_questions', 100));
+    }
+
+    /**
+     * 某考生「今天」已发起的模拟考试场次。
+     *
+     * 以 examinfo.exam_start 为发起时刻（ExamEngine::createPracticeExam 落 NOW()），
+     * 统计**含未交卷**的场次——只统计已交卷会留下「无限组卷不交卷即可批量取题」
+     * 的口子，与设置项「每人每日模拟考试场次上限」的初衷相悖。
+     *
+     * 时间条件写成左闭右开区间而非 DATE(exam_start) = CURDATE()，
+     * 以便将来在 exam_start 上建索引时不因函数包裹而失效。
+     */
+    public static function mockUsedToday(string $stuId): int
+    {
+        $stuId = trim($stuId);
+        if ($stuId === '') {
+            return 0;
+        }
+        $row = \Core\Database::fetch(
+            "SELECT COUNT(*) AS c
+             FROM `examinfo` e
+             INNER JOIN `stuscore` sc ON sc.exam_id = e.id
+             WHERE e.exam_class = ? AND sc.stu_id = ?
+               AND e.exam_start >= ? AND e.exam_start < ?",
+            [
+                self::MOCK_CLASS,
+                $stuId,
+                date('Y-m-d 00:00:00'),
+                date('Y-m-d 00:00:00', strtotime('+1 day')),
+            ]
+        );
+        return (int) ($row['c'] ?? 0);
+    }
+
     /** 进行中的考试（含科目名/类别名），供前台门户展示 */
     public static function activeWithSubject(): array
     {
+        // 必须排除模拟考试：它同样以 exam_status='testing' 落库，
+        // 否则考生一开模拟，门户/仪表盘的「进行中的考试」就会多出一条假考试。
         return \Core\Database::fetchAll(
             "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
                     e.exam_score, e.subj_id, s.subj_name, c.category_name
@@ -71,7 +137,9 @@ class Exam extends Model
              INNER JOIN `subject` s ON s.id = e.subj_id
              LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
              WHERE e.exam_status = 'testing'
-             ORDER BY e.id DESC"
+               AND COALESCE(e.exam_class, '') <> ?
+             ORDER BY e.id DESC",
+            [self::MOCK_CLASS]
         );
     }
 
@@ -82,8 +150,10 @@ class Exam extends Model
      */
     public function adminList(array $filters, int $offset, int $perPage): array
     {
-        $where = ['1=1'];
-        $params = [];
+        // 模拟考试不属于「考试管理」范畴（考生自主生成、无监考意义），
+        // 必须整体排除，否则管理端列表、监考选择页都会被考生的模拟记录刷屏。
+        $where = ["COALESCE(e.exam_class, '') <> ?"];
+        $params = [self::MOCK_CLASS];
         if (!empty($filters['subj_id'])) {
             $where[] = 'e.subj_id = ?';
             $params[] = (int) $filters['subj_id'];
@@ -145,8 +215,8 @@ class Exam extends Model
              FROM `examinfo` e
              INNER JOIN `subject` s ON s.id = e.subj_id
              WHERE LEFT(e.exam_status, 4) = 'over'
-               AND COALESCE(e.exam_class, '') != '模拟考试'";
-        $params = [];
+               AND COALESCE(e.exam_class, '') <> ?";
+        $params = [self::MOCK_CLASS];
         if ($teaName !== null && $teaName !== '') {
             $sql .= ' AND e.exam_tea = ?';
             $params[] = $teaName;
@@ -452,9 +522,10 @@ class Exam extends Model
              LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
              LEFT JOIN `stuscore` sc ON sc.exam_id = e.id AND sc.stu_id = ?
              WHERE e.exam_status IN ('exam', 'paper', 'testing')
+               AND COALESCE(e.exam_class, '') <> ?
                AND FIND_IN_SET(?, e.stu_class) > 0
              ORDER BY e.exam_start ASC, e.id DESC",
-            [$stuId, $classId]
+            [self::MOCK_CLASS, $stuId, $classId]
         );
     }
 

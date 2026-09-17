@@ -38,6 +38,7 @@ class TeacherMonitorController extends BaseController
         $examId = (int) $this->request->query('exam_id', $this->request->query('id', 0));
 
         if ($examId <= 0) {
+            // 模拟考试不属于监考范畴（考生自主生成、无人监考），整体排除。
             $exams = \Core\Database::fetchAll(
                 "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
                         e.exam_score, s.subj_name
@@ -45,8 +46,9 @@ class TeacherMonitorController extends BaseController
                  INNER JOIN `subject` s ON s.id = e.subj_id
                  WHERE e.exam_tea = ?
                    AND e.exam_status IN ('exam','paper','testing')
+                   AND COALESCE(e.exam_class, '') <> ?
                  ORDER BY e.id DESC",
-                [$teaName]
+                [$teaName, Exam::MOCK_CLASS]
             );
             foreach ($exams as &$e) {
                 Exam::autoStartIfDue((int) $e['id']);

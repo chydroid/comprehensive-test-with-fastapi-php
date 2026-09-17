@@ -199,7 +199,15 @@ $t->guard('管理接口返回 schema 元数据', function () use ($t) {
     $t->assertTrue('返回 values', is_array($data['values'] ?? null));
     $t->assertTrue('返回 groups', is_array($data['groups'] ?? null));
     $fields = $data['fields'] ?? [];
-    $t->assertSame('返回全部字段定义', count(S_KEYS), count($fields));
+    // 以 Setting::SCHEMA 为唯一真源比对，而非测试内自维护的键清单：
+    // 后者会在每次新增设置项时过期，把「接口按 schema 全量下发」这一事实
+    // 变成需要人工同步的重复定义（本次新增 practice 分组即因此误报）。
+    $t->assertSame('返回全部字段定义', count(Setting::SCHEMA), count($fields));
+    $t->assertSame(
+        '下发的键集合与 schema 一致',
+        array_keys(Setting::SCHEMA),
+        array_map(static fn ($f) => (string) ($f['key'] ?? ''), $fields)
+    );
     $first = $fields[0] ?? [];
     foreach (['key', 'group', 'type', 'label', 'hint', 'default', 'value'] as $k) {
         $t->assertTrue("字段含 {$k}", array_key_exists($k, $first));

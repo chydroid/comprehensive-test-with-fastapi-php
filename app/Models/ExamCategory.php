@@ -26,10 +26,14 @@ class ExamCategory extends Model
         return $row !== null && (int) $row['id'] !== $excludeId;
     }
 
-    /** 是否有考试引用该类别 */
+    /** 是否有考试引用该类别（模拟考试不算：它不参与正式考试编排） */
     public function inUse(int $id): bool
     {
-        $row = \Core\Database::fetch('SELECT COUNT(*) AS c FROM `examinfo` WHERE exam_category_id = ?', [$id]);
+        $row = \Core\Database::fetch(
+            'SELECT COUNT(*) AS c FROM `examinfo`
+             WHERE exam_category_id = ? AND COALESCE(exam_class, \'\') <> ?',
+            [$id, Exam::MOCK_CLASS]
+        );
         return (int) ($row['c'] ?? 0) > 0;
     }
 }

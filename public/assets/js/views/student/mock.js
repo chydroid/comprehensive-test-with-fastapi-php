@@ -20,7 +20,13 @@ export function MockSetupView({ router }) {
   const root = el('div.stack');
   const bodySlot = el('div');
 
-  const state = { subjects: [], subjId: 0, counts: {}, want: { radio1: 0, radio2: 0, checkbox: 0, text: 0 } };
+  const state = {
+    subjects: [], subjId: 0, counts: {},
+    want: { radio1: 0, radio2: 0, checkbox: 0, text: 0 },
+    // 服务端下发的配额（后台「系统设置 → 模拟考试与练习」）：每日场次上限 / 已用 /
+    // 剩余 / 单场题目总数上限 / 是否因正式考试被策略暂停
+    limits: { daily_limit: 5, used_today: 0, remaining: 5, max_questions: 100, paused: false },
+  };
 
   root.append(el('div.page-head', {}, [
     el('div', {}, [
@@ -32,11 +38,35 @@ export function MockSetupView({ router }) {
     ]),
   ]), bodySlot);
 
+  /**
+   * 因「策略暂停」或「今日场次用尽」而无法组卷时的说明节点；可组卷时返回 null。
+   * 提示文案与后端拒绝口径一致，避免考生配好一卷才被拒。
+   */
+  function quotaBlocked() {
+    const l = state.limits;
+    if (l.paused) {
+      return alertBox('当前有正在进行的正式考试，按考场纪律要求已暂停模拟考试。请考试结束后再试。', {
+        type: 'warning', title: '模拟考试已暂停',
+      });
+    }
+    if (Number(l.remaining) <= 0) {
+      return alertBox(`你今天的模拟考试场次已用完（每日上限 ${l.daily_limit} 场），请明天再试。`, {
+        type: 'warning', title: '今日场次已用尽',
+      });
+    }
+    return null;
+  }
+
   (async () => {
     const res = await withLoading(bodySlot, () => exerciseApi.mockConfig());
     if (!res.ok) return;
     state.subjects = res.result.subjects || [];
+    state.limits = { ...state.limits, ...(res.result.limits || {}) };
     if (!state.subjects.length) { mount(bodySlot, alertBox('暂无可用科目', { type: 'warning' })); return; }
+
+    const blocked = quotaBlocked();
+    if (blocked) { mount(bodySlot, blocked); return; }
+
     state.subjId = state.subjects[0].id;
     await loadCounts();
     render();
@@ -49,6 +79,12 @@ export function MockSetupView({ router }) {
 
   function render() {
     clear(bodySlot);
+    // 单场题目总数上限（后台可配，默认 100），与后端 mock_max_questions 同口径
+    const maxQ = Math.max(1, Number(state.limits.max_questions) || 100);
+    // 除当前题型外已占用的题数，用于把「抽题数量」就地钳制到剩余额度内
+    const usedByOthers = (t) => Object.entries(state.want)
+      .reduce((sum, [k, n]) => (k === t ? sum : sum + n), 0);
+
     const subjSel = select(
       state.subjects.map((s) => ({ value: String(s.id), label: s.subj_name })),
       { name: 'subj_id', value: String(state.subjId) },
@@ -61,10 +97,12 @@ export function MockSetupView({ router }) {
 
     const rows = [];
     for (const t of ['radio1', 'radio2', 'checkbox', 'text']) {
-      const max = state.counts[t] || 0;
+      // 可抽上限同时受「题库数量」与「单场题目总数上限」约束
+      const max = Math.min(state.counts[t] || 0, maxQ);
       const numIn = input({ type: 'number', value: String(state.want[t] || 0), min: 0, max });
       numIn.addEventListener('input', () => {
-        const v = Math.max(0, Math.min(max, Number(numIn.value) || 0));
+        const room = Math.max(0, maxQ - usedByOthers(t));
+        const v = Math.max(0, Math.min(max, room, Number(numIn.value) || 0));
         state.want[t] = v;
         numIn.value = String(v);
         updateSummary();
@@ -77,9 +115,10 @@ export function MockSetupView({ router }) {
     function updateSummary() {
       const total = Object.values(state.want).reduce((a, b) => a + b, 0);
       const score = Object.entries(state.want).reduce((sum, [t, n]) => sum + n * (MOCK_VALUE[t] || 0), 0);
-      totalNode.textContent = `${total} 题`;
+      const over = total > maxQ;
+      totalNode.textContent = `${total} 题${over ? `（超出上限 ${maxQ}）` : ''}`;
       scoreNode.textContent = `${score} 分`;
-      startBtn.disabled = total <= 0;
+      startBtn.disabled = total <= 0 || over || !!state.limits.paused || Number(state.limits.remaining) <= 0;
     }
 
     const startBtn = button('开始模拟考试', {
@@ -89,6 +128,7 @@ export function MockSetupView({ router }) {
         for (const [t, n] of Object.entries(state.want)) payload[`${t}_count`] = n;
         const res = await withLoading(startBtn, () => exerciseApi.mockStart(payload));
         if (!res.ok) {
+          // 题库不足时后端在 error.data 里回传逐题型的缺口明细
           const detail = res.error?.data;
           notify.error(res.error?.message || '组卷失败');
           if (Array.isArray(detail) && detail.length) {
@@ -104,7 +144,7 @@ export function MockSetupView({ router }) {
     const t = table({
       columns: [
         { key: 'label', title: '题型' },
-        { key: 'max', title: '题库数量', align: 'right', render: (r) => el('span.muted', { text: String(r.max) }) },
+        { key: 'max', title: '可抽数量', align: 'right', render: (r) => el('span.muted', { text: String(r.max) }) },
         { key: 'val', title: '每题分值', align: 'right', render: (r) => el('span', { text: `${MOCK_VALUE[r.type] || 0} 分` }) },
         { key: 'want', title: '抽取数量', align: 'right', render: (r) => r.numIn },
       ],
@@ -120,6 +160,16 @@ export function MockSetupView({ router }) {
         el('div.desc-list', {}, [
           el('div.dl-row', {}, [el('span.dl-key', { text: '总题数' }), el('span.dl-val', {}, [totalNode])]),
           el('div.dl-row', {}, [el('span.dl-key', { text: '总分' }), el('span.dl-val', {}, [scoreNode])]),
+          el('div.dl-row', {}, [
+            el('span.dl-key', { text: '单场题目上限' }),
+            el('span.dl-val', { text: `${maxQ} 题` }),
+          ]),
+          el('div.dl-row', {}, [
+            el('span.dl-key', { text: '今日剩余场次' }),
+            el('span.dl-val', {
+              text: `${state.limits.remaining} / ${state.limits.daily_limit} 场`,
+            }),
+          ]),
         ]),
         startBtn,
       ]),

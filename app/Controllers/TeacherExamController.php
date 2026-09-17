@@ -45,19 +45,22 @@ class TeacherExamController extends BaseController
         $teaName = (string) ($sess['tea_name'] ?? '');
 
         $p = $this->page();
+        // 模拟考试是考生自主生成的临时记录，不属于「考试管理」范畴，必须整体排除：
+        // 否则教师端考试列表与列表上方的 total 都会被考生的练习行为污染。
         $rows = Database::fetchAll(
             'SELECT e.*, s.subj_name, c.category_name
              FROM `examinfo` e
              INNER JOIN `subject` s ON s.id = e.subj_id
              LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
-             WHERE e.exam_tea = ?
+             WHERE e.exam_tea = ? AND COALESCE(e.exam_class, \'\') <> ?
              ORDER BY e.id DESC
              LIMIT ' . $p['per_page'] . ' OFFSET ' . $p['offset'],
-            [$teaName]
+            [$teaName, Exam::MOCK_CLASS]
         );
         $total = (int) (Database::fetch(
-            'SELECT COUNT(*) AS c FROM `examinfo` WHERE exam_tea = ?',
-            [$teaName]
+            'SELECT COUNT(*) AS c FROM `examinfo`
+             WHERE exam_tea = ? AND COALESCE(exam_class, \'\') <> ?',
+            [$teaName, Exam::MOCK_CLASS]
         )['c'] ?? 0);
 
         foreach ($rows as &$row) {
@@ -92,6 +95,12 @@ class TeacherExamController extends BaseController
 
         $row = $this->model->find($id);
         if ($row === null) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+        // 模拟考试整体排除在教师端考试管理之外。此处统一兜底，使 show/update/
+        // delete/students/quiz-count 等全部 {id} 接口一次性拒绝，避免「列表不展示
+        // 但直连 id 仍可操作」的旁路（例如误删考生的模拟记录）。
+        if ((string) ($row['exam_class'] ?? '') === Exam::MOCK_CLASS) {
             throw new HttpException(404, '考试不存在', 40400);
         }
         // 用「不存在」而非「无权限」回应，避免通过响应码探测他人考试编号是否存在

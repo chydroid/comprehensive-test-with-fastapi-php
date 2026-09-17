@@ -27,10 +27,14 @@ class Subject extends Model
         return (int) ($row['c'] ?? 0) > 0;
     }
 
-    /** 该科目下是否有考试 */
+    /** 该科目下是否有考试（模拟考试不算：它是考生自主生成的临时记录，不该锁住基础数据维护） */
     public function hasExams(int $id): bool
     {
-        $row = \Core\Database::fetch('SELECT COUNT(*) AS c FROM `examinfo` WHERE subj_id = ?', [$id]);
+        $row = \Core\Database::fetch(
+            'SELECT COUNT(*) AS c FROM `examinfo`
+             WHERE subj_id = ? AND COALESCE(exam_class, \'\') <> ?',
+            [$id, Exam::MOCK_CLASS]
+        );
         return (int) ($row['c'] ?? 0) > 0;
     }
 }

@@ -29,6 +29,7 @@ final class Setting
     /** 分组定义（顺序即前端标签页顺序） */
     public const GROUPS = [
         'exam'     => ['label' => '考试规则', 'desc' => '入场窗口、口令与成绩展示等考试行为', 'icon' => 'clipboard'],
+        'practice' => ['label' => '模拟考试与练习', 'desc' => '模拟考试、在线练习与正式考试的隔离策略及数据上限', 'icon' => 'target'],
         'security' => ['label' => '安全策略', 'desc' => '登录限流与密码强度要求', 'icon' => 'shield'],
         'ui'       => ['label' => '界面与体验', 'desc' => '分页条数与页面自动刷新频率', 'icon' => 'sliders'],
     ];
@@ -70,6 +71,38 @@ final class Setting
         'exam_show_score_immediately' => [
             'group' => 'exam', 'type' => 'bool', 'default' => 1, 'public' => true,
             'label' => '交卷后立即显示成绩', 'hint' => '关闭后考生交卷时只提示已交卷，成绩稍后统一公布。',
+        ],
+
+        /* ---------------- 模拟考试与练习 ----------------
+         *
+         * 设计意图：模拟考试 / 在线练习与正式考试**互不影响**——模拟考试不会
+         * 出现在管理端与教师端的考试管理、监考列表中，也不会被计入「进行中的
+         * 正式考试」；正式考试进行中默认也不暂停练习与模拟（与原「开考即暂停」
+         * 相比更利于考生自主复习）。
+         *
+         * 但「开考期间允许练习/模拟」存在客观的答案泄露面：练习按 quiz_id 换答案、
+         * 模拟可自由组卷并借错题回顾整卷下发 quiz_key，而考生此时正好知道自己
+         * 在考哪些 quiz_id。因此是否允许由管理员按考场纪律要求决定，这里做成开关。
+         */
+        'exercise_allow_during_exam' => [
+            'group' => 'practice', 'type' => 'bool', 'default' => 1, 'public' => true,
+            'label' => '正式考试期间开放在线练习',
+            'hint'  => '开启：练习与正式考试互不影响。关闭：存在进行中的正式考试时暂停练习抽题与答案校验（防止借练习反查正在考的题目答案）。',
+        ],
+        'mock_allow_during_exam' => [
+            'group' => 'practice', 'type' => 'bool', 'default' => 1, 'public' => true,
+            'label' => '正式考试期间开放模拟考试',
+            'hint'  => '开启：模拟考试与正式考试互不影响。关闭：存在进行中的正式考试时暂停模拟组卷与错题回顾（错题回顾会整卷下发答案，泄露面大于练习）。',
+        ],
+        'mock_daily_limit' => [
+            'group' => 'practice', 'type' => 'int', 'default' => 5, 'min' => 1, 'max' => 100,
+            'label' => '每人每日模拟考试场次上限', 'unit' => '场', 'public' => true,
+            'hint'  => '同一考生当天最多可发起的模拟考试场次（含未交卷的）。用于防止无限组卷批量取题。',
+        ],
+        'mock_max_questions' => [
+            'group' => 'practice', 'type' => 'int', 'default' => 100, 'min' => 1, 'max' => 1000,
+            'label' => '单场模拟考试题目总数上限', 'unit' => '题', 'public' => true,
+            'hint'  => '考生自主组卷时，一场模拟考试可抽取的题目总数上限（各题型数量之和）。',
         ],
 
         /* ---------------- 安全策略 ---------------- */

@@ -97,6 +97,64 @@ temp/logo/gen.py         # -> public/assets/img/{logo,logo-mark,favicon}.svg
 temp/logo/gen_logo_js.mjs # -> public/assets/js/core/logo.js
 ```
 
+## 模拟考试 / 在线练习 与正式考试的关系
+
+**默认互不影响**：模拟考试与在线练习不会干扰正式考试，正式考试进行中也不暂停二者。
+
+### 数据隔离（约定）
+
+模拟考试在 `examinfo` 中以 `exam_class = '模拟考试'`（`Exam::MOCK_CLASS`）标记，
+它是考生自主生成的临时记录。**除考生本人的答题链路外，其它模块一律排除它**：
+
+| 位置 | 行为 |
+|---|---|
+| `Exam::adminList()` | 管理端「考试管理」列表与 `total` 均排除（`Admin\MonitorController` 的监考选择页复用同一查询） |
+| `TeacherExamController::index()` | 教师端「考试管理」列表与 `total` 均排除 |
+| `TeacherExamController::assertOwnExam()` | 教师端全部 `{id}` 接口统一 404，杜绝「列表不显示但直连 id 可操作」 |
+| `TeacherMonitorController::index()` | 教师端监考列表排除 |
+| `Exam::activeWithSubject()` | 门户 / 仪表盘「进行中的考试」排除 |
+| `Exam::pendingForStudent()` | 考生「待考考试」排除 |
+| `Exam::finishedList()` | 成绩模块考试下拉排除 |
+| `Subject::hasExams()` / `ExamCategory::inUse()` | 孤儿模拟数据不得锁住科目 / 类别的删除 |
+| `Exam::hasOngoingFormalExam()` | 模拟考试不计入「进行中的正式考试」 |
+
+反过来说，只有 **`/api/exercise/mock/*` 与 `/api/exercise*` 这一组接口**会读写模拟考试。
+
+### 后台可配置项（系统设置 → 模拟考试与练习）
+
+| 配置键 | 默认值 | 说明 |
+|---|---|---|
+| `exercise_allow_during_exam` | 开启 | 正式考试期间是否开放在线练习 |
+| `mock_allow_during_exam` | 开启 | 正式考试期间是否开放模拟考试 |
+| `mock_daily_limit` | 5 场 | 每人每日模拟考试场次上限（含未交卷的） |
+| `mock_max_questions` | 100 题 | 单场模拟考试题目总数上限 |
+
+**关于两个开关需要了解的取舍**：练习接口按 `quiz_id` 即可换取任意题目答案，
+模拟考试的错题回顾会整卷下发 `quiz_key`，而开考期间 `/api/exam/paper` 会向考生
+下发其所考题目的 `quiz_id`。因此「开考期间开放练习 / 模拟」客观上存在反查答案的
+路径。默认按「互不影响」放行；若考场纪律要求更严，可在后台把对应开关关闭，
+此时存在进行中的正式考试期间：
+
+- 练习：`/api/exercise` 返回 `practice_paused = true`，`POST /api/exercise/answer` 返回 403；
+- 模拟：`POST /api/exercise/mock/start` 与 `GET /api/exercise/mock/review` 返回 403。
+
+前端**必须**以服务端下发的 `practice_paused`（策略结论）而非 `has_ongoing_exam`
+（事实）来决定是否禁用练习入口 —— 二者默认并不等价。
+
+### 上限的落点
+
+- 每日场次：`Exam::mockUsedToday()` 按 `examinfo.exam_start`（即发起时刻）统计当日
+  已创建的模拟考试数（**含未交卷**，否则可用「只组卷不交卷」绕过上限）；
+  `POST /api/exercise/mock/start` 在两个位置复检（预检 + 事务内），超限返回 **429**。
+- 单场题数：各题型数量之和超过 `mock_max_questions` 时返回 **400**（错误码 `40002`，
+  `data` 回传 `max` / `requested`）；前端组卷页同时就地钳制输入。
+- 组卷页所需配额（剩余场次 / 单场上限 / 是否暂停）由
+  `GET /api/exercise/mock/config` 的 `limits` 下发，避免考生配好整卷才被拒。
+
+> 并发说明：每日上限用的是「预检 + 事务内复检」而非行锁，极端并发（同一考生
+> 同时发多个组卷请求）下仍可能多出 1 场；前端按钮在请求期间禁用已覆盖常见场景，
+> 若需强一致需引入独立的配额表或 `SELECT … FOR UPDATE`。
+
 ## 许可证
 
 MIT

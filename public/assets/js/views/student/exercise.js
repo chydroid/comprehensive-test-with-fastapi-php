@@ -1,8 +1,9 @@
 /**
  * 在线练习视图：按「科目 + 题型」随机抽题，逐题作答并即时校验。
  *
- * 注意：后端在存在 exam_status='testing' 的正式考试时会锁定练习
- * （has_ongoing_exam = true），前端据此给出明确提示而非静默失败。
+ * 注意：练习与正式考试默认互不影响；仅当后台「系统设置 → 模拟考试与练习」
+ * 关闭「正式考试期间开放在线练习」时，后端才会在开考期间锁定练习，
+ * 此时 practice_paused = true，前端据此给出明确提示而非静默失败。
  */
 
 import { el, clear, mount } from '../../core/dom.js';
@@ -48,10 +49,13 @@ export function ExerciseView() {
     const res = await withLoading(pickerSlot, () => exerciseApi.list({}));
     if (!res.ok) return;
     state.subjects = res.result.subjects || [];
-    state.hasOngoing = res.result.has_ongoing_exam;
+    // practice_paused 是服务端给出的「策略结论」（是否被后台关闭），
+    // has_ongoing_exam 只是「当前有正式考试在进行」的事实 —— 默认策略下
+    // 二者并不等价，必须用前者决定是否禁用练习。
+    state.paused = !!res.result.practice_paused;
     renderPicker();
     renderNotice();
-    if (state.hasOngoing) return;
+    if (state.paused) return;
     if (state.subjects.length) {
       state.subjId = state.subjects[0].id;
       await loadTypes();
@@ -70,7 +74,7 @@ export function ExerciseView() {
       state.subjects.map((s) => ({ value: String(s.id), label: s.subj_name })),
       { name: 'subj_id', value: String(state.subjId || '') },
     );
-    subjSel.disabled = state.hasOngoing;
+    subjSel.disabled = state.paused;
     subjSel.addEventListener('change', async () => {
       state.subjId = Number(subjSel.value);
       state.quizClass = '';
@@ -99,8 +103,8 @@ export function ExerciseView() {
 
   function renderNotice() {
     clear(noticeSlot);
-    if (state.hasOngoing) {
-      noticeSlot.append(alertBox('当前有正在进行的正式考试，练习功能已临时暂停（防止题目泄露）。', {
+    if (state.paused) {
+      noticeSlot.append(alertBox('当前有正在进行的正式考试，按考场纪律要求已暂停练习（防止题目泄露）。', {
         type: 'warning',
         title: '练习已暂停',
       }));
@@ -113,7 +117,7 @@ export function ExerciseView() {
   }
 
   async function draw() {
-    if (state.hasOngoing) { notify.warning('正式考试进行中，练习已暂停'); return; }
+    if (state.paused) { notify.warning('正式考试进行中，按考场纪律要求已暂停练习'); return; }
     if (!state.subjId) { notify.warning('请先选择科目'); return; }
     if (!state.quizClass) { notify.warning('请先选择题型'); return; }
     const res = await withLoading(questionSlot, () => exerciseApi.list({ subj_id: state.subjId, quiz_class: state.quizClass }));

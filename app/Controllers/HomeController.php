@@ -63,7 +63,12 @@ class HomeController extends BaseController
                 'text'     => (int) ($quizStats['text'] ?? 0),
                 'longtext' => (int) ($quizStats['longtext'] ?? 0),
             ],
-            'exam_count'     => (int) (Database::fetch('SELECT COUNT(*) c FROM `examinfo`')['c'] ?? 0),
+            // 门户「考试总数」只统计正式考试：模拟考试是考生自主生成的临时记录，
+            // 计入会让公开统计被个人练习行为稀释（与仪表盘口径保持一致）。
+            'exam_count'     => (int) (Database::fetch(
+                "SELECT COUNT(*) c FROM `examinfo` WHERE COALESCE(exam_class, '') <> ?",
+                [\App\Models\Exam::MOCK_CLASS]
+            )['c'] ?? 0),
             'student_count'  => (int) (Database::fetch('SELECT COUNT(*) c FROM `stuinfo`')['c'] ?? 0),
         ]);
     }

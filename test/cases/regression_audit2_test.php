@@ -10,11 +10,13 @@ declare(strict_types=1);
  *   BUG-101 练习抽题返回的题目缺少 quiz_id 字段（SELECT q.id 未起别名），
  *           导致前端题号显示 "#undefined"、提交答案恒 400
  *   BUG-102 正式考试进行中，/api/exercise/answer 仍按 quiz_id 下发正确答案
- *           —— 可反查正在考的题目答案（击穿 P0-4）
+ *           —— 可反查正在考的题目答案。现改为「后台可配」：
+ *           默认与正式考试互不影响（放行），关闭 exercise_allow_during_exam 后 403。
  *   BUG-103 模拟考试以 exam_status='testing' 落库，被误判为「正式考试进行中」，
  *           学生自己开一场模拟考试就会把练习入口错误暂停
  *   BUG-104 正式考试进行中可自由组模拟考试并立即交卷，再经 review() 整卷
- *           导出 quiz_key（批量答案泄露）
+ *           导出 quiz_key（批量答案泄露）。同 BUG-102，改由
+ *           mock_allow_during_exam 开关控制，关闭后组卷 / 复盘均 403。
  *   BUG-105 /api/health 从不下发 X-CSRF-Token，前端 419 自动恢复形同虚设
  *   BUG-106 /api/exam/status 不下发 csrf_token，答题页刷新后保存 / 交卷恒 419
  *   BUG-107 成绩 CSV 导出未防公式注入（姓名等以 = + - @ 开头会被 Excel 当公式执行）
@@ -24,7 +26,9 @@ require __DIR__ . '/../../core/helpers.php';
 start_session();
 
 use App\Models\Exam;
+use App\Models\SiteConfig;
 use App\Services\InvigilationService;
+use App\Services\Setting;
 use Core\Database;
 use Test\Fixture;
 use Test\Harness;
@@ -96,6 +100,31 @@ $restore = static function () use ($parked): void {
             [(string) $r['exam_status'], (int) $r['id']]
         );
     }
+};
+
+/**
+ * 临时改写一条运行参数并清空 Setting 的请求级缓存。
+ *
+ * 本套件通过伪 HTTP 在**同一进程**内跑完整链路，Setting 的静态缓存不会
+ * 自动失效 —— 直接改库而不 flush 的话，控制器读到的仍是旧值，断言会假通过。
+ * $value 传 null 表示删除该键（回到 SCHEMA 默认值）。
+ *
+ * @return string|null 原值（供还原）
+ */
+$putSetting = static function (string $key, ?string $value): ?string {
+    $before = Setting::stored($key);
+    if ($value === null) {
+        Database::query('DELETE FROM `siteconfig` WHERE config_key = ?', [$key]);
+    } else {
+        (new SiteConfig())->put($key, $value);
+    }
+    Setting::flush();
+    return $before;
+};
+
+/** 按记录的原值还原 */
+$restoreSetting = static function (string $key, ?string $before) use ($putSetting): void {
+    $putSetting($key, $before);
 };
 
 /* ============ BUG-101 练习题目必须携带 quiz_id ============ */
@@ -193,19 +222,20 @@ $t->guard('BUG-107 成绩 CSV 对 = 开头的姓名做转义，正常姓名不�
 $busyExam = Fixture::createExam(['exam_status' => 'testing']);
 $t->assertTrue('已建立进行中的正式考试（前置条件）', $busyExam !== null && Exam::hasOngoingFormalExam());
 
-/* ============ BUG-102 开考期间练习答案校验必须被拒 ============ */
-$t->guard('BUG-102 正式考试进行中 /api/exercise/answer 被拒绝', function () use ($t, $subjId, $quizClass, $stuA) {
+/* ============ BUG-102 开考期间的练习答案校验（策略可配） ============ */
+$t->guard('BUG-102 默认策略下开考期间练习仍可用（与正式考试互不影响）', function () use ($t, $subjId, $quizClass, $stuA) {
     $_SESSION = [];
     $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
     $t->assertSame('考生登录 -> 200', 200, $login['status']);
     $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
 
-    // 抽题接口同步进入「已暂停」态（既有约定）
     $list = Http::get("/api/exercise?subj_id={$subjId}&quiz_class={$quizClass}");
     $t->assertSame('练习列表 -> 200', 200, $list['status']);
-    $t->assertSame('has_ongoing_exam = true', true, (bool) (Http::data($list)['has_ongoing_exam'] ?? false));
+    $data = (array) Http::data($list);
+    // has_ongoing_exam 是事实，practice_paused 是策略结论；默认策略下二者不同
+    $t->assertSame('has_ongoing_exam = true（事实）', true, (bool) ($data['has_ongoing_exam'] ?? false));
+    $t->assertSame('practice_paused = false（默认不暂停练习）', false, (bool) ($data['practice_paused'] ?? true));
 
-    // 关键：直接打答案校验接口也必须被拒（此前无任何拦截）
     $row = Database::fetch(
         'SELECT id FROM `quizlib` WHERE subj_id = ? AND quiz_class = ? LIMIT 1',
         [$subjId, $quizClass]
@@ -214,23 +244,57 @@ $t->guard('BUG-102 正式考试进行中 /api/exercise/answer 被拒绝', functi
     $t->assertTrue('取到一道样例题（前置条件）', $quizId > 0);
 
     $hit = Http::post('/api/exercise/answer', ['quiz_id' => $quizId, 'stu_key' => 'A'], ['X-CSRF-Token' => $csrf]);
-    $t->assertSame('开考期间取答案 -> 403', 403, $hit['status']);
+    $t->assertSame('默认策略下开考期间取答案 -> 200', 200, $hit['status']);
 });
 
-/* ============ BUG-104 开考期间不得经模拟考试导出整卷答案 ============ */
-$t->guard('BUG-104 正式考试进行中模拟考试被拒绝', function () use ($t, $subjId, $stuA) {
-    $_SESSION = [];
-    $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
-    $t->assertSame('考生登录 -> 200', 200, $login['status']);
-    $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
+$t->guard('BUG-102 关闭「正式考试期间开放在线练习」后 /api/exercise/answer 被拒绝', function () use ($t, $subjId, $quizClass, $stuA, $putSetting, $restoreSetting) {
+    $before = $putSetting('exercise_allow_during_exam', '0');
+    try {
+        $_SESSION = [];
+        $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
+        $t->assertSame('考生登录 -> 200', 200, $login['status']);
+        $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
 
-    $start = Http::post('/api/exercise/mock/start', [
-        'subj_id' => $subjId, 'radio1_count' => 1,
-    ], ['X-CSRF-Token' => $csrf]);
-    $t->assertSame('开考期间组模拟卷 -> 403', 403, $start['status']);
+        // 抽题接口同步进入「已暂停」态
+        $list = Http::get("/api/exercise?subj_id={$subjId}&quiz_class={$quizClass}");
+        $t->assertSame('练习列表 -> 200', 200, $list['status']);
+        $t->assertSame('practice_paused = true', true, (bool) (Http::data($list)['practice_paused'] ?? false));
+
+        // 关键：直接打答案校验接口也必须被拒（否则可反查正在考的题目答案）
+        $row = Database::fetch(
+            'SELECT id FROM `quizlib` WHERE subj_id = ? AND quiz_class = ? LIMIT 1',
+            [$subjId, $quizClass]
+        );
+        $quizId = (int) ($row['id'] ?? 0);
+        $t->assertTrue('取到一道样例题（前置条件）', $quizId > 0);
+
+        $hit = Http::post('/api/exercise/answer', ['quiz_id' => $quizId, 'stu_key' => 'A'], ['X-CSRF-Token' => $csrf]);
+        $t->assertSame('开考期间取答案 -> 403', 403, $hit['status']);
+    } finally {
+        $restoreSetting('exercise_allow_during_exam', $before);
+    }
 });
 
-$t->guard('BUG-104 正式考试进行中错题回顾被拒绝', function () use ($t, $subjId, $stuA) {
+/* ============ BUG-104 开考期间不得经模拟考试导出整卷答案（策略可配） ============ */
+$t->guard('BUG-104 关闭「正式考试期间开放模拟考试」后组卷被拒绝', function () use ($t, $subjId, $stuA, $putSetting, $restoreSetting) {
+    $before = $putSetting('mock_allow_during_exam', '0');
+    try {
+        $_SESSION = [];
+        $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
+        $t->assertSame('考生登录 -> 200', 200, $login['status']);
+        $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
+
+        $start = Http::post('/api/exercise/mock/start', [
+            'subj_id' => $subjId, 'radio1_count' => 1,
+        ], ['X-CSRF-Token' => $csrf]);
+        $t->assertSame('开考期间组模拟卷 -> 403', 403, $start['status']);
+    } finally {
+        $restoreSetting('mock_allow_during_exam', $before);
+    }
+});
+
+$t->guard('BUG-104 关闭「正式考试期间开放模拟考试」后错题回顾被拒绝', function () use ($t, $subjId, $stuA, $putSetting, $restoreSetting) {
+    $before = $putSetting('mock_allow_during_exam', '0');
     $_SESSION = [];
 
     // 先造一场「已交卷」的模拟考试，确保若非拦截本应能复盘（否则测不出守卫）
@@ -247,14 +311,17 @@ $t->guard('BUG-104 正式考试进行中错题回顾被拒绝', function () use 
         [$mockId, $stuA]
     );
 
-    $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
-    $t->assertSame('考生登录 -> 200', 200, $login['status']);
+    try {
+        $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
+        $t->assertSame('考生登录 -> 200', 200, $login['status']);
 
-    $review = Http::get("/api/exercise/mock/review?exam_id={$mockId}");
-    $t->assertSame('开考期间复盘 -> 403', 403, $review['status']);
-
-    Database::query('DELETE FROM `stuscore` WHERE exam_id = ?', [$mockId]);
-    Database::query('DELETE FROM `examinfo` WHERE id = ?', [$mockId]);
+        $review = Http::get("/api/exercise/mock/review?exam_id={$mockId}");
+        $t->assertSame('开考期间复盘 -> 403', 403, $review['status']);
+    } finally {
+        Database::query('DELETE FROM `stuscore` WHERE exam_id = ?', [$mockId]);
+        Database::query('DELETE FROM `examinfo` WHERE id = ?', [$mockId]);
+        $restoreSetting('mock_allow_during_exam', $before);
+    }
 });
 
 /* ============================ 清理 ============================ */
