@@ -99,7 +99,28 @@ temp/logo/gen_logo_js.mjs # -> public/assets/js/core/logo.js
 
 ## 模拟考试 / 在线练习 与正式考试的关系
 
-**默认互不影响**：模拟考试与在线练习不会干扰正式考试，正式考试进行中也不暂停二者。
+**默认隔离**：两个策略开关默认关闭 —— 只要存在进行中的正式考试，在线练习与模拟考试
+一律暂停。在此之上还有一条**不可配置的硬约束**：考生本人正在考场内时，无论开关如何
+设置，都不得同时进行在线练习或模拟考试。
+
+### 暂停判定的两层（唯一出处 `Exam::exercisePause()` / `Exam::mockPause()`）
+
+| 层 | 触发条件 | 可否由后台放开 |
+|---|---|---|
+| **个人层**（硬约束） | 考生本人正在参加正式考试：该考试 `exam_status = 'testing'` 且其 `stuscore.stu_status ∈ {online, locked}` | **否** |
+| **全局层** | 存在进行中的正式考试 且 对应开关为关闭（默认） | 是 |
+
+- **个人层必须先判**：顺序反过来的话，管理员一开启开关，正在答题的考生就会被放行，
+  硬约束形同虚设。
+- 「在考」以**已入场**为准（`online` 由入场与答题心跳写入，`locked` 为监考锁定），
+  **不含**仅「已排卷」的 `waiting` —— 出题会在入场前很久就为全班写入 `waiting`，
+  若算作在考，考生整个备考期都无法练习，而那时试卷对考生尚不可见、不存在泄露面。
+  已交卷（`over` 前缀）者不算在考。
+- 暂停期间的拦截范围：练习抽题与答案校验、模拟组卷 / 取题 / 保存 / 错题回顾 一律 403；
+  **模拟交卷（`submit`）刻意不拦** —— 暂停可能在考生答到一半时生效，若连交卷也拦掉，
+  考生会留下永远无法结束的场次并无谓消耗一次每日额度（交卷只回成绩与对错数，不含答案）。
+- 暂停原因经 `pause_reason` 下发：`self_in_exam`（本人在考）/ `exam_ongoing`（全局策略）/
+  `''`（未暂停）。前端据此给出不同指引（去处理考试 vs 只能等考试结束）。
 
 ### 数据隔离（约定）
 
@@ -116,7 +137,7 @@ temp/logo/gen_logo_js.mjs # -> public/assets/js/core/logo.js
 | `Exam::pendingForStudent()` | 考生「待考考试」排除 |
 | `Exam::finishedList()` | 成绩模块考试下拉排除 |
 | `Subject::hasExams()` / `ExamCategory::inUse()` | 孤儿模拟数据不得锁住科目 / 类别的删除 |
-| `Exam::hasOngoingFormalExam()` | 模拟考试不计入「进行中的正式考试」 |
+| `Exam::hasOngoingFormalExam()` / `Exam::isStudentInExam()` | 模拟考试不计入「进行中的正式考试」，也不算「本人在考」 |
 
 反过来说，只有 **`/api/exercise/mock/*` 与 `/api/exercise*` 这一组接口**会读写模拟考试。
 
@@ -124,22 +145,28 @@ temp/logo/gen_logo_js.mjs # -> public/assets/js/core/logo.js
 
 | 配置键 | 默认值 | 说明 |
 |---|---|---|
-| `exercise_allow_during_exam` | 开启 | 正式考试期间是否开放在线练习 |
-| `mock_allow_during_exam` | 开启 | 正式考试期间是否开放模拟考试 |
+| `exercise_allow_during_exam` | **关闭** | 正式考试期间是否开放在线练习 |
+| `mock_allow_during_exam` | **关闭** | 正式考试期间是否开放模拟考试 |
 | `mock_daily_limit` | 5 场 | 每人每日模拟考试场次上限（含未交卷的） |
 | `mock_max_questions` | 100 题 | 单场模拟考试题目总数上限 |
 
-**关于两个开关需要了解的取舍**：练习接口按 `quiz_id` 即可换取任意题目答案，
-模拟考试的错题回顾会整卷下发 `quiz_key`，而开考期间 `/api/exam/paper` 会向考生
-下发其所考题目的 `quiz_id`。因此「开考期间开放练习 / 模拟」客观上存在反查答案的
-路径。默认按「互不影响」放行；若考场纪律要求更严，可在后台把对应开关关闭，
-此时存在进行中的正式考试期间：
+**为什么默认关闭**：练习接口按 `quiz_id` 即可换取任意题目答案，模拟考试的错题回顾会
+整卷下发 `quiz_key`，而开考期间 `/api/exam/paper` 会向考生下发其所考题目的 `quiz_id`。
+因此「开考期间开放练习 / 模拟」客观上存在反查答案的路径。仅当业务上明确需要
+「练习/模拟与正式考试互不影响」时，才由管理员显式开启 —— 即便如此，
+**正在考场内的考生仍被个人层硬约束挡住**。
 
-- 练习：`/api/exercise` 返回 `practice_paused = true`，`POST /api/exercise/answer` 返回 403；
-- 模拟：`POST /api/exercise/mock/start` 与 `GET /api/exercise/mock/review` 返回 403。
+### 运行参数的写入契约（新增设置项 / 写脚本时要记住）
 
-前端**必须**以服务端下发的 `practice_paused`（策略结论）而非 `has_ongoing_exam`
-（事实）来决定是否禁用练习入口 —— 二者默认并不等价。
+运行参数落库 `siteconfig`，是**覆盖值**而非唯一真源：`Setting::stored()` 专门区分
+「从未配置」与「配置成了默认值」。由此产生三条约束：
+
+- `PUT /api/admin/settings` 中 **`null` 表示「撤销覆盖」** —— 删除该行，取值回落
+  `Setting::SCHEMA[键]['default']`；响应 `saved` 汇报「生效后的值」（撤销项即默认值）。
+- `GET /api/admin/settings` 额外下发 `stored`（**已落库的键名列表**），客户端据此做快照。
+  **不要读「有效值」再写回去**：读到的可能是默认值回落的结果，写回就等于把默认值
+  实体化成一行覆盖，永久留在库里（测试脚本还原配置时最容易踩）。
+- 只是想「恢复默认」时用 `null`，不要把默认值写进去。
 
 ### 上限的落点
 

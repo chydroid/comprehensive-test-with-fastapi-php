@@ -24,8 +24,11 @@ export function MockSetupView({ router }) {
     subjects: [], subjId: 0, counts: {},
     want: { radio1: 0, radio2: 0, checkbox: 0, text: 0 },
     // 服务端下发的配额（后台「系统设置 → 模拟考试与练习」）：每日场次上限 / 已用 /
-    // 剩余 / 单场题目总数上限 / 是否因正式考试被策略暂停
-    limits: { daily_limit: 5, used_today: 0, remaining: 5, max_questions: 100, paused: false },
+    // 剩余 / 单场题目总数上限 / 是否暂停及暂停原因
+    limits: {
+      daily_limit: 5, used_today: 0, remaining: 5, max_questions: 100,
+      paused: false, pause_reason: '',
+    },
   };
 
   root.append(el('div.page-head', {}, [
@@ -45,9 +48,14 @@ export function MockSetupView({ router }) {
   function quotaBlocked() {
     const l = state.limits;
     if (l.paused) {
-      return alertBox('当前有正在进行的正式考试，按考场纪律要求已暂停模拟考试。请考试结束后再试。', {
-        type: 'warning', title: '模拟考试已暂停',
-      });
+      // 身已在考场：硬约束，后台开关也放不开，指引进考场处理掉考试。
+      const self = l.pause_reason === 'self_in_exam';
+      return alertBox(
+        self
+          ? '你正在参加正式考试，不能同时进行模拟考试。请先交卷或退出考场后再回来。'
+          : '当前有正在进行的正式考试，按考场纪律要求已暂停模拟考试。请考试结束后再试。',
+        { type: 'warning', title: self ? '你正在考试中' : '模拟考试已暂停' },
+      );
     }
     if (Number(l.remaining) <= 0) {
       return alertBox(`你今天的模拟考试场次已用完（每日上限 ${l.daily_limit} 场），请明天再试。`, {

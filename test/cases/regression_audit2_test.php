@@ -10,13 +10,14 @@ declare(strict_types=1);
  *   BUG-101 练习抽题返回的题目缺少 quiz_id 字段（SELECT q.id 未起别名），
  *           导致前端题号显示 "#undefined"、提交答案恒 400
  *   BUG-102 正式考试进行中，/api/exercise/answer 仍按 quiz_id 下发正确答案
- *           —— 可反查正在考的题目答案。现改为「后台可配」：
- *           默认与正式考试互不影响（放行），关闭 exercise_allow_during_exam 后 403。
+ *           —— 可反查正在考的题目答案。现由 `exercise_allow_during_exam` 控制，
+ *           该开关**默认关闭**（开考期间暂停练习），仅当管理员显式开启才放行；
+ *           考生本人在考场内时另有不可放开的硬约束（见 mock_isolation_test）。
  *   BUG-103 模拟考试以 exam_status='testing' 落库，被误判为「正式考试进行中」，
  *           学生自己开一场模拟考试就会把练习入口错误暂停
  *   BUG-104 正式考试进行中可自由组模拟考试并立即交卷，再经 review() 整卷
- *           导出 quiz_key（批量答案泄露）。同 BUG-102，改由
- *           mock_allow_during_exam 开关控制，关闭后组卷 / 复盘均 403。
+ *           导出 quiz_key（批量答案泄露）。同 BUG-102，由 `mock_allow_during_exam`
+ *           控制，**默认关闭**。
  *   BUG-105 /api/health 从不下发 X-CSRF-Token，前端 419 自动恢复形同虚设
  *   BUG-106 /api/exam/status 不下发 csrf_token，答题页刷新后保存 / 交卷恒 419
  *   BUG-107 成绩 CSV 导出未防公式注入（姓名等以 = + - @ 开头会被 Excel 当公式执行）
@@ -127,6 +128,24 @@ $restoreSetting = static function (string $key, ?string $before) use ($putSettin
     $putSetting($key, $before);
 };
 
+/**
+ * 在「两个策略开关均未配置（= 系统默认：关闭）」的前提下执行断言。
+ *
+ * 必须显式清掉库内覆盖值：开发库可能被后台配置过（或上一次测试留下残留），
+ * 而「默认策略」用例断言的是「未配置时的行为」——依赖库中残留状态会让
+ * 用例时好时坏（假通过 / 假失败）。执行完原样还原，不改变管理员既有配置。
+ */
+$withDefaultPolicy = static function (callable $fn) use ($putSetting, $restoreSetting): void {
+    $b1 = $putSetting('exercise_allow_during_exam', null);
+    $b2 = $putSetting('mock_allow_during_exam', null);
+    try {
+        $fn();
+    } finally {
+        $restoreSetting('exercise_allow_during_exam', $b1);
+        $restoreSetting('mock_allow_during_exam', $b2);
+    }
+};
+
 /* ============ BUG-101 练习题目必须携带 quiz_id ============ */
 $t->guard('BUG-101 练习抽题返回 quiz_id（不再是 undefined）', function () use ($t, $subjId, $quizClass, $stuA) {
     $_SESSION = [];
@@ -222,45 +241,54 @@ $t->guard('BUG-107 成绩 CSV 对 = 开头的姓名做转义，正常姓名不�
 $busyExam = Fixture::createExam(['exam_status' => 'testing']);
 $t->assertTrue('已建立进行中的正式考试（前置条件）', $busyExam !== null && Exam::hasOngoingFormalExam());
 
-/* ============ BUG-102 开考期间的练习答案校验（策略可配） ============ */
-$t->guard('BUG-102 默认策略下开考期间练习仍可用（与正式考试互不影响）', function () use ($t, $subjId, $quizClass, $stuA) {
-    $_SESSION = [];
-    $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
-    $t->assertSame('考生登录 -> 200', 200, $login['status']);
-    $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
+/* ============ BUG-102 开考期间的练习（默认暂停，可显式放开） ============ */
+$t->guard('BUG-102 默认策略下开考期间练习被暂停', function () use ($t, $subjId, $quizClass, $stuA, $withDefaultPolicy) {
+    $withDefaultPolicy(function () use ($t, $subjId, $quizClass, $stuA) {
+        $_SESSION = [];
+        $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
+        $t->assertSame('考生登录 -> 200', 200, $login['status']);
+        $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
 
-    $list = Http::get("/api/exercise?subj_id={$subjId}&quiz_class={$quizClass}");
-    $t->assertSame('练习列表 -> 200', 200, $list['status']);
-    $data = (array) Http::data($list);
-    // has_ongoing_exam 是事实，practice_paused 是策略结论；默认策略下二者不同
-    $t->assertSame('has_ongoing_exam = true（事实）', true, (bool) ($data['has_ongoing_exam'] ?? false));
-    $t->assertSame('practice_paused = false（默认不暂停练习）', false, (bool) ($data['practice_paused'] ?? true));
+        $list = Http::get("/api/exercise?subj_id={$subjId}&quiz_class={$quizClass}");
+        $t->assertSame('练习列表 -> 200', 200, $list['status']);
+        $data = (array) Http::data($list);
+        // has_ongoing_exam 是「事实」，practice_paused 是「策略结论」；
+        // 默认策略（开关关闭）下二者同为真 —— 暂停。
+        $t->assertSame('has_ongoing_exam = true（事实）', true, (bool) ($data['has_ongoing_exam'] ?? false));
+        $t->assertSame('practice_paused = true（默认暂停）', true, (bool) ($data['practice_paused'] ?? false));
+        $t->assertSame('暂停原因为全局开考期间', Exam::PAUSE_EXAM_ONGOING, (string) ($data['pause_reason'] ?? ''));
+        $t->assertSame('暂停时不返回题目', null, $data['question'] ?? null);
 
-    $row = Database::fetch(
-        'SELECT id FROM `quizlib` WHERE subj_id = ? AND quiz_class = ? LIMIT 1',
-        [$subjId, $quizClass]
-    );
-    $quizId = (int) ($row['id'] ?? 0);
-    $t->assertTrue('取到一道样例题（前置条件）', $quizId > 0);
+        $row = Database::fetch(
+            'SELECT id FROM `quizlib` WHERE subj_id = ? AND quiz_class = ? LIMIT 1',
+            [$subjId, $quizClass]
+        );
+        $quizId = (int) ($row['id'] ?? 0);
+        $t->assertTrue('取到一道样例题（前置条件）', $quizId > 0);
 
-    $hit = Http::post('/api/exercise/answer', ['quiz_id' => $quizId, 'stu_key' => 'A'], ['X-CSRF-Token' => $csrf]);
-    $t->assertSame('默认策略下开考期间取答案 -> 200', 200, $hit['status']);
+        // 关键：直接打答案校验接口也必须被拒（否则可反查正在考的题目答案）
+        $hit = Http::post('/api/exercise/answer', ['quiz_id' => $quizId, 'stu_key' => 'A'], ['X-CSRF-Token' => $csrf]);
+        $t->assertSame('默认策略下开考期间取答案 -> 403', 403, $hit['status']);
+    });
 });
 
-$t->guard('BUG-102 关闭「正式考试期间开放在线练习」后 /api/exercise/answer 被拒绝', function () use ($t, $subjId, $quizClass, $stuA, $putSetting, $restoreSetting) {
-    $before = $putSetting('exercise_allow_during_exam', '0');
+$t->guard('BUG-102 显式开启后开考期间练习放行（正向对照）', function () use ($t, $subjId, $quizClass, $stuA, $putSetting, $restoreSetting) {
+    $before = $putSetting('exercise_allow_during_exam', '1');
     try {
         $_SESSION = [];
         $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
         $t->assertSame('考生登录 -> 200', 200, $login['status']);
         $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
 
-        // 抽题接口同步进入「已暂停」态
+        // 前置：该考生本人不在考场内。若在考，个人硬约束会介入，
+        // 本用例就测不出「开关是否真的能放开」。
+        $t->assertSame('考生本人不在考场内（前置条件）', false, Exam::isStudentInExam($stuA));
+
         $list = Http::get("/api/exercise?subj_id={$subjId}&quiz_class={$quizClass}");
         $t->assertSame('练习列表 -> 200', 200, $list['status']);
-        $t->assertSame('practice_paused = true', true, (bool) (Http::data($list)['practice_paused'] ?? false));
+        $t->assertSame('practice_paused = false（开关已开启）', false, (bool) (Http::data($list)['practice_paused'] ?? true));
+        $t->assertTrue('放行时正常抽题', (array) (Http::data($list)['question'] ?? []) !== []);
 
-        // 关键：直接打答案校验接口也必须被拒（否则可反查正在考的题目答案）
         $row = Database::fetch(
             'SELECT id FROM `quizlib` WHERE subj_id = ? AND quiz_class = ? LIMIT 1',
             [$subjId, $quizClass]
@@ -269,32 +297,35 @@ $t->guard('BUG-102 关闭「正式考试期间开放在线练习」后 /api/exer
         $t->assertTrue('取到一道样例题（前置条件）', $quizId > 0);
 
         $hit = Http::post('/api/exercise/answer', ['quiz_id' => $quizId, 'stu_key' => 'A'], ['X-CSRF-Token' => $csrf]);
-        $t->assertSame('开考期间取答案 -> 403', 403, $hit['status']);
+        $t->assertSame('开启后开考期间取答案 -> 200', 200, $hit['status']);
     } finally {
         $restoreSetting('exercise_allow_during_exam', $before);
     }
 });
 
-/* ============ BUG-104 开考期间不得经模拟考试导出整卷答案（策略可配） ============ */
-$t->guard('BUG-104 关闭「正式考试期间开放模拟考试」后组卷被拒绝', function () use ($t, $subjId, $stuA, $putSetting, $restoreSetting) {
-    $before = $putSetting('mock_allow_during_exam', '0');
-    try {
+/* ============ BUG-104 开考期间不得经模拟考试导出整卷答案（默认暂停） ============ */
+$t->guard('BUG-104 默认策略下开考期间组卷被拒绝', function () use ($t, $subjId, $stuA, $withDefaultPolicy) {
+    $withDefaultPolicy(function () use ($t, $subjId, $stuA) {
         $_SESSION = [];
         $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
         $t->assertSame('考生登录 -> 200', 200, $login['status']);
         $csrf = (string) (Http::data($login)['csrf_token'] ?? '');
 
+        // 以「当日已用场次」而非固定 0 作为基线：本用例不做夹具清理，
+        // 库中可能有其他来源的模拟记录，用增量断言才不会被无关状态左右。
+        $usedBefore = Exam::mockUsedToday($stuA);
+
         $start = Http::post('/api/exercise/mock/start', [
             'subj_id' => $subjId, 'radio1_count' => 1,
         ], ['X-CSRF-Token' => $csrf]);
-        $t->assertSame('开考期间组模拟卷 -> 403', 403, $start['status']);
-    } finally {
-        $restoreSetting('mock_allow_during_exam', $before);
-    }
+        $t->assertSame('默认策略下开考期间组模拟卷 -> 403', 403, $start['status']);
+        $msg = (string) Http::message($start);
+        $t->assertTrue('文案说明模拟考试已暂停', str_contains($msg, '暂停'), 'message=' . $msg);
+        $t->assertSame('被拒后当日场次未增加', $usedBefore, Exam::mockUsedToday($stuA));
+    });
 });
 
-$t->guard('BUG-104 关闭「正式考试期间开放模拟考试」后错题回顾被拒绝', function () use ($t, $subjId, $stuA, $putSetting, $restoreSetting) {
-    $before = $putSetting('mock_allow_during_exam', '0');
+$t->guard('BUG-104 暂停期间错题回顾被拒、显式开启后放行', function () use ($t, $subjId, $stuA, $putSetting, $restoreSetting, $withDefaultPolicy) {
     $_SESSION = [];
 
     // 先造一场「已交卷」的模拟考试，确保若非拦截本应能复盘（否则测不出守卫）
@@ -315,12 +346,24 @@ $t->guard('BUG-104 关闭「正式考试期间开放模拟考试」后错题回�
         $login = Http::post('/api/student/login', ['username' => $stuA, 'password' => Fixture::PWD]);
         $t->assertSame('考生登录 -> 200', 200, $login['status']);
 
-        $review = Http::get("/api/exercise/mock/review?exam_id={$mockId}");
-        $t->assertSame('开考期间复盘 -> 403', 403, $review['status']);
+        // 默认（暂停）→ 403
+        $withDefaultPolicy(function () use ($t, $mockId) {
+            $review = Http::get("/api/exercise/mock/review?exam_id={$mockId}");
+            $t->assertSame('默认策略下复盘 -> 403', 403, $review['status']);
+        });
+
+        // 正向对照：显式开启后必须放行，否则守卫写成「恒 403」也会让上面的断言通过。
+        // 哨兵用 false 而非 null —— $putSetting 在「该键原本不存在」时同样返回 null，
+        // 用 null 作哨兵会导致 finally 判定为「尚未改写」而跳过还原，把 '1' 留在库里
+        // （本文件曾因此污染开发库，使后续「默认策略」用例连锁假失败）。
+        $before = false;
+        $before = $putSetting('mock_allow_during_exam', '1');
+        $open = Http::get("/api/exercise/mock/review?exam_id={$mockId}");
+        $t->assertSame('开启后复盘 -> 200', 200, $open['status']);
+        $restoreSetting('mock_allow_during_exam', $before);
     } finally {
         Database::query('DELETE FROM `stuscore` WHERE exam_id = ?', [$mockId]);
         Database::query('DELETE FROM `examinfo` WHERE id = ?', [$mockId]);
-        $restoreSetting('mock_allow_during_exam', $before);
     }
 });
 

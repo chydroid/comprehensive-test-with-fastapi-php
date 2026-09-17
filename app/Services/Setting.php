@@ -85,14 +85,14 @@ final class Setting
          * 在考哪些 quiz_id。因此是否允许由管理员按考场纪律要求决定，这里做成开关。
          */
         'exercise_allow_during_exam' => [
-            'group' => 'practice', 'type' => 'bool', 'default' => 1, 'public' => true,
+            'group' => 'practice', 'type' => 'bool', 'default' => 0, 'public' => true,
             'label' => '正式考试期间开放在线练习',
-            'hint'  => '开启：练习与正式考试互不影响。关闭：存在进行中的正式考试时暂停练习抽题与答案校验（防止借练习反查正在考的题目答案）。',
+            'hint'  => '默认关闭：只要存在进行中的正式考试，练习抽题与答案校验一律暂停（防止借练习按 quiz_id 反查正在考的题目答案）。仅当希望练习与正式考试互不影响时才开启。注意：正在考场内的考生任何时候都不允许练习，不受本开关影响。',
         ],
         'mock_allow_during_exam' => [
-            'group' => 'practice', 'type' => 'bool', 'default' => 1, 'public' => true,
+            'group' => 'practice', 'type' => 'bool', 'default' => 0, 'public' => true,
             'label' => '正式考试期间开放模拟考试',
-            'hint'  => '开启：模拟考试与正式考试互不影响。关闭：存在进行中的正式考试时暂停模拟组卷与错题回顾（错题回顾会整卷下发答案，泄露面大于练习）。',
+            'hint'  => '默认关闭：只要存在进行中的正式考试，模拟组卷与错题回顾一律暂停（错题回顾会整卷下发答案，泄露面大于练习）。仅当希望模拟考试与正式考试互不影响时才开启。注意：正在考场内的考生任何时候都不允许模拟考试，不受本开关影响。',
         ],
         'mock_daily_limit' => [
             'group' => 'practice', 'type' => 'int', 'default' => 5, 'min' => 1, 'max' => 100,
@@ -200,6 +200,21 @@ final class Setting
         return self::$rawCache[$key] ?? null;
     }
 
+    /**
+     * 当前被显式配置过的键名列表（siteconfig 中存在真实行）。
+     *
+     * 管理端把设置项视为「覆盖值」时，需要知道哪些键真的落过库：
+     * 客户端拿它做快照，就能在临时改写后用 putMany([k => null]) 精确还原
+     * —— 只把「本来就有行」的键写回去，而不是凭有效值反推。
+     *
+     * @return string[]
+     */
+    public static function storedKeys(): array
+    {
+        self::all(); // 触发加载
+        return array_keys(self::$rawCache ?? []);
+    }
+
     /** 取单项设置（已按类型转换） */
     public static function get(string $key, mixed $default = null): mixed
     {
@@ -274,8 +289,13 @@ final class Setting
     /**
      * 批量写入（仅接受 SCHEMA 白名单键，逐项做类型与范围校验）。
      *
+     * 值为 null 表示「撤销覆盖」：删除 siteconfig 中的该行，使其回落 schema 默认值。
+     * 本站设置项在库里是「覆盖值」而非唯一真源（见 stored() 的说明），没有撤销语义时
+     * 客户端无法表达「恢复默认」—— 任何写完再写回的往返都会把等于默认值的覆盖行
+     * 实体化并永久留在库里（测试脚本要还原配置时尤其致命）。
+     *
      * @param array<string,mixed> $input
-     * @return array<string,mixed> 归一化后的新值
+     * @return array<string,mixed> 生效后的新值（撤销项返回其 schema 默认值）
      * @throws \Core\HttpException 非法值 / 无可更新项
      */
     public static function putMany(array $input): array
@@ -286,14 +306,19 @@ final class Setting
         // 已经写进库、而 flush() 还没执行 —— 响应告诉前端「未保存」，
         // 实际上 DB 已被部分修改，且同一请求内仍读到旧缓存值。
         $pending = [];
+        $reverts = [];
         foreach (self::SCHEMA as $key => $def) {
             if (!array_key_exists($key, $input)) {
+                continue;
+            }
+            if ($input[$key] === null) {
+                $reverts[] = $key;
                 continue;
             }
             $pending[$key] = self::normalize($key, $def, $input[$key]);
         }
 
-        if ($pending === []) {
+        if ($pending === [] && $reverts === []) {
             throw new \Core\HttpException(400, '没有可更新的设置项', 40001);
         }
 
@@ -301,9 +326,17 @@ final class Setting
             foreach ($pending as $key => $value) {
                 $model->put($key, (string) $value);
             }
+            foreach ($reverts as $key) {
+                $model->forget($key);
+            }
         } finally {
             // 成功或失败都清缓存：失败时也不能留着可能已被写入的旧缓存
             self::flush();
+        }
+
+        // 撤销项对外汇报其「生效后的值」（= schema 默认值），与写入项口径一致
+        foreach ($reverts as $key) {
+            $pending[$key] = self::SCHEMA[$key]['default'];
         }
 
         return $pending;

@@ -20,9 +20,10 @@ const FALLBACK = {
   exam_pwd_length: 6,
   exam_allow_view_answer: 1,
   exam_show_score_immediately: 1,
-  // 模拟考试与练习：与正式考试的隔离策略及数据上限
-  exercise_allow_during_exam: 1,
-  mock_allow_during_exam: 1,
+  // 模拟考试与练习：与正式考试的隔离策略及数据上限。
+  // 两个开关默认关闭 = 存在进行中的正式考试时暂停练习与模拟。
+  exercise_allow_during_exam: 0,
+  mock_allow_during_exam: 0,
   mock_daily_limit: 5,
   mock_max_questions: 100,
   password_min_length: 6,

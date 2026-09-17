@@ -29,6 +29,9 @@ export function ExerciseView() {
     types: {},
     question: null,
     counts: {},
+    // 服务端下发的暂停结论与原因（'' / 'self_in_exam' / 'exam_ongoing'）
+    paused: false,
+    pauseReason: '',
   };
 
   root.append(headSlot, pickerSlot, noticeSlot, questionSlot);
@@ -49,10 +52,11 @@ export function ExerciseView() {
     const res = await withLoading(pickerSlot, () => exerciseApi.list({}));
     if (!res.ok) return;
     state.subjects = res.result.subjects || [];
-    // practice_paused 是服务端给出的「策略结论」（是否被后台关闭），
-    // has_ongoing_exam 只是「当前有正式考试在进行」的事实 —— 默认策略下
-    // 二者并不等价，必须用前者决定是否禁用练习。
+    // practice_paused 是服务端给出的「策略结论」，
+    // has_ongoing_exam 只是「当前有正式考试在进行」的事实 —— 二者并不等价
+    // （本人在考、或开关关闭时才真正暂停），必须用前者决定是否禁用练习。
     state.paused = !!res.result.practice_paused;
+    state.pauseReason = String(res.result.pause_reason || '');
     renderPicker();
     renderNotice();
     if (state.paused) return;
@@ -117,7 +121,12 @@ export function ExerciseView() {
   }
 
   async function draw() {
-    if (state.paused) { notify.warning('正式考试进行中，按考场纪律要求已暂停练习'); return; }
+    if (state.paused) {
+      notify.warning(state.pauseReason === 'self_in_exam'
+        ? '你正在参加正式考试，不能同时进行在线练习'
+        : '正式考试进行中，按考场纪律要求已暂停练习');
+      return;
+    }
     if (!state.subjId) { notify.warning('请先选择科目'); return; }
     if (!state.quizClass) { notify.warning('请先选择题型'); return; }
     const res = await withLoading(questionSlot, () => exerciseApi.list({ subj_id: state.subjId, quiz_class: state.quizClass }));

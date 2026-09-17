@@ -157,6 +157,50 @@ $t->guard('stored() 区分未配置与配置为默认值', function () use ($t) 
     $t->assertSame('配置后 stored() 返回原值', '15', (string) Setting::stored('exam_entry_lead_minutes'));
 });
 
+$t->guard('putMany(null) 撤销覆盖 → 删除行并回落默认值', function () use ($t) {
+    settingsReset();
+
+    // 前提：写一个偏离默认值的覆盖
+    Setting::putMany(['exam_entry_lead_minutes' => 30]);
+    $t->assertSame('覆盖值已落库', '30', (string) Setting::stored('exam_entry_lead_minutes'));
+    $t->assertTrue('storedKeys() 含该键', in_array('exam_entry_lead_minutes', Setting::storedKeys(), true));
+
+    $saved = Setting::putMany(['exam_entry_lead_minutes' => null]);
+    $t->assertTrue('撤销后 siteconfig 无该行', Setting::stored('exam_entry_lead_minutes') === null);
+    $t->assertTrue('撤销后不再出现在 storedKeys()', !in_array('exam_entry_lead_minutes', Setting::storedKeys(), true));
+    $t->assertSame('撤销后取值回落默认 15', 15, (int) Setting::get('exam_entry_lead_minutes'));
+    // 返回口径：撤销项汇报「生效后的值」，调用方无需再查一次
+    $t->assertSame('返回值即生效值（默认 15）', 15, (int) $saved['exam_entry_lead_minutes']);
+
+    // 幂等：对本来就没有行的键撤销，不抛错也不产生行
+    Setting::putMany(['exam_entry_lead_minutes' => null]);
+    $t->assertTrue('重复撤销无副作用', Setting::stored('exam_entry_lead_minutes') === null);
+});
+
+$t->guard('撤销与写入可同请求混用，且未知键不参与', function () use ($t) {
+    settingsReset();
+
+    Setting::putMany(['exam_entry_lead_minutes' => 30, 'page_size_default' => 50]);
+    Setting::putMany([
+        'exam_entry_lead_minutes' => null,   // 撤销
+        'page_size_default'       => 25,     // 改写
+        'evil_key'                => null,   // 非 schema 键：既不算写入也不算撤销
+    ]);
+
+    $t->assertTrue('撤销的键已无行', Setting::stored('exam_entry_lead_minutes') === null);
+    $t->assertSame('同时写入的键保留新值', '25', (string) Setting::stored('page_size_default'));
+    $t->assertSame('撤销的键回落默认', 15, (int) Setting::get('exam_entry_lead_minutes'));
+    $t->assertSame('写入的键生效新值', 25, (int) Setting::get('page_size_default'));
+
+    // 只有未知键时仍应判定为「无可更新项」，不能静默成功
+    try {
+        Setting::putMany(['evil_key' => null]);
+        $t->assertTrue('纯未知键被拒', false);
+    } catch (\Core\HttpException $e) {
+        $t->assertSame('纯未知键被拒', 400, $e->statusCode);
+    }
+});
+
 /* ==================================================================
  * 2. 接口层
  * ================================================================== */
@@ -247,6 +291,26 @@ $t->guard('写入合法设置', function () use ($t, $csrf) {
 $t->guard('写入越界设置被拒', function () use ($t, $csrf) {
     $res = Http::put('/api/admin/settings', ['exam_pwd_length' => 99], ['X-CSRF-Token' => $csrf]);
     $t->assertSame('越界 -> 400', 400, $res['status']);
+});
+
+$t->guard('HTTP 层可撤销覆盖（PUT null → 回落默认）', function () use ($t, $csrf) {
+    // 先把它变成「已存行」状态，否则「撤销」无从验证
+    $res = Http::put('/api/admin/settings', ['exam_entry_lead_minutes' => 40], ['X-CSRF-Token' => $csrf]);
+    $t->assertSame('先写入 -> 200', 200, $res['status']);
+    $stored = Http::data(Http::get('/api/admin/settings'))['stored'] ?? [];
+    $t->assertTrue('GET 下发 stored 列表含该键', in_array('exam_entry_lead_minutes', $stored, true));
+
+    // JSON body 里的 null 若被中间层吞掉，这里就会静默变成「无该项」→ 必须显式断言
+    $res = Http::put('/api/admin/settings', ['exam_entry_lead_minutes' => null], ['X-CSRF-Token' => $csrf]);
+    $t->assertSame('PUT null -> 200', 200, $res['status']);
+    $saved = Http::data($res)['saved'] ?? [];
+    $t->assertSame('响应汇报撤销后的生效值（默认 15）', 15, (int) ($saved['exam_entry_lead_minutes'] ?? -1));
+
+    Setting::flush();
+    $t->assertTrue('行已删除', Setting::stored('exam_entry_lead_minutes') === null);
+    $t->assertSame('取值回落默认 15', 15, Setting::int('exam_entry_lead_minutes'));
+    $stored = Http::data(Http::get('/api/admin/settings'))['stored'] ?? [];
+    $t->assertTrue('stored 列表已不含该键', !in_array('exam_entry_lead_minutes', $stored, true));
 });
 
 /* ==================================================================

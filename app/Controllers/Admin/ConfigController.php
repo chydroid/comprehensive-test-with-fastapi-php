@@ -95,6 +95,9 @@ class ConfigController extends BaseController
         $schema = Setting::adminSchema();
         return $this->ok([
             'values' => Setting::all(),
+            // 哪些键在 siteconfig 中真的落过库。客户端（含测试脚本）据此做快照，
+            // 临时改写后用 PUT {key: null} 精确还原，而不是凭有效值反推覆盖行。
+            'stored' => Setting::storedKeys(),
             'groups' => $schema['groups'],
             'fields' => $schema['fields'],
         ]);

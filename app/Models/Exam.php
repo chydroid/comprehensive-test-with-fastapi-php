@@ -64,21 +64,105 @@ class Exam extends Model
     /* ==================================================================
      * 模拟考试 / 在线练习 ↔ 正式考试 的隔离策略
      *
-     * 默认「互不影响」：正式考试进行中不暂停练习与模拟。是否暂停由后台
-     * 「系统设置 → 模拟考试与练习」决定（见 Setting::SCHEMA），因为
-     * 「开考期间开放练习/模拟」存在客观的答案泄露面，属考场纪律取舍。
+     * 分两层，缺一不可：
+     *   ① **全局层**：存在进行中的正式考试时，默认暂停练习与模拟（后台
+     *      「系统设置 → 模拟考试与练习」的开关可放开，用于允许非考生
+     *      继续练习的场景）。默认值必须与 Setting::SCHEMA 一致。
+     *   ② **个人层（硬约束）**：考生本人正在参加正式考试时（已入场且考试
+     *      进行中），无论全局开关如何设置都不得练习/模拟——这一层不可配置，
+     *      因为「同一人一边答题一边用练习反查答案」是纪律红线，不是取舍。
      * ================================================================== */
 
-    /** 正式考试进行中是否允许在线练习（默认允许） */
+    /** 暂停原因：全局开考期间暂停 */
+    public const PAUSE_EXAM_ONGOING = 'exam_ongoing';
+
+    /** 暂停原因：考生本人正在考场内（个人硬约束，开关不可放开） */
+    public const PAUSE_SELF_IN_EXAM = 'self_in_exam';
+
+    /** 正式考试进行中是否允许在线练习（默认**不允许**） */
     public static function allowExerciseDuringExam(): bool
     {
-        return Setting::bool('exercise_allow_during_exam', true);
+        return Setting::bool('exercise_allow_during_exam', false);
     }
 
-    /** 正式考试进行中是否允许模拟考试（默认允许） */
+    /** 正式考试进行中是否允许模拟考试（默认**不允许**） */
     public static function allowMockDuringExam(): bool
     {
-        return Setting::bool('mock_allow_during_exam', true);
+        return Setting::bool('mock_allow_during_exam', false);
+    }
+
+    /**
+     * 指定考生本人是否「正在参加正式考试」。
+     *
+     * 判定条件（三者同时满足）：
+     *   1. 该考试不是模拟考试（模拟同样以 exam_status='testing' 落库）；
+     *   2. 考试处于进行中（exam_status = 'testing'）——与
+     *      hasOngoingFormalExam() 同口径，避免引入第二套「进行中」定义；
+     *   3. 该考生在此场的 stuscore.stu_status ∈ {online, locked}
+     *      ——online 由入场（ExamController::login）与答题心跳写入，
+     *      locked 为监考锁定，二者都表示「人在考场内」。
+     *
+     * 为什么必须要求「已入场」而不是「已排卷」：出题（generateForClass）
+     * 会在入场前很久就为全班写入 stuscore（stu_status='waiting'）。若把
+     * waiting 也算作在考，考生在考试开始前的整个备考期都会被禁止练习，
+     * 而那时试卷尚未对考生可见、根本不存在泄露面。
+     *
+     * 已交卷（over 前缀）者不算在考：他已完成本场考试，可以自由练习。
+     */
+    public static function isStudentInExam(string $stuId): bool
+    {
+        $stuId = trim($stuId);
+        if ($stuId === '') {
+            return false;
+        }
+        $row = \Core\Database::fetch(
+            "SELECT COUNT(*) AS c
+             FROM `examinfo` e
+             INNER JOIN `stuscore` sc ON sc.exam_id = e.id
+             WHERE COALESCE(e.exam_class, '') <> ?
+               AND e.exam_status = ?
+               AND sc.stu_id = ?
+               AND sc.stu_status IN ('online', 'locked')",
+            [self::MOCK_CLASS, self::STATUS_TESTING, $stuId]
+        );
+        return (int) ($row['c'] ?? 0) > 0;
+    }
+
+    /**
+     * 在线练习对指定考生的暂停结论。
+     * @return array{paused:bool,reason:string}
+     */
+    public static function exercisePause(string $stuId): array
+    {
+        return self::pauseState($stuId, self::allowExerciseDuringExam());
+    }
+
+    /**
+     * 模拟考试对指定考生的暂停结论。
+     * @return array{paused:bool,reason:string}
+     */
+    public static function mockPause(string $stuId): array
+    {
+        return self::pauseState($stuId, self::allowMockDuringExam());
+    }
+
+    /**
+     * 暂停决策的唯一出处：个人层优先于全局层。
+     *
+     * 顺序不可颠倒 —— 反过来的话，管理员一开启开关，正在答题的考生就会
+     * 拿到 reason='exam_ongoing' 之外的空结论而被放行（个人红线失效）。
+     *
+     * @return array{paused:bool,reason:string}
+     */
+    private static function pauseState(string $stuId, bool $globalAllowed): array
+    {
+        if (self::isStudentInExam($stuId)) {
+            return ['paused' => true, 'reason' => self::PAUSE_SELF_IN_EXAM];
+        }
+        if (!$globalAllowed && self::hasOngoingFormalExam()) {
+            return ['paused' => true, 'reason' => self::PAUSE_EXAM_ONGOING];
+        }
+        return ['paused' => false, 'reason' => ''];
     }
 
     /** 每人每日模拟考试场次上限（后台可配，默认 5） */

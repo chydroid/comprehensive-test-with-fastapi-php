@@ -397,6 +397,11 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
   `has_ongoing_exam`（事实）区分下发，前端改为按前者禁用入口。
   回归随之调整为「默认放行 → 200」＋「显式关闭 → 403」两条。
   取舍说明见 README「模拟考试 / 在线练习 与正式考试的关系」。
+- **默认值再变更（2026-09-17）**：默认改为**关闭**（开考期间暂停练习），
+  并叠加一条**不可配置的个人硬约束** —— 考生本人正在考场内
+  （`Exam::isStudentInExam()`：考试 `testing` 且本人 `stuscore.stu_status ∈ {online,locked}`）
+  时一律暂停，后台开关也放不开。回归改为「默认暂停 → 403」＋「显式开启 → 200（正向对照，
+  且前置断言考生本人不在考）」两条，两处「默认策略」用例改为显式清空库内覆盖值再断言。
 
 ---
 
@@ -432,6 +437,10 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 - **策略变更（2026-09-17）**：同上，改为 `Setting::SCHEMA['mock_allow_during_exam']`
   控制（默认开启）。关闭后组卷与复盘在开考期间均 403；默认开启时练习 / 模拟
   与正式考试互不影响。回归随之改为「显式关闭后才 403」。
+- **默认值再变更（2026-09-17）**：默认改为**关闭**，并叠加个人硬约束
+  （本人在考时不可放开）。守卫口径统一收敛到 `Exam::mockPause()`，
+  拦截面从「组卷 / 复盘」扩展到「组卷 / 取题 / 保存 / 复盘」，
+  **交卷（submit）刻意不拦**（否则考生会留下无法结束的场次并白占每日额度）。
 
 ---
 
@@ -1280,4 +1289,133 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 | CSS 覆盖率审计 `css_coverage_audit.mjs`（9 入口） | **0** 个无规则类名 |
 | 匿名首屏 `verify_me_401.mjs` | **64 PASS / 0 FAIL** |
 | PHP `php -l` 三个改动文件 | 无语法错误 |
+
+---
+
+# 策略修订：练习/模拟默认关闭 + 考生在考硬约束（2026-09-17）
+
+## 一、需求
+
+1. `exercise_allow_during_exam`、`mock_allow_during_exam` **默认改为关闭**
+   （原为开启）。
+2. **正在参加正式考试的考生，不能再同时进行在线练习和模拟考试**。
+
+## 二、设计：暂停判定的两层（唯一出处 `Exam::exercisePause()` / `Exam::mockPause()`）
+
+| 层 | 触发条件 | 可否由后台放开 |
+|---|---|---|
+| **个人层**（硬约束） | `Exam::isStudentInExam()` 为真：存在 `exam_class <> '模拟考试'` 且 `exam_status='testing'` 的考试，且该考生在其 `stuscore.stu_status ∈ {online, locked}` | **否** |
+| **全局层** | 存在进行中的正式考试（`Exam::hasOngoingFormalExam()`）且对应开关关闭（默认） | 是 |
+
+关键判断与取舍：
+
+- **个人层必须先判**。若先判全局层，管理员一开启开关，正在答题的考生就会被放行，
+  硬约束失效。
+- **「在考」以「已入场」为准，不含「已排卷」**。出题（`ExamEngine::generateForClass`）
+  会在入场前很久就为全班写 `stuscore.stu_status='waiting'`；若把 `waiting` 算作在考，
+  考生在考试开始前的整个备考期都会被禁止练习，而那时试卷对考生尚不可见、
+  根本不存在泄露面。同理，已交卷（`over` 前缀）者不算在考。
+- **判据必须与 `hasOngoingFormalExam()` 同口径**（都要求 `exam_status='testing'`），
+  避免系统里出现第二套「进行中」定义。
+
+## 三、拦截面与一处刻意的例外
+
+暂停期间：练习抽题 / 答案校验、模拟组卷 / 取题 / 保存 / 错题回顾 一律 `403`（错误码 `40308`）。
+
+**例外：模拟交卷（`POST /api/exercise/mock/submit`）不设守卫。** 暂停可能在考生答到
+一半时才生效（考试开始 / 被拉进考场），此时若连交卷也拦掉，考生会留下永远无法结束的
+`testing` 场次，并白占一次每日额度。交卷本身不披露答案（`gradeMock()` 只回成绩与对错数），
+真正的披露点是 `review()`，已单独拦截。
+
+响应新增 `pause_reason`（`self_in_exam` / `exam_ongoing` / `''`），供前端区分文案与指引。
+
+## 四、本轮发现并修复的「测试基础设施」缺陷
+
+- **现象**：全量回归出现 7 项失败，且内容自相矛盾（`SCHEMA` 默认值断言通过，
+  但「未配置时应为关闭」的运行时断言之后的暂停判定却为「未暂停」）。
+- **根因**：`regression_audit2_test.php` 用 `null` 兼作「尚未改写」的哨兵值，
+  而 `$putSetting()` 在「该键原本不存在」时同样返回 `null` ——
+  于是 `finally { if ($before !== null) restore(); }` 判定为「尚未改写」而**跳过还原**，
+  把显式写入的 `mock_allow_during_exam='1'` 永久留在了开发库的 `siteconfig` 里。
+  前一次单独运行留下的残留，使随后全量运行中的「默认策略」用例连锁假失败。
+- **修复**：哨兵改用 `false`（与 `?string` 返回值不冲突），并新增
+  `$withDefaultPolicy()` 包装器 —— 「默认策略」用例先**显式清空库内覆盖值**再断言，
+  跑完原样还原，使结果不再取决于库中残留状态。
+- **附带清理**：删除被误写入的 `siteconfig` 行与一条测试残留的模拟考试记录
+  （清理前已备份到 `temp/_cleanup_backup.json`，该目录未被 git 跟踪）。
+- **同类加固**：`mock_isolation_test.php` 第 5 节同样改为「清空覆盖值 → 断言 → 还原」，
+  并在 `finally` 中回收可能产生的模拟记录。
+
+## 五、验证结果（本轮）
+
+| 验证 | 结果 |
+|---|---|
+| 后端全量 `node temp/runtests.mjs`（连续两轮） | **491 PASS / 0 FAIL / 0 SKIP**（每轮一致，且跑后库内无策略覆盖值残留、无孤儿模拟记录） |
+| 前端静态 `node temp/check_frontend.mjs` | 42 文件 0 语法错误 / 0 未解析 import |
+| 全站浏览器巡检 `browser_sweep_v6.mjs` | **103 PASS / 0 FAIL** |
+| CSS 覆盖率审计 `css_coverage_audit.mjs` | **0** 个无规则类名 |
+| 匿名首屏 `verify_me_401.mjs` | **64 PASS / 0 FAIL** |
+| 后台设置页 `settings_view_smoke.mjs` | **35 PASS / 0 FAIL** |
+| 考试表单 `exam_form_smoke.mjs` | **33 PASS / 0 FAIL** |
+| 后台 16 视图 `admin_live_smoke.mjs` | **16 PASS / 0 FAIL** |
+| 考场 E2E `verify_exam_flow.mjs` | **12 PASS / 0 FAIL** |
+| 组卷页 `mock_setup_smoke.mjs`（本轮改造） | **14 PASS / 0 FAIL** |
+
+> `mock_setup_smoke.mjs` 本轮同步改造：组卷页在「暂停」态下只渲染一条提示、不渲染表单，
+> 故脚本先用管理员会话把开关临时置 1（**必须先管理员后考生** —— `AuthSession::login()`
+> 会 `purge()` 掉其他身份，顺序反了会把刚建立的考生会话清掉），跑完还原原状。
+> 该脚本的还原策略见下节 BUG-250：首版「写回原有效值」本身会污染库，已改为按 `stored` 快照还原。
+
+## 六、BUG-250　【P2】设置接口无法表达「撤销覆盖」，测试还原把默认值实体化成覆盖行
+
+- **现象**：全量回归与浏览器冒烟全部通过、库内也没有「开关被留在开启态」这类明显残留，
+  但复核 `siteconfig` 时始终多出一行 `mock_allow_during_exam='0'`。
+  它的值恰好等于 `SCHEMA` 默认值，因此**不影响任何行为**，却让「跑完无残留」这一
+  验证结论无法成立 —— 每次跑测试都会往库里落一行。
+- **根因**（不在测试脚本，而在接口设计）：
+  1. `siteconfig` 中的设置项在本项目里是**覆盖值**而非唯一真源 ——
+     `Setting::stored()` 的文档已经明确「未配置」与「配置为默认值」是两种状态。
+  2. 但写入侧只有 `Setting::putMany()` 一条路径，**没有任何方式表达「撤销覆盖」**。
+  3. 于是 `mock_setup_smoke.mjs` 的还原逻辑只能「读有效值 → 写回」：
+     用 `/api/public/settings` 读到的 0 是**默认值回落**的结果，写回时却变成一次真实写入，
+     凭空把默认值实体化成覆盖行。测试脚本无论怎么写都无法避免，属于接口能力缺失。
+- **修复**：
+  1. `Setting::putMany()` 支持 `null` 值 = **撤销覆盖**（删除 `siteconfig` 行，回落 schema 默认值），
+     返回值汇报「生效后的值」（撤销项即默认值），调用方无需再查一次。
+  2. 新增 `SiteConfig::forget()`：删除该键的全部行（历史脏数据可能同键多行），键不存在时无副作用。
+  3. 新增 `Setting::storedKeys()`，并由 `GET /api/admin/settings` 以 `stored` 字段下发
+     「哪些键真的落过库」，客户端据此做快照、精确还原，不再凭有效值反推。
+  4. `mock_setup_smoke.mjs` 改为按快照还原：原本有行 → 写回原值；原本无行 → `PUT {key: null}`
+     撤销，并在 `finally` 中**断言还原后 `stored` 不含该键**，把这类污染变成可回归的失败。
+- **回归覆盖**（`test/cases/settings_test.php` 新增守卫，共 19 项断言）：
+  - `putMany(null)` 撤销后行消失、`stored()` 回落 `null`、取值回落默认；
+  - 对本来就没有行的键重复撤销无副作用（幂等）；
+  - 同一请求内「撤销 + 写入」混用互不干扰，非 schema 键既不参与写入也不参与撤销；
+  - 纯未知键仍判 400，不能静默成功；
+  - **HTTP 层 `PUT {"key": null}`**：显式断言 JSON `null` 未被中间层吞掉
+    （否则撤销会静默退化成「无该项」），并核对响应值与 `stored` 列表。
+
+## 七、验证结果（第二轮：默认关闭 + 在考硬约束）
+
+| 验证 | 结果 |
+|---|---|
+| 后端全量 `node temp/runtests.mjs` | **510 PASS / 0 FAIL / 0 SKIP**（跑后 `siteconfig` 练习/模拟相关行 = 0） |
+| `test/cases/settings_test.php` | **111 PASS / 0 FAIL**（新增 19 项撤销覆盖断言） |
+| 前端静态 `node temp/check_frontend.mjs` | 42 文件 0 语法错误 / 0 未解析 import |
+| 图标自检 `python temp/check_icons.py` | 88 个图标，无失效引用 |
+| 全站浏览器巡检 `browser_sweep_v6.mjs` | **103 PASS / 0 FAIL** |
+| CSS 覆盖率审计 `css_coverage_audit.mjs` | **0** 个无规则类名 |
+| 匿名首屏 `verify_me_401.mjs` | **64 PASS / 0 FAIL** |
+| 后台设置页 `settings_view_smoke.mjs` | **35 PASS / 0 FAIL** |
+| 考试表单 `exam_form_smoke.mjs` | **33 PASS / 0 FAIL** |
+| 后台 16 视图 `admin_live_smoke.mjs` | **16 PASS / 0 FAIL** |
+| 考场 E2E `verify_exam_flow.mjs` | **12 PASS / 0 FAIL** |
+| 组卷页 `mock_setup_smoke.mjs` | **14 PASS / 0 FAIL**（末尾断言「撤销覆盖、无残留行」） |
+
+> 跑完复核库内：练习/模拟相关 `siteconfig` 行 = 0、模拟考试记录 = 0、
+> `__TEST__` 前缀的考试/管理员/考生记录 = 0。
+> 另注：`exam_form_smoke.mjs` / `admin_live_smoke.mjs` / `mock_setup_smoke.mjs`
+> 均需以 `argv[2]` 传入 public 目录（如 `"$(pwd -W)/public"`），
+> 缺参时会回落到相对 `temp/domtest` 的默认路径而解析到盘符根目录，报模块找不到 —— 属调用方式问题。
+
 

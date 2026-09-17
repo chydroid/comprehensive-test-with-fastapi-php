@@ -13,15 +13,15 @@ use Core\Response;
 /**
  * 在线练习（随机抽一题、逐题练习）
  *
- * 与正式考试的隔离策略由后台「系统设置 → 模拟考试与练习」控制
- * （`exercise_allow_during_exam`，默认**开启**即互不影响）：
- *  - 开启：存在进行中的正式考试时，练习照常可用；
- *  - 关闭：开考期间暂停练习抽题与答案校验。
+ * 与正式考试的关系分两层，均由 Exam::exercisePause() 统一裁决：
+ *  ① 全局层：存在进行中的正式考试时**默认暂停**练习，管理员可在
+ *     「系统设置 → 模拟考试与练习」开启 `exercise_allow_during_exam` 放开；
+ *  ② 个人层：考生本人正在考场内（已入场且考试进行中）时**一律暂停**，
+ *     后台开关无法放开——同一人一边答题一边练习反查答案是纪律红线。
  *
- * 关闭项存在的原因：本接口按 quiz_id 即可换取任意题目答案，而开考期间
- * /api/exam/paper 会向考生下发其所考题目的 quiz_id —— 若不加限制，
+ * 为什么必须拦：本接口按 quiz_id 即可换取任意题目答案，而开考期间
+ * /api/exam/paper 会向考生下发其所考题目的 quiz_id —— 若不拦截，
  * 考生可用另一标签页「练习」反查正在考的题目答案（击穿「考试中不下发答案」）。
- * 是否接受该风险属考场纪律取舍，故做成开关而非写死。
  *
  * 安全改进：练习模式同样不下发 quiz_key —— 答案通过独立的
  * POST /api/exercise/answer 校验后才返回，且前端不预置答案。
@@ -34,6 +34,10 @@ class ExerciseController extends BaseController
      */
     public function index(): Response
     {
+        // 暂停判定需要「本人是否在考场内」，故必须取当前考生身份
+        $sess = $this->authStudent();
+        $stuId = (string) $sess['id'];
+
         $in = $this->validate([
             'subj_id'    => 'integer',
             'quiz_class' => 'in:radio1,radio2,checkbox,text,longtext',
@@ -43,11 +47,13 @@ class ExerciseController extends BaseController
 
         $subjects = (new Subject())->all('id ASC');
 
-        // 进行中的正式考试事实（排除模拟考试——它同样以 exam_status='testing'
-        // 落库，否则学生自己开一场模拟考试就会把练习误判为「已暂停」）。
+        // has_ongoing_exam 是「事实」：当前是否有正式考试在进行（排除模拟考试
+        // —— 它同样以 exam_status='testing' 落库，否则学生自己开一场模拟考试
+        // 就会把练习误判为「已暂停」）。
         $hasOngoingExam = Exam::hasOngoingFormalExam();
-        // 是否因「考场纪律策略」暂停练习：事实 + 后台开关共同决定。
-        $practicePaused = $hasOngoingExam && !Exam::allowExerciseDuringExam();
+        // 暂停结论由「全局开关 + 本人是否在考」共同得出，reason 用于前端区分文案。
+        $pause = Exam::exercisePause($stuId);
+        $practicePaused = $pause['paused'];
 
         $question = null;
         $quizCount = 0;
@@ -93,11 +99,13 @@ class ExerciseController extends BaseController
             'subj_id'          => $subjId,
             'quiz_class'       => $quizClass,
             'quiz_count'       => $quizCount,
-            // has_ongoing_exam 是「事实」：当前是否有正式考试在进行。
             'has_ongoing_exam' => $hasOngoingExam,
             // practice_paused 是「策略结论」：练习当前是否被禁用。
-            // 前端据此决定是否拦截操作（二者不再等价，必须分开下发）。
+            // 前端据此决定是否拦截操作（与 has_ongoing_exam 不再等价）。
             'practice_paused'  => $practicePaused,
+            // pause_reason：'self_in_exam'（本人在考，硬约束）/
+            //               'exam_ongoing'（全局策略暂停）/ ''（未暂停）
+            'pause_reason'     => $pause['reason'],
         ]);
     }
 
@@ -107,13 +115,14 @@ class ExerciseController extends BaseController
      */
     public function check(): Response
     {
-        // 仅当后台关闭「正式考试期间开放在线练习」时才拦截。
+        $sess = $this->authStudent();
+        $pause = Exam::exercisePause((string) $sess['id']);
         // 拦截原因见类注释：本接口按 quiz_id 即可换取任意题目的正确答案，
         // 而 /api/exam/paper 又向考生下发了所考题目的 quiz_id —— 若不拦截，
         // 考生可在开考期间用另一标签页「练习」反查正在考的题目答案，
         // 等于绕过「考试中不下发答案」的防护。
-        if (Exam::hasOngoingFormalExam() && !Exam::allowExerciseDuringExam()) {
-            throw new HttpException(403, '当前有正在进行的正式考试，练习功能已临时暂停', 40308);
+        if ($pause['paused']) {
+            throw new HttpException(403, self::pauseMessage($pause['reason']), 40308);
         }
 
         $in = $this->validate([
@@ -147,5 +156,13 @@ class ExerciseController extends BaseController
             'user_answer'  => $user,
             'question_id'  => $quizId,
         ], $isRight ? '回答正确' : '回答错误');
+    }
+
+    /** 按暂停原因给出面向考生的文案（两种原因的可行动指引不同） */
+    private static function pauseMessage(string $reason): string
+    {
+        return $reason === Exam::PAUSE_SELF_IN_EXAM
+            ? '你正在参加正式考试，不能同时进行在线练习；请先交卷或退出考场'
+            : '当前有正在进行的正式考试，练习功能已临时暂停';
     }
 }

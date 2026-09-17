@@ -34,4 +34,15 @@ class SiteConfig extends Model
         }
         $this->update((int) $row['id'], ['config_value' => $value]);
     }
+
+    /**
+     * 删除某个 key 的配置行（即撤销覆盖，让读取侧回落 schema 默认值）。
+     * 键不存在时无副作用；历史脏数据可能同一 key 多行，故全部删除。
+     */
+    public function forget(string $key): void
+    {
+        foreach ($this->where(['config_key' => $key], 'id ASC') as $row) {
+            $this->delete((int) $row['id']);
+        }
+    }
 }

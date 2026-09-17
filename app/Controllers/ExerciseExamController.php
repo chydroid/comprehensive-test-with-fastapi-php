@@ -20,7 +20,13 @@ use Core\Response;
  *   （testing → over），与正式考试的区分完全靠 exam_class。
  * - **与正式考试互不影响**：模拟考试整体排除在管理端/教师端的考试管理、监考列表之外
  *   （Exam::adminList / TeacherMonitorController），也不计入「进行中的正式考试」。
- * - 是否允许在正式考试进行中组织模拟，由后台 `mock_allow_during_exam` 控制（默认允许）。
+ * - 与正式考试的关系由 Exam::mockPause() 统一裁决，分两层：
+ *     ① 全局层：存在进行中的正式考试时**默认暂停**模拟考试（组卷与错题回顾），
+ *        管理员可在后台开启 `mock_allow_during_exam` 放开；
+ *     ② 个人层：考生本人正在考场内（已入场且考试进行中）时**一律暂停**，
+ *        后台开关无法放开。
+ *   进入暂停态后，已在进行的模拟考试不再允许继续作答（paper/save），但仍可交卷
+ *   （submit）关闭本场——否则考生会留下永远无法结束的半成品场次并白占一次每日额度。
  * - 数据上限同样走后台：`mock_daily_limit`（每人每日场次，默认 5）、
  *   `mock_max_questions`（单场题目总数，默认 100）。
  * - 组卷不区分难度（与旧系统一致），按题型抽取指定数量。
@@ -57,19 +63,22 @@ class ExerciseExamController extends BaseController
     /**
      * 当前考生的模拟考试配额视图（供前端展示与按钮控制）。
      *
-     * @return array{daily_limit:int,used_today:int,remaining:int,max_questions:int,paused:bool}
+     * @return array{daily_limit:int,used_today:int,remaining:int,max_questions:int,paused:bool,pause_reason:string}
      */
     private static function quota(string $stuId): array
     {
         $limit = Exam::mockDailyLimit();
         $used = Exam::mockUsedToday($stuId);
+        $pause = Exam::mockPause($stuId);
         return [
             'daily_limit'   => $limit,
             'used_today'    => $used,
             'remaining'     => max(0, $limit - $used),
             'max_questions' => Exam::mockMaxQuestions(),
-            // 正式考试进行中且后台关闭了「开考期间开放模拟考试」时为 true
-            'paused'        => Exam::hasOngoingFormalExam() && !Exam::allowMockDuringExam(),
+            'paused'        => $pause['paused'],
+            // pause_reason：'self_in_exam'（本人在考，硬约束）/
+            //               'exam_ongoing'（全局策略暂停）/ ''（未暂停）
+            'pause_reason'  => $pause['reason'],
         ];
     }
 
@@ -99,13 +108,10 @@ class ExerciseExamController extends BaseController
         $sess = $this->authStudent();
         $stuId = (string) $sess['id'];
 
-        // 正式考试进行中是否暂停模拟，由后台「模拟考试与练习」决定（默认不暂停）。
-        // 关闭该项的原因：模拟考试同样从 quizlib 抽题，交卷后 review() 会整卷
+        // 与正式考试的关系由 Exam::mockPause 统一裁决（全局开关 + 本人在考硬约束）。
+        // 必须拦截的原因：模拟考试同样从 quizlib 抽题，交卷后 review() 会整卷
         // 下发 quiz_key —— 开考期间可用它批量导出题库答案。
-        $paused = Exam::hasOngoingFormalExam() && !Exam::allowMockDuringExam();
-        if ($paused) {
-            throw new HttpException(403, '当前有正在进行的正式考试，模拟考试已临时暂停', 40308);
-        }
+        $this->assertNotPaused($stuId);
 
         // 单场题目总数上限（后台可配，默认 100）
         $maxQuestions = Exam::mockMaxQuestions();
@@ -235,6 +241,9 @@ class ExerciseExamController extends BaseController
         $stuId = (string) $sess['id'];
         $examId = (int) $this->request->query('exam_id', 0);
         $this->assertMockExam($examId, $stuId);
+        // 暂停期间不得继续作答：考生若在入场/开考后仍切到模拟页答题，即为
+        // 「一边考试一边模拟」，与需求相悖。取题也必须拦，否则题目仍会一题题流出。
+        $this->assertNotPaused($stuId);
 
         $nav = ExamEngine::navigation($examId, $stuId);
         if ($nav['total'] === 0) {
@@ -282,6 +291,8 @@ class ExerciseExamController extends BaseController
         $examId = (int) $in['exam_id'];
         $paperId = (int) $in['paper_id'];
         $this->assertMockExam($examId, $stuId);
+        // 同 paper()：暂停期间不接受继续作答
+        $this->assertNotPaused($stuId);
 
         $row = Database::fetch(
             'SELECT quiz_class FROM `stupaper` WHERE exam_id = ? AND stu_id = ? AND paper_id = ?',
@@ -316,6 +327,10 @@ class ExerciseExamController extends BaseController
         $examId = (int) $in['exam_id'];
         $this->assertMockExam($examId, $stuId);
 
+        // 交卷**刻意不设暂停守卫**：暂停可能在考生答到一半时生效（考试开始 /
+        // 被拉进考场），此时若连交卷也拦掉，考生会留下永远无法结束的 testing
+        // 场次，并白占一次每日额度。交卷本身不泄露答案（gradeMock 只回成绩与
+        // 对错数，不下发 quiz_key），真正的披露点是 review()，已单独拦截。
         $result = self::gradeMock($examId, $stuId);
         return $this->ok($result, '交卷成功');
     }
@@ -356,12 +371,10 @@ class ExerciseExamController extends BaseController
         $examId = (int) $this->request->query('exam_id', 0);
         $this->assertMockExam($examId, $stuId);
 
-        // 错题回顾会整卷下发 quiz_key。当后台关闭「正式考试期间开放模拟考试」时，
-        // 开考期间禁止查看：模拟考试可自由组卷，若不拦截，考生可组一场覆盖某科目
-        // 全部题目的模拟考试并立即交卷，再借复盘导出该科目答案（可能是本场考试用题）。
-        if (Exam::hasOngoingFormalExam() && !Exam::allowMockDuringExam()) {
-            throw new HttpException(403, '当前有正在进行的正式考试，暂不能查看错题回顾', 40308);
-        }
+        // 错题回顾会整卷下发 quiz_key。暂停期间禁止查看：模拟考试可自由组卷，
+        // 若不拦截，考生可组一场覆盖某科目全部题目的模拟考试并立即交卷，
+        // 再借复盘导出该科目答案（可能是本场考试用题）。
+        $this->assertNotPaused($stuId);
 
         // 仅复盘已交卷的模拟考试
         $score = Database::fetch(
@@ -424,6 +437,22 @@ class ExerciseExamController extends BaseController
     }
 
     /* ------------------------------------------------------------------ */
+
+    /**
+     * 模拟考试暂停守卫：命中则 403（原因决定文案）。
+     * 决策的唯一出处是 Exam::mockPause()，控制器只负责翻译成 HTTP 响应。
+     */
+    private function assertNotPaused(string $stuId): void
+    {
+        $pause = Exam::mockPause($stuId);
+        if (!$pause['paused']) {
+            return;
+        }
+        $msg = $pause['reason'] === Exam::PAUSE_SELF_IN_EXAM
+            ? '你正在参加正式考试，不能同时进行模拟考试；请先交卷或退出考场'
+            : '当前有正在进行的正式考试，模拟考试已临时暂停';
+        throw new HttpException(403, $msg, 40308);
+    }
 
     /** 校验 exam_id 确为该考生的模拟考试 */
     private function assertMockExam(int $examId, string $stuId): void
