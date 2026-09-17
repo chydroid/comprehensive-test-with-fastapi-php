@@ -203,8 +203,11 @@ class StudentController extends BaseController
         $data = [
             'stu_name' => $name,
             'stu_sex'  => trim((string) ($in['stu_sex'] ?? '')),
-            'grade_id' => trim((string) ($in['grade_id'] ?? '')),
-            'class_id' => trim((string) ($in['class_id'] ?? '')),
+            // 与 save()/import() 一致：单位/班级按「名称或 ID」归一为 ID（BUG-240）。
+            // 否则把名称存进 class_id 会与 examinfo.stu_class（存 ID）失配，
+            // 导致该考生从排卷/入场资格链上整体消失。
+            'grade_id' => Grade::resolveId($in['grade_id'] ?? ''),
+            'class_id' => SchoolClass::resolveId($in['class_id'] ?? ''),
         ];
 
         $password = trim((string) ($in['password'] ?? ''));

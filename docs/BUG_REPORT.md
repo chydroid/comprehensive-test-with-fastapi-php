@@ -1163,3 +1163,112 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 锁定「写操作 → 权限点」的推导结果，并同时断言目标角色确实具备该权限点——
 专防「新增控制类接口却忘了登记权限点」这一类静默缺陷。
 
+---
+
+# 第十轮审计（2026-09-17）
+
+**范围**：全项目后端 PHP（`app/` + `core/`）+ 前端零构建 ES Module（`public/assets/js`）。
+**方法**：双 Explore 子代理分前端/后端并行只读审计 → 主代理逐条到源码定位根因 → 修复 → 全量回归。
+**基线**：第九轮 393 PASS / 0 FAIL、browser_sweep 103/103、verify_me_401 64/64、CSS 覆盖率 0 缺失。
+
+> 本轮在「已修复清单（BUG-220~239）」之外，未发现 P0 活跃安全漏洞与导致核心流程中断的 P1 功能缺陷；
+> 发现 2 个确定性后端数据/一致性缺陷（BUG-240/241）、1 个后端口径一致性问题（BUG-249），
+> 以及 6 个前端防御性/健壮性缺陷（BUG-242~248）。全部已修复并回归通过。
+
+## 一、缺陷清单
+
+### BUG-240 ｜管理端「编辑考生」未对 grade_id / class_id 做名称→ID 归一化（P1）
+- **位置**：`app/Controllers/Admin/StudentController.php:203-208`（`update()`）
+- **现象**：管理端编辑考生保存时，`grade_id`/`class_id` 直接 `trim((string)(...))` 写入；
+  而同文件 `save()`（175-176）、`import()`（296-297）、`StudentAuthController::register`、`StudentController::saveInfo`
+  均调用 `Grade::resolveId()` / `SchoolClass::resolveId()` 把「名称或 ID」归一为 ID。
+- **根因**：`update()` 漏写归一化，违反项目约定「归属判定链全部按 ID」
+  （`examinfo.stu_class` 存的是班级 ID，`FIND_IN_SET(class_id, stu_class)` / `class_id IN (...)` 按 ID 匹配）。
+  一旦编辑表单提交的是班级**名称**（旧数据/下拉回填常见），名称被存进 `class_id`，
+  与该考生「待考列表 / 排卷 / 入场资格」三处匹配链整体失配 → 考生登录后看不到任何考试。
+- **影响**：数据一致性缺陷，依赖前端绑定方式触发，但属明确健壮性问题（静默失配，无报错）。
+- **修复**：`update()` 的 grade_id/class_id 改用 `Grade::resolveId($in['grade_id'] ?? '')` / `SchoolClass::resolveId($in['class_id'] ?? '')`，与 save/import 对齐。
+- **回归**：后端全量 393 PASS（含考生相关用例）；`resolveId` 对 ID 原样返回，对名称折算为 ID，行为一致。
+
+### BUG-241 ｜教师端创建考试可指定任意 exam_tea（归属横向伪造，P2）
+- **位置**：`app/Controllers/TeacherExamController.php:439`（`collectParams` 读前端 `exam_tea`）+ 原 167-169 行仅当为空才回落本人。
+- **现象**：`exam_tea` 是考试归属的唯一依据（所有 `assertOwnExam`/列表均按 `tea_name` 字符串匹配）。
+  教师创建考试时若提交他人 `exam_tea`，即可把考试挂到别的教师名下，对方随后能通过 `assertOwnExam` 校验对其进行出题/启动/删除。
+- **根因**：服务端未对「教师创建考试的归属」做强约束，信任了前端传入值。
+- **影响**：横向归属混淆，违背「教师只能管自己的考试」的 RBAC 意图；实际危害有限（创建本就有权）。
+- **修复**：`save()` 忽略前端 `exam_tea`，强制 `data['exam_tea'] = (string)($sess['tea_name'] ?? '')`。管理端（admin）仍可按业务指定任意教师，不受影响。
+
+### BUG-242 ｜教师端「编辑考试」向更新注入 exam_status='exam'（P3 / 潜在）
+- **位置**：`app/Controllers/TeacherExamController.php:196`（修复前 `$this->model->update($id, $data + ['exam_status' => Exam::STATUS_EXAM])`）
+- **现象**：编辑考试时无条件把状态重置为 `exam`（未开考）。
+- **根因分析（必须澄清，避免误判为 P1）**：`collectParams()` 不产出 `exam_status`，故 union 运算符恒追加该键。
+  但 `update()` 在 192 行已有「已生成试卷（`hasPaper>0`）则 409 拒绝」守卫，而 `autoStartIfDue()` 仅推进 `paper` 状态——
+  在**当前流程**下，编辑能到达 196 行时 `hasPaper` 必为 0、状态必为 `exam`，故该注入是**无操作**，
+  不会真正把 `paper`/`testing` 考试打回。属**死代码 / 不正确的状态处理**，一旦将来放宽 `hasPaper` 守卫即会触发「考生卡等待室」。
+- **影响**：当前不可复现，但代码意图错误、与管理端 `update` 行为不一致。
+- **修复**：删除 ` + ['exam_status' => Exam::STATUS_EXAM]`，状态流转只交由 `open/start/generatePapers/over` 专用接口，与管理端对齐。
+
+### BUG-243 ｜`ui/shell.js` 移动端媒体查询监听器未移除（P2 / 资源泄漏）
+- **位置**：`public/assets/js/ui/shell.js:302`（注册匿名 `mobileQuery.addEventListener('change', ...)`），`destroy()`（308）只 `root.remove()` 未 `removeEventListener`。
+- **现象**：admin/teacher 端每次登出再登录会重建 shell 并叠加一个新监听器，闭包持续持有已 detach 的 `root`。
+- **根因**：handler 未保存引用，销毁时无法移除；`init()` 无「先移除再添加」幂等保护。
+- **影响**：长期运行 SPA 内存与事件表随登录次数累积膨胀（功能无碍，但监听器泄漏）。
+- **修复**：`init()` 保存 `this._onMqChange` 并在注册前先 `removeEventListener`；`destroy()` 中 `removeEventListener` 后清空引用。
+
+### BUG-244 ｜答题引擎保存失败时硬性拦死翻页（P2 / 可用性）
+- **位置**：`public/assets/js/views/exam-runner.js:261`（修复前 `if (state.dirty && !(await saveCurrent())) return;`）
+- **现象**：网络抖动致 `saveCurrent` 返回 false（已 `notify.error`）后 `go()` 直接 return，考生无法跳到下一题，即便想先跳过该题。
+- **根因**：把「保存失败」等同于「禁止离开」，未提供「丢弃本页改动强制离开」的选项。
+- **影响**：临时断网体验硬伤（逻辑上可辩护，但把考生困在当前题）。
+- **修复**：保存失败时 `confirmDialog` 询问「仍要离开吗？离开将不会保存本题作答」，确认后 `state.dirty=false` 并继续翻页；取消则留在本题。
+
+### BUG-245 ｜答题引擎缺少周期自动保存，关页/刷新丢当前题（P2 / 数据完整性）
+- **位置**：`public/assets/js/views/exam-runner.js`（作答仅在翻页 `go→saveCurrent` 与交卷 `doSubmit→saveCurrent` 时落盘；`dispose` 仅 `stopTimer`；`student/exam.js:105` 的 `beforeunload` 只 `preventDefault`，不保存）。
+- **现象**：考生在某一题输入答案后**不翻页**直接关标签/刷新（F5），该题作答丢失（后端仅保留上一题的保存）。
+- **根因**：缺乏周期 autosave；`beforeunload` 无法 `await` 异步保存，且项目 CSRF 用请求头令牌（`X-CSRF-Token`），`navigator.sendBeacon` 无法携带自定义请求头，故 beacon 方案被 CSRF 拦截、**不可行**。
+- **影响**：正式考试数据完整性，边缘但真实（多数情况已翻页故已保存，最差丢 1 题）。
+- **修复**：作答变更后启动 1.2s 防抖自动保存（`scheduleAutosave()`，在填空 `input` 与单选/多选 `click` 三处 dirty 设置点挂载）；`saveCurrent`/`stopTimer` 中清掉待执行定时器，避免对已卸载试卷继续请求。
+  该方案用 `fetch`+CSRF 头落盘，覆盖「作答后停留片刻再离开」的真实场景；配合现有 `beforeunload` 警告，数据丢失窗口极小。
+
+### BUG-246 ｜`admin/score.js` 返回裸 Node，未遵循 `{node, dispose}` 契约（P2 / 技术债）
+- **位置**：`public/assets/js/views/admin/score.js:254`（修复前 `return root;`）
+- **现象**：`ScoreView` 直接返回裸 `Node`，路由走到 `instanceof Node` 分支、**无 disposer**。当前该视图无 `setInterval`/订阅，故无泄漏。
+- **根因**：视图工厂未返回 dispose 信封，与 monitor/teacher 等统一约定不一致。
+- **影响**：未来维护者在该页加轮询/订阅时易漏清理，重演定时器泄漏。
+- **修复**：显式 `return { node: root, dispose: () => {} }`，固化契约、便于扩展。
+
+### BUG-247 ｜`core/dom.js` 的 `el({html})` 是未受控的 innerHTML 注入点（P2 / 潜伏 XSS）
+- **位置**：`public/assets/js/core/dom.js:32-35`（`case 'html': node.innerHTML = String(v);`）
+- **现象**：`el` 的 `html` 特殊键直接 `node.innerHTML = String(v)`。全量 Grep 确认**当前零调用**（仅 `svg()` 用可信常量），但 API 本身未限制来源，一旦未来维护者写出 `el('div', { html: serverData })` 即形成 DOM XSS。
+- **根因**：允许注入未转义 HTML，缺少调用约束/来源校验。
+- **影响**：当前无活跃利用，属潜伏风险/契约缺陷。
+- **修复**：移除 `el` 的 `html` 特殊键（SVG 图标走独立的 `svg()` 工厂，不受影响），从根上消除脚枪。
+
+### BUG-248 ｜`admin/system.js` 运行参数范围校验在 min/max 为 undefined 时失效（P3 / 防御性）
+- **位置**：`public/assets/js/views/admin/system.js:187`（`if (f.min !== null && f.max !== null && ...)`）
+- **现象**：若后端 schema 用 `undefined`（而非 `null`）表示无界，则 `undefined !== null` 为 true 进入比较，而 `n < undefined`/`n > undefined` 恒 false，范围校验被完全绕过，任意值可保存。
+- **根因**：用 `!== null` 判定「有界」，未覆盖 `undefined`/缺省。
+- **影响**：依赖后端 schema 约定；经核实后端 `Setting::fields()` 始终下发 `min/max`（无界为 `null`，见 `Setting.php:228-229`），故**当前不可复现**。列为防御性加固。
+- **修复**：改为 `if ((f.min ?? null) !== null && (f.max ?? null) !== null && ...)`，对缺省值同样稳健。
+
+### BUG-249 ｜管理端成绩 CSV 默认携带考场口令，与教师端口径不一致（P2）
+- **位置**：`app/Controllers/Admin/ScoreController.php:92`（`csv($examId, true)`）+ `app/Services/InvigilationService.php:153`（默认 `$withPwd = true`）
+- **现象**：管理端「成绩导出」CSV 默认写入 `examinfo.exam_pwd` 作为「考场口令」列；教师端导出**不含**口令（`TeacherExamController::exportScores` 自行拼装、无 pwd 列）。
+- **根因**：成绩名单 JSON（`StuScore::byExam`）已刻意剥离 `stu_pwd`，CSV 单从 `examinfo` 取口令；把「入场口令」这种凭证落到文件并非必要，且与教师端导出口径不一致。
+- **影响**：口令在考试结束后已失效，泄露风险低，但属不必要的凭证落盘 + 两端不一致。
+- **修复**：管理端 `exportCsv` 改为 `csv($examId, false)`，与教师端一致、避免把凭证写进导出文件。
+
+## 二、已知但未本轮实施（P3，刻意保留）
+- **D3 模拟考试可无限重复创建且无清理**：`ExerciseExamController::start` 每次 `INSERT` 新 `examinfo`（`exam_class='模拟考试'`），无「该考生进行中模拟考试」判重，长期运行 `examinfo` 持续膨胀（不影响正式考试筛选，因各处已排除该类）。功能无碍，列为数据卫生待办，本轮未改以避免影响练习/模拟流程回归。
+- **BUG-220 N+1**：部分列表接口循环内逐行查库（如监考名单补考生信息），当前数据量无感知，刻意未改。
+
+## 三、验证结果（本轮）
+| 验证 | 结果 |
+|---|---|
+| 后端全量 `node temp/runtests.mjs` | **393 PASS / 0 FAIL / 0 SKIP** |
+| 前端静态 `node temp/check_frontend.mjs` | 42 文件 0 语法错误 / 0 未解析 import |
+| 全站浏览器巡检 `browser_sweep_v6.mjs` | **103 PASS / 0 FAIL** |
+| CSS 覆盖率审计 `css_coverage_audit.mjs`（9 入口） | **0** 个无规则类名 |
+| 匿名首屏 `verify_me_401.mjs` | **64 PASS / 0 FAIL** |
+| PHP `php -l` 三个改动文件 | 无语法错误 |
+

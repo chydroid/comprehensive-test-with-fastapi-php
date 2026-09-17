@@ -9,7 +9,7 @@
 
 import { el, clear, mount } from '../core/dom.js';
 import { icon } from '../core/icons.js';
-import { notify, button, openModal } from '../ui/components.js';
+import { notify, button, openModal, confirmDialog } from '../ui/components.js';
 import { withLoading } from '../core/bootstrap.js';
 import { fmtScore, fmtDuration } from '../core/format.js';
 
@@ -227,6 +227,7 @@ export function createExamRunner(cfg) {
         } else {
           state.answers.set(state.paperId, o.key);
           state.dirty = true;
+          scheduleAutosave();
           renderQuestion();
         }
       });
@@ -254,11 +255,32 @@ export function createExamRunner(cfg) {
   // 翻页序号：连点「下一题」会并发多个 loadPaper，谁后返回谁生效，
   // 最终停在哪题取决于响应顺序而非用户点击。用序号丢弃过期结果。
   let navSeq = 0;
+  // 防抖自动保存：作答变更后延迟落盘，避免「答完不翻页直接关页/刷新」丢失当前题（BUG-245）。
+  let autosaveTimer = null;
+
+  function scheduleAutosave() {
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = null;
+      if (state.dirty && !state.finished) saveCurrent();
+    }, 1200);
+  }
 
   async function go(paperId) {
     if (paperId < 1 || paperId > state.nav.total) return;
     if (paperId === state.paperId && state.question) return;
-    if (state.dirty && !(await saveCurrent())) return;
+    if (state.dirty) {
+      const saved = await saveCurrent();
+      if (!saved) {
+        // 保存失败（网络抖动 / 已被强制收卷）：不再硬性拦死翻页，
+        // 询问用户是否丢弃本题作答后离开，避免考生被困在当前题（BUG-244）。
+        const leave = await confirmDialog('当前题答案保存失败，仍要离开吗？离开将不会保存本题作答。', {
+          title: '保存失败', confirmText: '仍要离开', cancelText: '留在本题', tone: 'warning',
+        });
+        if (!leave) return;
+        state.dirty = false;
+      }
+    }
     const token = ++navSeq;
     const res = await withLoading(questionCard, () => cfg.loadPaper(paperId), { silent: true });
     if (token !== navSeq) return; // 已有更新的翻页请求，丢弃本次结果
@@ -271,6 +293,7 @@ export function createExamRunner(cfg) {
   }
 
   async function saveCurrent() {
+    if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
     const val = localAnswer(state.paperId);
     if (val == null) { state.dirty = false; return true; }
     // 保存失败（网络抖动 / 已被强制收卷）时不能让异常冒泡成 unhandled rejection：

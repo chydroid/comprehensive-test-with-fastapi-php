@@ -299,9 +299,10 @@ export function createShell(cfg) {
       buildNav();
       this.refreshBadges();
 
-      mobileQuery.addEventListener?.('change', () => {
-        root.classList.remove('is-mobile-open');
-      });
+      // 移动端断点切换：保存 handler 引用，destroy 时移除，避免反复登出/登录叠加监听器（BUG-243）。
+      this._onMqChange = () => { root.classList.remove('is-mobile-open'); };
+      mobileQuery.removeEventListener?.('change', this._onMqChange);
+      mobileQuery.addEventListener?.('change', this._onMqChange);
       return this;
     },
 
@@ -310,6 +311,8 @@ export function createShell(cfg) {
         try { this._viewDispose(); } catch (_) { /* 忽略 */ }
         this._viewDispose = null;
       }
+      mobileQuery.removeEventListener?.('change', this._onMqChange);
+      this._onMqChange = null;
       root.remove();
     },
   };

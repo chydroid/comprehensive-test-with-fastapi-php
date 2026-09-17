@@ -29,10 +29,6 @@ export function el(tag, attrs = {}, children = []) {
       case 'text':
         node.textContent = String(v);
         break;
-      case 'html':
-        // 仅用于可信的内联 SVG 图标常量
-        node.innerHTML = String(v);
-        break;
       case 'on':
         for (const [evt, fn] of Object.entries(v)) node.addEventListener(evt, fn);
         break;

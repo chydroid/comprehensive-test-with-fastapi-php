@@ -184,7 +184,7 @@ export function ConfigView() {
         const raw = String(c.input.value).trim();
         const n = Number(raw);
         if (raw === '' || !Number.isFinite(n)) { notify.error(`「${f.label}」请填写数字`); c.input.focus(); return; }
-        if (f.min !== null && f.max !== null && (n < f.min || n > f.max)) {
+        if ((f.min ?? null) !== null && (f.max ?? null) !== null && (n < f.min || n > f.max)) {
           notify.error(`「${f.label}」需在 ${f.min}–${f.max} 之间`);
           c.input.focus();
           return;

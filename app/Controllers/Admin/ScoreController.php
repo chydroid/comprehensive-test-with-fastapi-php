@@ -89,7 +89,9 @@ class ScoreController extends BaseController
     {
         $examId = $this->resolveExamId(true);
         try {
-            $content = $this->service->csv($examId, true);
+            // 成绩导出不含考场口令：口令在考试结束后已失效，且教师端导出本就不含，
+            // 保持两端口径一致、避免把凭证落进文件（BUG-249）。
+            $content = $this->service->csv($examId, false);
             $filename = $this->service->csvFilename($examId);
         } catch (\RuntimeException $e) {
             throw new HttpException(404, $e->getMessage(), 40400);

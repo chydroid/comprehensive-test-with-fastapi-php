@@ -163,10 +163,9 @@ class TeacherExamController extends BaseController
         $sess = $this->authTeacher();
         $data = $this->collectParams();
 
-        // 教师创建考试时，监考教师默认填自己
-        if ($data['exam_tea'] === '') {
-            $data['exam_tea'] = (string) ($sess['tea_name'] ?? '');
-        }
+        // 教师只能创建自己负责的考试：忽略前端传入的 exam_tea，强制归属本人，
+        // 防止横向把考试挂到他人名下（BUG-241）。
+        $data['exam_tea'] = (string) ($sess['tea_name'] ?? '');
         $this->assertValid($data);
 
         $id = $this->model->create($data + ['exam_status' => Exam::STATUS_EXAM, 'exam_pwd' => 0]);
@@ -193,7 +192,10 @@ class TeacherExamController extends BaseController
             throw new HttpException(409, '该考试已生成试卷，组卷参数不可修改', 40902);
         }
 
-        $this->model->update($id, $data + ['exam_status' => Exam::STATUS_EXAM]);
+        // 编辑考试不应改写状态：状态流转只交由 open/start/generatePapers/over 等
+        // 专用接口负责；此处注入 exam_status 会破坏已出题考试的惰性自动开考链路
+        // （autoStartIfDue 仅推进 paper 状态）。与管理端 update 行为保持一致（BUG-242）。
+        $this->model->update($id, $data);
         return $this->ok($this->model->detail($id), '修改成功');
     }
 

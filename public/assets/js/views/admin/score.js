@@ -251,5 +251,7 @@ export function ScoreView({ router, query }) {
   }
 
   init();
-  return root;
+  // 统一视图契约：返回 { node, dispose }，避免后续维护者在成绩页加轮询/订阅时
+  // 因遗漏 dispose 而重演定时器泄漏（BUG-246）。
+  return { node: root, dispose: () => {} };
 }
