@@ -197,4 +197,5 @@ export const adminApi = {
   system:        () => http.get('/admin/system'),
   initialize:    (body) => http.post('/admin/system/initialize', body),
   clearExams:    (body) => http.post('/admin/system/clear-exams', body),
+  logs:          (params) => http.get('/admin/logs', { query: params }),
 };

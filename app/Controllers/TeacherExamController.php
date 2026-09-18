@@ -178,6 +178,7 @@ class TeacherExamController extends BaseController
         $this->assertValid($data);
 
         $id = $this->model->create($data + ['exam_status' => Exam::STATUS_EXAM, 'exam_pwd' => 0]);
+        $this->audit('exam.create', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? '', 'actor' => 'teacher']);
         return $this->ok($this->model->detail($id), '添加成功');
     }
 
@@ -205,6 +206,7 @@ class TeacherExamController extends BaseController
         // 专用接口负责；此处注入 exam_status 会破坏已出题考试的惰性自动开考链路
         // （autoStartIfDue 仅推进 paper 状态）。与管理端 update 行为保持一致（BUG-242）。
         $this->model->update($id, $data);
+        $this->audit('exam.update', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? null, 'actor' => 'teacher']);
         return $this->ok($this->model->detail($id), '修改成功');
     }
 
@@ -221,6 +223,7 @@ class TeacherExamController extends BaseController
         }
 
         $pwd = $this->model->start($id);
+        $this->audit('exam.start', 'exam:' . $id, ['exam_pwd' => $pwd, 'actor' => 'teacher']);
         return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "考试已开考，考场口令：{$pwd}");
     }
 
@@ -239,6 +242,7 @@ class TeacherExamController extends BaseController
         }
 
         $pwd = $this->model->openForEntry($id);
+        $this->audit('exam.open', 'exam:' . $id, ['exam_pwd' => $pwd, 'actor' => 'teacher']);
         return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "已开放入场，考场口令：{$pwd}");
     }
 
@@ -277,6 +281,7 @@ class TeacherExamController extends BaseController
             'skipped'       => $result['skipped'],
             'warnings'      => array_values($warnings),
         ], "出题完成：新生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
+        $this->audit('exam.generate', 'exam:' . $id, ['students' => $result['students'], 'generated' => $result['generated'], 'actor' => 'teacher']);
     }
 
     /** DELETE /api/teacher/exams/{id} */
@@ -303,6 +308,7 @@ class TeacherExamController extends BaseController
             throw $e;
         }
 
+        $this->audit('exam.delete', 'exam:' . $id, ['exam_name' => $row['exam_name'] ?? '', 'actor' => 'teacher']);
         return $this->ok(null, '删除成功');
     }
 

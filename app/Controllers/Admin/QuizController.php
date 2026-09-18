@@ -107,6 +107,7 @@ class QuizController extends BaseController
         $data['quiz_key_ok'] = 0;
 
         $id = $this->model->create($data);
+        $this->audit('quiz.create', 'quiz:' . $id, ['quiz_class' => $in['quiz_class'], 'subj_id' => $subjId]);
         return $this->ok($this->model->find($id), '添加成功');
     }
 
@@ -147,6 +148,7 @@ class QuizController extends BaseController
         }
 
         $this->model->update($id, $data);
+        $this->audit('quiz.update', 'quiz:' . $id, ['quiz_class' => $in['quiz_class'], 'subj_id' => $subjId]);
         return $this->ok($this->model->find($id), '修改成功');
     }
 
@@ -158,6 +160,7 @@ class QuizController extends BaseController
             throw new HttpException(404, '试题不存在', 40400);
         }
         $this->model->delete($id);
+        $this->audit('quiz.delete', 'quiz:' . $id, []);
         return $this->ok(null, '删除成功');
     }
 
@@ -169,6 +172,7 @@ class QuizController extends BaseController
             throw new HttpException(400, '请选择要删除的试题', 40000);
         }
         $deleted = $this->model->deleteMany($ids);
+        $this->audit('quiz.batch-delete', 'quiz:batch', ['ids' => $ids, 'deleted' => $deleted]);
         return $this->ok(['deleted' => $deleted], "批量删除成功，共删除 {$deleted} 条试题");
     }
 
@@ -204,6 +208,7 @@ class QuizController extends BaseController
     {
         $subjId = (int) $this->request->input('subj_id', 0);
         $result = $this->model->deleteDuplicates($subjId > 0 ? $subjId : null);
+        $this->audit('quiz.clean', 'quiz:auto', ['subj_id' => $subjId ?: null, 'deleted' => $result['deleted'], 'groups' => $result['groups']]);
 
         return $this->ok($result, "自动清理完成，清理 {$result['groups']} 组重复，共删除 {$result['deleted']} 条试题");
     }

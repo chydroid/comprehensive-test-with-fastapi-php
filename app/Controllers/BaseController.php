@@ -127,4 +127,16 @@ abstract class BaseController extends \Core\Controller
     {
         return $this->response->success($data, $message);
     }
+
+    /**
+     * 记录一条审计日志（旁路，永不打断业务）。
+     * 详见 App\Services\Audit。控制器在「关键写操作成功后」调用即可。
+     * @param string $action 动作类型，如 'exam.create'
+     * @param string $target 操作对象，如 'exam:123'
+     * @param array  $detail 结构化详情
+     */
+    protected function audit(string $action, string $target = '', array $detail = []): void
+    {
+        \App\Services\Audit::log($action, $target, $detail);
+    }
 }

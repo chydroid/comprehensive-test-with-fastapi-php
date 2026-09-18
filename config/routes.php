@@ -273,6 +273,7 @@ return [
     ['GET',  '/api/admin/system',          [SystemController::class, 'index']],
     ['POST', '/api/admin/system/initialize', [SystemController::class, 'initialize']],
     ['POST', '/api/admin/system/clear-exams', [SystemController::class, 'clearExams']],
+    ['GET',  '/api/admin/logs', [SystemController::class, 'logs']],
 
     /* ==================== API 文档 / 指标 ==================== */
     ['GET', '/api/openapi.json', [\App\Controllers\DocController::class, 'openapi']],

@@ -93,6 +93,7 @@ class TeacherController extends BaseController
             'avatar'   => '',
         ]);
 
+        $this->audit('user.teacher.create', 'teacher:' . $id, ['tea_name' => $name]);
         return $this->ok(Teacher::sanitize($this->model->find($id)), '添加成功');
     }
 
@@ -124,6 +125,7 @@ class TeacherController extends BaseController
         }
 
         $this->model->update($id, $data);
+        $this->audit('user.teacher.update', 'teacher:' . $id, ['tea_name' => $name]);
         return $this->ok(Teacher::sanitize($this->model->find($id)), '修改成功');
     }
 
@@ -147,6 +149,7 @@ class TeacherController extends BaseController
         }
 
         $this->model->delete($id);
+        $this->audit('user.teacher.delete', 'teacher:' . $id, ['tea_name' => $row['tea_name'] ?? '']);
         return $this->ok(null, '删除成功');
     }
 }

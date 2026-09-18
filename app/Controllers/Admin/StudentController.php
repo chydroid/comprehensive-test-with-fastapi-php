@@ -177,6 +177,7 @@ class StudentController extends BaseController
               ]
           );
 
+        $this->audit('user.student.create', 'student:' . $id, ['stu_name' => $name]);
         return $this->ok(Student::sanitize($this->model->find($id)), '添加成功');
     }
 
@@ -219,6 +220,7 @@ class StudentController extends BaseController
         }
 
         $this->model->update($id, $data);
+        $this->audit('user.student.update', 'student:' . $id, ['stu_name' => $name]);
         return $this->ok(Student::sanitize($this->model->find($id)), '修改成功');
     }
 
@@ -246,6 +248,7 @@ class StudentController extends BaseController
             throw $e;
         }
 
+        $this->audit('user.student.delete', 'student:' . $id, []);
         return $this->ok(null, '删除成功');
     }
 
@@ -336,6 +339,7 @@ class StudentController extends BaseController
             );
         }
 
+        $this->audit('user.student.import', 'student:batch', ['imported' => $imported, 'failed' => count($errors)]);
         return $this->ok([
             'imported' => $imported,
             'failed'   => count($errors),

@@ -74,6 +74,7 @@ class ScoreController extends BaseController
         } catch (\RuntimeException $e) {
             throw new HttpException(409, $e->getMessage(), 40901);
         }
+        $this->audit('score.backup', 'exam:' . $examId, ['backed_up' => $count]);
         return $this->ok(['backed_up' => $count], "备份成功，共备份 {$count} 条成绩记录");
     }
 

@@ -20,6 +20,7 @@ import { StudentView } from '../views/admin/student.js';
 import { MonitorView } from '../views/admin/monitor.js';
 import { ScoreView } from '../views/admin/score.js';
 import { ConfigView, SystemView, ProfileView } from '../views/admin/system.js';
+import { LogsView } from '../views/admin/logs.js';
 import {
   SubjectView, CategoryView, GradeView, ClassView, TeacherView, AdminView, NewsView,
 } from '../views/admin/basics.js';
@@ -55,6 +56,7 @@ const NAV = [
   { key: 'admins',   label: '管理员',   icon: 'shield',    perm: 'admin.manage', group: 'system' },
   { key: 'config',   label: '系统设置', icon: 'settings',  perm: 'system.config', group: 'system' },
   { key: 'system',   label: '系统维护', icon: 'sliders',   perm: 'system.manage', group: 'system' },
+  { key: 'logs',     label: '操作审计', icon: 'shield',    perm: 'system.manage', group: 'system' },
 
   { key: 'profile',  label: '个人设置', icon: 'user',      group: 'system', hidden: true },
 ];
@@ -77,6 +79,7 @@ const VIEWS = {
   teachers: TeacherView,
   admins: AdminView,
   news: NewsView,
+  logs: LogsView,
 };
 
 /* ============================ 启动 ============================ */

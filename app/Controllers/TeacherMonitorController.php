@@ -80,6 +80,7 @@ class TeacherMonitorController extends BaseController
     {
         [$examId, $stuId] = $this->target();
         $affected = $this->service->lock($examId, $stuId);
+        $this->audit('monitor.lock', "exam:{$examId}", ['stu_id' => $stuId, 'actor' => 'teacher']);
         return $this->ok(['affected' => $affected], '已锁定');
     }
 
@@ -96,6 +97,7 @@ class TeacherMonitorController extends BaseController
     {
         $examId = $this->ownExamId();
         $result = $this->service->submitAll($examId);
+        $this->audit('monitor.submit', "exam:{$examId}", ['actor' => 'teacher', ...$result]);
         return $this->ok($result, "已强制交卷并判分 {$result['graded']} 人（跳过已交卷 {$result['skipped']} 人）");
     }
 
@@ -110,6 +112,7 @@ class TeacherMonitorController extends BaseController
         $message = $result['skipped'] > 0
             ? '该考生已交卷'
             : "已强制交卷并判分（{$result['score']} 分）";
+        $this->audit('monitor.submit-one', "exam:{$examId}", ['stu_id' => $stuId, 'actor' => 'teacher', 'score' => $result['score'] ?? null, 'skipped' => $result['skipped'] ?? 0]);
         return $this->ok($result, $message);
     }
 
@@ -118,6 +121,7 @@ class TeacherMonitorController extends BaseController
     {
         $examId = $this->ownExamId();
         $affected = $this->service->lockAll($examId);
+        $this->audit('monitor.lock-all', "exam:{$examId}", ['affected' => $affected, 'actor' => 'teacher']);
         return $this->ok(['affected' => $affected], '已全部锁定');
     }
 
@@ -126,6 +130,7 @@ class TeacherMonitorController extends BaseController
     {
         $examId = $this->ownExamId();
         $affected = $this->service->unlockAll($examId);
+        $this->audit('monitor.unlock-all', "exam:{$examId}", ['affected' => $affected, 'actor' => 'teacher']);
         return $this->ok(['affected' => $affected], '已全部解锁');
     }
 
@@ -134,6 +139,7 @@ class TeacherMonitorController extends BaseController
     {
         $examId = $this->ownExamId();
         $result = $this->service->endAll($examId);
+        $this->audit('monitor.over-all', "exam:{$examId}", ['actor' => 'teacher', ...$result]);
         return $this->ok($result, "考试已结束，共判分 {$result['graded']} 人");
     }
 

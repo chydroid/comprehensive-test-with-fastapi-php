@@ -131,6 +131,7 @@ class ExamController extends BaseController
         $this->assertValid($data, true);
 
         $id = $this->model->create($data + ['exam_status' => Exam::STATUS_EXAM, 'exam_pwd' => 0]);
+        $this->audit('exam.create', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? '']);
         return $this->ok($this->model->detail($id), '添加成功');
     }
 
@@ -165,6 +166,7 @@ class ExamController extends BaseController
         // 一旦被改回 exam，到点将永不自动开考，考生会卡在等待室。
         // 状态流转只由 启动/出题/开考/结束 这些专用接口负责。
         $this->model->update($id, $data);
+        $this->audit('exam.update', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? null]);
         return $this->ok($this->model->detail($id), '修改成功');
     }
 
@@ -195,6 +197,7 @@ class ExamController extends BaseController
             throw $e;
         }
 
+        $this->audit('exam.delete', 'exam:' . $id, ['exam_name' => $row['exam_name'] ?? '']);
         return $this->ok(null, '删除成功');
     }
 
@@ -236,6 +239,7 @@ class ExamController extends BaseController
         }
 
         $pwd = $this->model->start($id);
+        $this->audit('exam.start', 'exam:' . $id, ['exam_pwd' => $pwd]);
         return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "考试已启动，考场口令：{$pwd}");
     }
 
@@ -258,6 +262,7 @@ class ExamController extends BaseController
         }
 
         $pwd = $this->model->openForEntry($id);
+        $this->audit('exam.open', 'exam:' . $id, ['exam_pwd' => $pwd]);
         return $this->ok(['exam_id' => $id, 'exam_pwd' => $pwd], "已开放入场，考场口令：{$pwd}");
     }
 
@@ -301,6 +306,7 @@ class ExamController extends BaseController
             'skipped'       => $result['skipped'],
             'warnings'      => array_values($warnings),
         ], "出题完成：新生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
+        $this->audit('exam.generate', 'exam:' . $id, ['students' => $result['students'], 'generated' => $result['generated']]);
     }
 
     /* ------------------------------------------------------------------ */

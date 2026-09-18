@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers\Admin;
 
 use App\Controllers\BaseController;
+use App\Services\Audit;
 use Core\Database;
 use Core\HttpException;
 use Core\Response;
@@ -50,6 +51,7 @@ class SystemController extends BaseController
         $tables = array_merge(self::TABLES_EXAM, ['stuinfo']);
         $deleted = $this->truncateAll($tables);
 
+        $this->audit('system.initialize', 'system', ['deleted' => $deleted]);
         return $this->ok(['deleted' => $deleted], '系统初始化完成：已清空考场、答卷、成绩与考生信息');
     }
 
@@ -60,6 +62,7 @@ class SystemController extends BaseController
 
         $deleted = $this->truncateAll(self::TABLES_EXAM);
 
+        $this->audit('system.clear-exams', 'system', ['deleted' => $deleted]);
         return $this->ok(['deleted' => $deleted], '考试信息清除完成：已清空考场、答卷与成绩，考生信息已保留');
     }
 
@@ -131,5 +134,37 @@ class SystemController extends BaseController
              WHERE exam_status = 'testing' AND COALESCE(exam_class, '') != ?",
             [\App\Models\Exam::MOCK_CLASS]
         )['c'] ?? 0);
+    }
+
+    /**
+     * GET /api/admin/logs —— 审计日志查询（超级管理员可见）
+     * 支持过滤：action(前缀) / actor_type / actor_id / keyword / since / until / limit
+     */
+    public function logs(): Response
+    {
+        $this->authAdmin();
+
+        $limit = min(200, max(1, (int) $this->request->query('limit', 50)));
+        $filters = [
+            'action'     => trim((string) $this->request->query('action', '')),
+            'actor_type' => trim((string) $this->request->query('actor_type', '')),
+            'actor_id'   => trim((string) $this->request->query('actor_id', '')),
+            'keyword'    => trim((string) $this->request->query('keyword', '')),
+            'since'      => trim((string) $this->request->query('since', '')),
+            'until'      => trim((string) $this->request->query('until', '')),
+        ];
+        $rows = Audit::recent($limit, array_filter($filters, static fn ($v) => $v !== ''));
+
+        foreach ($rows as &$r) {
+            if (!empty($r['detail'])) {
+                $decoded = json_decode((string) $r['detail'], true);
+                $r['detail'] = is_array($decoded) ? $decoded : [];
+            } else {
+                $r['detail'] = [];
+            }
+        }
+        unset($r);
+
+        return $this->ok(['list' => $rows, 'total' => count($rows)]);
     }
 }

@@ -111,6 +111,7 @@ class ConfigController extends BaseController
     {
         $input = $this->request->all();
         $saved = Setting::putMany($input);
+        $this->audit('settings.update', 'settings', ['saved' => $saved]);
         return $this->ok([
             'values' => Setting::all(),
             'saved'  => $saved,

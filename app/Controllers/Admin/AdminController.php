@@ -105,6 +105,7 @@ class AdminController extends BaseController
             'avatar'      => '',
         ]);
 
+        $this->audit('user.admin.create', 'admin:' . $id, ['username' => $username, 'admin_power' => $in['admin_power']]);
         return $this->ok(Admin::sanitize($this->model->find($id)), '添加成功');
     }
 
@@ -154,6 +155,7 @@ class AdminController extends BaseController
             sess_set(\App\Services\AuthSession::ADMIN, $me);
         }
 
+        $this->audit('user.admin.update', 'admin:' . $id, ['username' => $username, 'admin_power' => $power]);
         return $this->ok(Admin::sanitize($this->model->find($id)), '修改成功');
     }
 
@@ -182,6 +184,7 @@ class AdminController extends BaseController
         }
 
         $this->model->delete($id);
+        $this->audit('user.admin.delete', 'admin:' . $id, ['username' => $row['username'] ?? '']);
         return $this->ok(null, '删除成功');
     }
 }

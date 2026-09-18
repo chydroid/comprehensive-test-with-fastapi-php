@@ -50,6 +50,8 @@ class AuthController extends BaseController
             'admin_power' => $role,
         ]);
 
+        $this->audit('auth.login', 'admin:' . $row['id'], ['username' => $row['username'], 'role' => $role]);
+
         return $this->ok([
             'admin'      => Admin::sanitize($row),
             'permissions'=> $this->permissions($role),
@@ -60,7 +62,11 @@ class AuthController extends BaseController
     /** POST /api/admin/logout */
     public function logout(): Response
     {
+        $sess = AuthSession::get(AuthSession::ADMIN);
         AuthSession::logout(AuthSession::ADMIN);
+        if ($sess !== null) {
+            $this->audit('auth.logout', 'admin:' . ($sess['id'] ?? ''), ['username' => $sess['username'] ?? '']);
+        }
         return $this->ok(null, '已退出登录');
     }
 
