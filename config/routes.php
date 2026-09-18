@@ -131,6 +131,11 @@ return [
     ['POST', '/api/teacher/monitor/lock',  [TeacherMonitorController::class, 'lock']],
     ['POST', '/api/teacher/monitor/unlock', [TeacherMonitorController::class, 'unlock']],
     ['POST', '/api/teacher/monitor/submit', [TeacherMonitorController::class, 'submitAll']],
+    // 单个考生收卷：与管理端 /api/admin/monitor/submit-one 对称。
+    // 控制器方法早已存在（InvigilationService::submitOne 的注释明确写了「单人与全员
+    // 必须是两个不同的入口」），但这里漏了注册 —— 于是教师端监考页行内「交卷」按钮
+    // 只能落到上面的全员收卷，监考员想收 1 人却把全场判了分（不可撤销的数据事故）。
+    ['POST', '/api/teacher/monitor/submit-one', [TeacherMonitorController::class, 'submitOne']],
     ['POST', '/api/teacher/monitor/lock-all', [TeacherMonitorController::class, 'lockAll']],
     ['POST', '/api/teacher/monitor/unlock-all', [TeacherMonitorController::class, 'unlockAll']],
     ['POST', '/api/teacher/monitor/over-all', [TeacherMonitorController::class, 'overAll']],

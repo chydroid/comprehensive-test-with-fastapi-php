@@ -1419,3 +1419,153 @@ FAIL  2 学生列表不应包含 exam_pwd          -> 泄露: "exam_pwd":624620
 > 缺参时会回落到相对 `temp/domtest` 的默认路径而解析到盘符根目录，报模块找不到 —— 属调用方式问题。
 
 
+
+---
+
+# 第十三轮：全流程实战演练（管理员 + 监考教师 + 3 名考生）
+
+## 一、演练方式
+
+按真实一场考试的时间线把三端串起来跑通，并刻意纳入边界与越权场景：
+
+```
+管理员登录 → 编排考试（题库题量预检 / 时间倒置顺延）→ 开放入场（按配置位数签发口令）
+  → 3 名考生【边界】入场（错误口令 / 非本班 / 重复入场 / 续考免口令）
+  → 教师登录 → 出题（逐人随机卷，验证互不相同）→ 开考 → 惰性自动开考
+  → 考生答题（保存 / 心跳 / 锁定 / 解锁 / 跨考生隔离 / 越权取他人试卷）
+  → 考生在考硬约束（练习 / 模拟被个人层拦住）
+  → 考生 1 全对交卷（幂等 / 禁再取卷 / 可看答案）
+  → 监考锁定 / 解锁 /【收卷】单人 vs 全员
+  → 结束整场 → 成绩名单 → 导出 → 备份越权校验
+  → 管理端收卷双入口分离 → 夹具精确回收
+```
+
+产物：`test/cases/full_exam_e2e_test.php`（**206 项断言**，本轮新增）
+与 `test/lib/Fixture.php#createExam3()`（独立班级 `__TEST__三人班` + 考生 `9000003/4/5`，
+与既有 A/B 夹具互不可见，才能独立验证「逐人随机卷互不相同」「对单人收卷不影响他人」）。
+
+## 二、BUG-251　【P1】考场到期后永不收敛，一场忘记结束的考试会永久冻结全站练习 / 模拟
+
+- **现象**：本轮演练的环境自检阶段，模拟组卷页冒烟突然 7 项失败，报
+  「你正在参加正式考试，不能同时进行模拟考试」。查库发现考场 **#114「测试流程考试1」
+  （`exam_end = 2026-09-14 19:37`）到 09-18 仍停在 `exam_status = 'testing'`**，
+  其名单里考生 `165165` 的 `stuscore.stu_status = 'online'`。
+  实测该数据的影响面远超单个考生：
+
+  | 判定 | 结果 | 后果 |
+  |---|---|---|
+  | `Exam::hasOngoingFormalExam()` | **true** | **全站所有考生**的练习 / 模拟被冻结（`reason = exam_ongoing`），后台开关也放不开 |
+  | `Exam::isStudentInExam('165165')` | **true** | 该考生被永久钉死在个人层硬约束（`reason = self_in_exam`） |
+  | `Exam::activeWithSubject()` | 含 #114 | 门户「进行中的考试」常驻一条幽灵考试 |
+
+- **根因**：所有「是否进行中」的判定**只看 `exam_status`、不看时间**。
+  系统此前只有「当前考生超时强制交卷」（`ExamController::guardExamTime()` 与其在
+  `status()` 里的重复内联实现），**从不推进整场状态**；加上没有常驻定时任务，
+  一场没有人工点「结束」的考试就永远停在 `testing`。
+- **这不是偶发**：项目记忆显示 2026-09-13 曾出现**同一问题**（4 个 `testing` 考场
+  阻塞练习入口），当时的处置是**手工 `UPDATE examinfo SET exam_status='over'` 修数据** ——
+  数据被改好了，根因一直在。
+- **修复**（读侧兜底 + 状态收敛，两层缺一不可）：
+  1. **读侧护栏**：新增 `Exam::SQL_NOT_EXPIRED` 谓词，
+     `hasOngoingFormalExam()` / `isStudentInExam()` / `activeWithSubject()` /
+     `pendingForStudent()` 四处全部加上。**不依赖状态是否已收敛** ——
+     一场没人访问的过期考场同样不再冻结任何功能。
+  2. **状态收敛**：新增 `Exam::autoEndIfDue()`，与 `autoStartIfDue()` 对称 ——
+     `testing` 且已过 `exam_end` → `ExamEngine::endExam()`（事务内全员判分 + 状态流转 `over`，
+     幂等）。接入点：`/api/exam/status`、`/api/exam/paper`、考场入场、
+     管理端与教师端监考列表 / 详情。
+  3. **消除重复实现**：`ExamController::status()` 里的内联超时块与 `guardExamTime()`
+     合并为一处，并改为整场收敛（原先只判分当前考生）；`HomeController::pendingForClass()`
+     直接委托 `Exam::pendingForStudent()`（此前是「待考」定义的第三份拷贝）。
+  4. **边界**：`exam_end` 为 `NULL` / 零值日期 / 空串视为**未配置 = 不过期**，
+     避免历史数据把考场判死；管理端 / 教师端**列表不过滤过期**（教师仍需看到并清理它）。
+- **现场自愈**：对真实残留的 #114 直接走修复后的代码路径 ——
+  `autoEndIfDue(114)` 返回 `true`，状态 `testing → over`，考生成绩保留（5 分）并转 `over`，
+  二次调用返回 `false`。**不再需要手工改库**。
+- **回归覆盖**：新增 `test/cases/exam_expiry_test.php`（**40 项断言**），
+  含「未过期行为不变（防改过头）」「四项读取全部排除」「自动收敛 + 判分 + 幂等」
+  「未配置边界」以及**端到端：考生轮询 `/api/exam/status` 触发整场结束**。
+
+## 三、BUG-252　【P1】教师端监考页「单个考生收卷」误接到「全员收卷」
+
+- **现象**：管理端已把单人 / 全员收卷分离（`/api/admin/monitor/submit-one`），
+  教师端只改了控制器方法 `TeacherMonitorController::submitOne()`，
+  **漏了路由注册与前端接线** —— 行内「交卷」按钮实际打到 `submitAll`。
+- **后果**：监考员只想收 1 个人的卷，却把**全场判了分且不可撤销**。
+- **修复**：补 `POST /api/teacher/monitor/submit-one` 路由；
+  `public/assets/js/api/index.js` 增加 `submitOne`；教师端监考页行内操作改调
+  `rowAction('submitOne', r)` 并加二次确认；已交卷考生不再渲染锁定 / 解锁 / 交卷按钮
+  （避免后端拒绝但前端假反馈）。
+- **回归覆盖**：`test/cases/frontend_contract_test.php` 增加**语义契约**断言，
+  用 grep 钉住前端接线（`submitOne → /teacher/monitor/submit-one`、
+  `rowAction('submitOne')`、管理端 `submit → /admin/monitor/submit-one`），防止再次漏接。
+
+## 四、BUG-253　【P2】多选题答案归一化只排序不去重
+
+- **现象**：`Quiz::normalizeAnswer()` 对多选题只做 `sort()`，不去重。
+  正确答案为 `AC` 时，考生提交 `ACC`（手工重复字母）被判**错误**。
+- **修复**：`array_unique()` 后再 `sort()`；标准答案与考生答案走同一归一化函数，两侧一致。
+
+## 五、BUG-254　【P2】教师端越权访问他人考场返回 403，泄露考场存在性
+
+- **现象**：`TeacherMonitorController::assertOwnExam()` 对「非本人考试」返回 **403**，
+  而 `TeacherExamController::assertOwnExam()` 刻意返回 **404** —— 同一个项目里
+  两套口径。403 等于确认「该 id 存在，只是不属于你」，配合 id 枚举可探出他人考场的存在性。
+- **修复**：统一为 **404**「考试不存在」；同时在该处一并排除模拟考试（与此前
+  「模拟考试整体排除出教师端考试 / 监考」的口径对齐）。
+
+## 六、顺带收敛的重复实现（不改变行为）
+
+| 位置 | 原状 | 处置 |
+|---|---|---|
+| `ExamController::status()` 超时块 | 与 `guardExamTime()` 各写一份「超时 → 判分当前考生」 | 合并为一处，并改为整场收敛 |
+| `HomeController::pendingForClass()` | 「待考」SQL 的第三份拷贝（口径一改必漏） | 委托 `Exam::pendingForStudent()` |
+| `TeacherMonitorController::index()` 列表 | 仅按状态过滤，过期考场会挂在监考列表上 | 加 `Exam::SQL_NOT_EXPIRED` |
+
+## 七、验证结果（本轮）
+
+| 验证 | 结果 |
+|---|---|
+| 后端全量 `node temp/runtests.mjs` | **762 PASS / 0 FAIL / 1 SKIP** |
+| `test/cases/full_exam_e2e_test.php`（新增） | **206 PASS / 0 FAIL** |
+| `test/cases/exam_expiry_test.php`（新增） | **40 PASS / 0 FAIL / 1 SKIP** |
+| `test/cases/frontend_contract_test.php` | **124 PASS / 0 FAIL**（含新增语义契约） |
+| 前端静态 `node temp/check_frontend.mjs` | 42 文件 0 语法错误 / 0 未解析 import |
+| 图标自检 `python temp/check_icons.py` | 88 个图标，无失效引用 |
+| 全站浏览器巡检 `browser_sweep_v6.mjs` | **103 PASS / 0 FAIL** |
+| CSS 覆盖率审计 `css_coverage_audit.mjs` | **0** 个无规则类名 |
+| 匿名首屏 `verify_me_401.mjs` | **64 PASS / 0 FAIL** |
+| 后台 401 幂等 `admin_401_guard.mjs` | **8 PASS / 0 FAIL** |
+| 后台设置页 `settings_view_smoke.mjs` | **35 PASS / 0 FAIL** |
+| 考试表单 `exam_form_smoke.mjs` | **33 PASS / 0 FAIL** |
+| 后台 16 视图 `admin_live_smoke.mjs` | **16 PASS / 0 FAIL** |
+| 考场 E2E `verify_exam_flow.mjs` | **12 PASS / 0 FAIL** |
+| 组卷页 `mock_setup_smoke.mjs` | **14 PASS / 0 FAIL** |
+
+> 唯一 SKIP 是 `exam_expiry_test` 中「`exam_end = ''`」这一边界：本机
+> `sql_mode` 含 `STRICT_TRANS_TABLES`，MySQL 直接拒绝（1292）写入 datetime 列的空串，
+> 故该值在本环境不可达 —— **如实标注为 SKIP，而不是伪装通过**。
+> SQL 里的 `= ''` 分支保留为防御（非严格模式的历史库）。
+
+## 八、本轮暴露的「测试基础设施」缺陷（非产品缺陷）
+
+修复 BUG-251 后，全站浏览器巡检 `browser_sweep_v6` 立刻暴露出 **3 项 FAIL**：
+
+```
+FAIL  渲染 teacher #/monitor  << 缺少文案 考场控制 | 统计卡 0≠4
+FAIL  C3 考生能匹配到考试      << count=0
+FAIL  C4 教师监考中心完整渲染   << 考场控制/应考人数 stats=0
+```
+
+根因不是产品回归，而是**巡检此前一直依赖库中碰巧躺着的那条过期幽灵考场 #114**
+才通过 —— 判据建立在脏数据上，脏数据一被清除就露馅。
+
+处置（不修改断言强度，而是补齐前置条件）：新增
+`temp/domtest/fx_live.php` —— 造一场**属性确定**的在流程考试
+（`exam_tea = teacher1` 满足 C4，`stu_class = 165165 的班级 id` 满足 C3，
+`exam_end` 在未来故不会被自动收敛），巡检启动时创建、结束时回收。
+这样 C3 / C4 的绿灯才建立在**可复现的前置条件**上，而不是环境偶然。
+
+> 记录这条的目的：**「测试通过」与「测试因为正确的原因通过」是两件事**。
+> 一个断言如果依赖于脏数据，它就是一颗定时炸弹 —— 数据一清理，它就会以
+> 「产品回归」的面目炸出来，浪费排查成本。

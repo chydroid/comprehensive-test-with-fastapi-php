@@ -577,12 +577,17 @@ export function TeacherMonitorView({ router, query }) {
         { key: 'class_id', title: '班级', render: (r) => el('span.muted', { text: r.class_id || '—' }) },
         { key: 'stu_status', title: '状态', render: (r) => stuStatusBadge(r.stu_status) },
         { key: 'stu_score', title: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
-        { key: '_acts', title: '操作', align: 'right', render: (r) => el('div.row.gap-xs.end', {}, [
-          r.stu_status === 'locked'
-            ? button('解锁', { variant: 'secondary', size: 'xs', iconName: 'unlock', onClick: () => rowAction('unlock', r) })
-            : button('锁定', { variant: 'secondary', size: 'xs', iconName: 'lock', onClick: () => rowAction('lock', r) }),
-          button('交卷', { variant: 'ghost', size: 'xs', iconName: 'send', onClick: () => rowAction('submit', r) }),
-        ]) },
+        { key: '_acts', title: '操作', align: 'right', render: (r) => {
+          // 已交卷考生不再提供锁定/解锁/交卷：后端 updateStatus 会拒绝从 over 迁出，
+          // 而接口仍回「已锁定」，形成「提示成功、实际没变」的假反馈。
+          if (r.stu_status === 'over') return el('span.fs-xs.c-tertiary', { text: '已结束' });
+          return el('div.row.gap-xs.end', {}, [
+            r.stu_status === 'locked'
+              ? button('解锁', { variant: 'secondary', size: 'xs', iconName: 'unlock', onClick: () => rowAction('unlock', r) })
+              : button('锁定', { variant: 'secondary', size: 'xs', iconName: 'lock', onClick: () => rowAction('lock', r) }),
+            button('交卷', { variant: 'ghost', size: 'xs', iconName: 'send', onClick: () => rowAction('submitOne', r) }),
+          ]);
+        } },
       ],
       rows: state.list,
       emptyText: '本场考试暂无考生',
@@ -590,9 +595,31 @@ export function TeacherMonitorView({ router, query }) {
     mount(tableSlot, t);
   }
 
+  /**
+   * 行内单人操作。
+   *
+   * 收卷必须走 submitOne（单个考生）而非 submit（全员）——后者会让监考员
+   * 「想收 1 人却把全场判了分」，且判分不可撤销，属数据事故。
+   */
   async function rowAction(action, r) {
+    if (action === 'submitOne') {
+      const sure = await new Promise((resolve) => {
+        // 持有返回值并在按钮里关闭，否则遮罩永久停留、页面无法滚动
+        const dlg = openModal({
+          title: '确认收卷',
+          size: 'sm',
+          body: el('p', { text: `确定对考生「${r.stu_name || r.stu_id}」强制收卷并判分吗？收卷后该考生不能再作答，且成绩即被封存。` }),
+          footer: el('div.row.gap-sm', {}, [
+            button('取消', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
+            button('确认收卷', { variant: 'danger', onClick: () => { dlg.close(); resolve(true); } }),
+          ]),
+          onClose: () => resolve(false),
+        });
+      });
+      if (!sure) return;
+    }
     const res = await withLoading(tableSlot, () => teacherApi[action]({ exam_id: state.examId, stu_id: r.stu_id }));
-    if (res.ok) notify.success('操作成功');
+    if (res.ok) notify.success(res.result?.message || '操作成功');
     init();
   }
 

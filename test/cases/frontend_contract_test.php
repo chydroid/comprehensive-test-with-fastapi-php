@@ -85,6 +85,7 @@ $declared = [
     ['GET',  '/api/teacher/monitor'],
     ['POST', '/api/teacher/monitor/lock'],
     ['POST', '/api/teacher/monitor/unlock'],
+    ['POST', '/api/teacher/monitor/submit-one'],
     ['POST', '/api/teacher/monitor/submit'],
     ['POST', '/api/teacher/monitor/lock-all'],
     ['POST', '/api/teacher/monitor/unlock-all'],
@@ -94,6 +95,8 @@ $declared = [
     ['POST', '/api/teacher/exams'],
     ['PUT',  '/api/teacher/exams/{id}'],
     ['POST', '/api/teacher/exams/{id}/start'],
+    ['POST', '/api/teacher/exams/{id}/open'],
+    ['POST', '/api/teacher/exams/{id}/generate'],
     ['DELETE', '/api/teacher/exams/{id}'],
     ['GET',  '/api/teacher/exams/{id}/students'],
     ['GET',  '/api/teacher/exams/{id}/quiz-count'],
@@ -128,6 +131,41 @@ $t->assertTrue(
     $missing === [],
     $missing === [] ? '' : '缺失: ' . implode(', ', $missing)
 );
+
+/* ============================================================
+ * 一之二、语义契约：「单个考生收卷」不能接成「全员收卷」
+ *
+ * 这类缺陷路由存在性检查抓不到 —— 前端调的路径确实存在，
+ * 只是语义错了：教师端监考页行内「交卷」曾接到 /teacher/monitor/submit
+ * （全员收卷），监考员想收 1 人却把全场判了分，且判分不可撤销。
+ * 后端 Test\cases\full_exam_e2e_test.php 已覆盖行为面，这里再从源码侧
+ * 钉住接线，避免有人把前端改回去而 E2E 恰好没跑到。
+ * ============================================================ */
+
+$t->guard('教师端单人收卷 / 全员收卷是两个入口', function () use ($t, $base) {
+    $api = (string) file_get_contents($base . '/public/assets/js/api/index.js');
+    $view = (string) file_get_contents($base . '/public/assets/js/views/teacher/index.js');
+    $adminView = (string) file_get_contents($base . '/public/assets/js/views/admin/monitor.js');
+
+    $t->assertTrue('API 层声明 submitOne → /teacher/monitor/submit-one',
+        preg_match("#submitOne:\s*\(body\)\s*=>\s*http\.post\('/teacher/monitor/submit-one'#", $api) === 1);
+    $t->assertTrue('API 层保留 submit → /teacher/monitor/submit（全员）',
+        preg_match("#submit:\s*\(body\)\s*=>\s*http\.post\('/teacher/monitor/submit'#", $api) === 1);
+
+    $t->assertTrue('教师端行内「交卷」调用 rowAction(\'submitOne\')',
+        str_contains($view, "rowAction('submitOne'"));
+    $t->assertTrue('教师端行内不再出现 rowAction(\'submit\')（那是全员收卷）',
+        !str_contains($view, "rowAction('submit'"));
+
+    // 管理端约定：adminApi.submit 指向 submit-one，全员单独叫 submitAll
+    $t->assertTrue('管理端 submit → /admin/monitor/submit-one',
+        str_contains($adminView, 'submit') && preg_match(
+            "#submit:\s*\(body\)\s*=>\s*http\.post\('/admin/monitor/submit-one'#",
+            $api
+        ) === 1);
+    $t->assertTrue('管理端全员收卷走 submitAll → /admin/monitor/submit',
+        preg_match("#submitAll:\s*\(body\)\s*=>\s*http\.post\('/admin/monitor/submit'#", $api) === 1);
+});
 
 /* ============================================================
  * 二、回归：GET 查询串必须被 validate() 读取

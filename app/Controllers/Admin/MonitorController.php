@@ -40,6 +40,11 @@ class MonitorController extends BaseController
             $rows = [];
             foreach ((new Exam())->adminList(['status' => ''], 0, 200)['data'] as $e) {
                 if (in_array((string) $e['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER, Exam::STATUS_TESTING], true)) {
+                    // 到点惰性自动结束：过期考场立刻收敛为 over 并从这里消失，
+                    // 否则它会一直挂在监考选择列表上（BUG-251）。
+                    if (Exam::autoEndIfDue((int) $e['id'])) {
+                        continue;
+                    }
                     // 到点惰性自动开考
                     Exam::autoStartIfDue((int) $e['id']);
                     $e['exam_status']    = (string) ((new Exam())->find((int) $e['id'])['exam_status'] ?? $e['exam_status']);
@@ -52,6 +57,7 @@ class MonitorController extends BaseController
 
         $this->assertExam($examId);
         Exam::autoStartIfDue($examId);
+        Exam::autoEndIfDue($examId);
         $data = $this->service->roster(
             $examId,
             (string) $this->request->query('orderby', 'stuid'),

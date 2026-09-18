@@ -39,6 +39,8 @@ class TeacherMonitorController extends BaseController
 
         if ($examId <= 0) {
             // 模拟考试不属于监考范畴（考生自主生成、无人监考），整体排除。
+            // 同时排除已过 exam_end 的考场：它们业务上已结束，会由 autoEndIfDue()
+            // 收敛为 over，不应再出现在「我的监考」列表里（BUG-251）。
             $exams = \Core\Database::fetchAll(
                 "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
                         e.exam_score, s.subj_name
@@ -47,6 +49,7 @@ class TeacherMonitorController extends BaseController
                  WHERE e.exam_tea = ?
                    AND e.exam_status IN ('exam','paper','testing')
                    AND COALESCE(e.exam_class, '') <> ?
+                   AND " . Exam::SQL_NOT_EXPIRED . "
                  ORDER BY e.id DESC",
                 [$teaName, Exam::MOCK_CLASS]
             );
@@ -61,6 +64,7 @@ class TeacherMonitorController extends BaseController
 
         $this->assertOwnExam($examId, $teaName);
         Exam::autoStartIfDue($examId);
+        Exam::autoEndIfDue($examId);
         $data = $this->service->roster(
             $examId,
             (string) $this->request->query('orderby', 'stuid'),
@@ -157,15 +161,26 @@ class TeacherMonitorController extends BaseController
         return [$examId, $stuId];
     }
 
-    /** 考试存在 + 由当前教师监考 */
+    /**
+     * 考试存在 + 由当前教师监考。
+     *
+     * 用「不存在」(404) 而非「无权限」(403) 回应他人的考试，与
+     * TeacherExamController::assertOwnExam 保持同一约定：403 会确认
+     * 「该编号的考试确实存在，只是不归你」，教师据此可以逐个 id 探测出
+     * 全站考试编号（id 连续），属于不必要的信息泄露。同时一并排除模拟考试，
+     * 使「列表不展示但直连 id 仍可操作」的旁路在监考侧也被堵住。
+     */
     private function assertOwnExam(int $examId, string $teaName): void
     {
         $exam = (new Exam())->find($examId);
         if ($exam === null) {
             throw new HttpException(404, '考试不存在', 40400);
         }
+        if ((string) ($exam['exam_class'] ?? '') === Exam::MOCK_CLASS) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
         if ((string) ($exam['exam_tea'] ?? '') !== $teaName) {
-            throw new HttpException(403, '该考试不由你监考，无权操作', 40301);
+            throw new HttpException(404, '考试不存在', 40400);
         }
     }
 }

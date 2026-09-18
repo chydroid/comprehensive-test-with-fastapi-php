@@ -101,7 +101,10 @@ class Quiz extends Model
     {
         $answer = strtoupper(preg_replace('/\s+/u', '', $answer) ?? '');
         if ($type === 'checkbox') {
-            $chars = str_split($answer);
+            // 先去重再升序：多选答案的语义是「选项集合」，重复字母不代表多选一次。
+            // 只排序不去重时，手工构造的请求（或前端连点/重放）送来的 ACC 会被
+            // 判成与正确答案 AC 不等 —— 考生实际上选对了却得 0 分。
+            $chars = array_values(array_unique(str_split($answer)));
             sort($chars);
             return implode('', $chars);
         }

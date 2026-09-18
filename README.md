@@ -107,11 +107,15 @@ temp/logo/gen_logo_js.mjs # -> public/assets/js/core/logo.js
 
 | 层 | 触发条件 | 可否由后台放开 |
 |---|---|---|
-| **个人层**（硬约束） | 考生本人正在参加正式考试：该考试 `exam_status = 'testing'` 且其 `stuscore.stu_status ∈ {online, locked}` | **否** |
-| **全局层** | 存在进行中的正式考试 且 对应开关为关闭（默认） | 是 |
+| **个人层**（硬约束） | 考生本人正在参加正式考试：该考试 `exam_status = 'testing'` **且未过 `exam_end`** 且其 `stuscore.stu_status ∈ {online, locked}` | **否** |
+| **全局层** | 存在进行中的正式考试（同样要求**未过 `exam_end`**）且 对应开关为关闭（默认） | 是 |
 
 - **个人层必须先判**：顺序反过来的话，管理员一开启开关，正在答题的考生就会被放行，
   硬约束形同虚设。
+- **「进行中」必须同时看状态与时间**：`exam_end` 已过的考场在业务上已经结束，
+  即便 `exam_status` 还没来得及流转，也不得计入「进行中 / 在考 / 待考」
+  （唯一出处 `Exam::SQL_NOT_EXPIRED`）。否则**任何一场忘记点「结束」的考试都会
+  永久冻结全站的练习与模拟**，并把在场考生永久钉死在硬约束上（BUG-251）。
 - 「在考」以**已入场**为准（`online` 由入场与答题心跳写入，`locked` 为监考锁定），
   **不含**仅「已排卷」的 `waiting` —— 出题会在入场前很久就为全班写入 `waiting`，
   若算作在考，考生整个备考期都无法练习，而那时试卷对考生尚不可见、不存在泄露面。
@@ -121,6 +125,24 @@ temp/logo/gen_logo_js.mjs # -> public/assets/js/core/logo.js
   考生会留下永远无法结束的场次并无谓消耗一次每日额度（交卷只回成绩与对错数，不含答案）。
 - 暂停原因经 `pause_reason` 下发：`self_in_exam`（本人在考）/ `exam_ongoing`（全局策略）/
   `''`（未暂停）。前端据此给出不同指引（去处理考试 vs 只能等考试结束）。
+
+### 考试生命周期：两个「惰性」自动流转
+
+本系统**无常驻定时任务**，状态流转一律在有人访问时顺带触发（均幂等）：
+
+| 方法 | 触发条件 | 结果 |
+|---|---|---|
+| `Exam::autoStartIfDue()` | `paper` 且已到 `exam_start` | → `testing` |
+| `Exam::autoEndIfDue()` | `testing` 且已过 `exam_end` | → `over`（`ExamEngine::endExam()`：全员判分 + 状态流转，事务内完成） |
+
+- 调用点：考生答题页轮询 `/api/exam/status`、取题 `/api/exam/paper`、考场入场、
+  监考列表与监考详情（管理端与教师端共用）。
+- 读取侧（`hasOngoingFormalExam` / `isStudentInExam` / `activeWithSubject` /
+  `pendingForStudent`）用 `SQL_NOT_EXPIRED` **独立兜底**，不依赖状态是否已收敛 ——
+  一场没人访问的过期考场同样不会再冻结任何功能。
+- `exam_end` 未配置（`NULL` / 零值日期 / 空串）一律视为**不过期**，
+  避免历史脏数据把考场整体判死。
+- 管理端 / 教师端的**考试列表不受**过期过滤影响：教师仍需要看到并清理它。
 
 ### 数据隔离（约定）
 

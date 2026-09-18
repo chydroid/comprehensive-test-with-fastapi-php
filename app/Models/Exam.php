@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Services\ExamEngine;
 use App\Services\Setting;
 use Core\Model;
 
@@ -38,6 +39,24 @@ class Exam extends Model
     public const ACTIVE_STATUSES = ['exam', 'paper', 'testing'];
 
     /**
+     * 「考场尚未到期」SQL 谓词（字段一律相对别名 e，调用方的表必须取别名 e）。
+     *
+     * exam_end 是本场考试计划的结束时间，一旦过去，这场考试在业务上就已经结束。
+     *
+     * 没有这个谓词时，任何一场**忘记人工点「结束」**的考场都会永远停在
+     * exam_status = 'testing'；而「是否进行中」的判定此前只看状态、不看时间，
+     * 于是一场早已结束的考场会：
+     *   ① 让全站练习 / 模拟考试被永久冻结（hasOngoingFormalExam 恒真）；
+     *   ② 让门户「进行中的考试」常驻一条幽灵考试（activeWithSubject）；
+     *   ③ 把它名单里的考生永久钉死在「考生在考」硬约束上（isStudentInExam）。
+     *
+     * 「未配置」的 exam_end（NULL / 空串 / 零值日期）一律视为不过期，
+     * 避免历史脏数据把考场整体判死。
+     */
+    public const SQL_NOT_EXPIRED = "(e.exam_end IS NULL OR e.exam_end = ''"
+        . " OR e.exam_end = '0000-00-00 00:00:00' OR e.exam_end > NOW())";
+
+    /**
      * 模拟考试在 examinfo 中的 exam_class 标记（与正式考试的唯一区分依据）。
      * 与 ExerciseExamController 共用，避免两处各写一份字面量而分叉。
      */
@@ -54,8 +73,9 @@ class Exam extends Model
     public static function hasOngoingFormalExam(): bool
     {
         $row = \Core\Database::fetch(
-            "SELECT COUNT(*) AS c FROM `examinfo`
-             WHERE exam_status = ? AND COALESCE(exam_class, '') <> ?",
+            "SELECT COUNT(*) AS c FROM `examinfo` e
+             WHERE e.exam_status = ? AND COALESCE(e.exam_class, '') <> ?
+               AND " . self::SQL_NOT_EXPIRED,
             [self::STATUS_TESTING, self::MOCK_CLASS]
         );
         return (int) ($row['c'] ?? 0) > 0;
@@ -108,6 +128,8 @@ class Exam extends Model
      * 而那时试卷尚未对考生可见、根本不存在泄露面。
      *
      * 已交卷（over 前缀）者不算在考：他已完成本场考试，可以自由练习。
+     * 考场已过 exam_end 也不算：那是「考试时间到」，不是「考生在作答」；
+     * 否则一场忘了结束的考场会让在场考生永久无法练习（见 SQL_NOT_EXPIRED）。
      */
     public static function isStudentInExam(string $stuId): bool
     {
@@ -122,7 +144,8 @@ class Exam extends Model
              WHERE COALESCE(e.exam_class, '') <> ?
                AND e.exam_status = ?
                AND sc.stu_id = ?
-               AND sc.stu_status IN ('online', 'locked')",
+               AND sc.stu_status IN ('online', 'locked')
+               AND " . self::SQL_NOT_EXPIRED,
             [self::MOCK_CLASS, self::STATUS_TESTING, $stuId]
         );
         return (int) ($row['c'] ?? 0) > 0;
@@ -214,6 +237,8 @@ class Exam extends Model
     {
         // 必须排除模拟考试：它同样以 exam_status='testing' 落库，
         // 否则考生一开模拟，门户/仪表盘的「进行中的考试」就会多出一条假考试。
+        // 同时必须排除已过 exam_end 的考场，否则一场忘了结束的考试会让门户
+        // 永远挂着一条「进行中」（BUG-251）。
         return \Core\Database::fetchAll(
             "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
                     e.exam_score, e.subj_id, s.subj_name, c.category_name
@@ -222,6 +247,7 @@ class Exam extends Model
              LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
              WHERE e.exam_status = 'testing'
                AND COALESCE(e.exam_class, '') <> ?
+               AND " . self::SQL_NOT_EXPIRED . "
              ORDER BY e.id DESC",
             [self::MOCK_CLASS]
         );
@@ -410,6 +436,44 @@ class Exam extends Model
     }
 
     /**
+     * 惰性自动结束：进行中(testing) 且已过 exam_end → 整场结束(over)。
+     *
+     * 与 autoStartIfDue() 完全对称 —— 本系统无常驻定时任务，故在考生轮询 /
+     * 监考访问时顺带触发（幂等）。
+     *
+     * 为什么必须有它：exam_end 到点后，系统此前只做了「当前考生超时强制交卷」，
+     * 而**从不推进整场状态**。于是考场永远停在 testing，带来三个后果：
+     *   ① 全站练习 / 模拟考试被 hasOngoingFormalExam() 永久冻结；
+     *   ② 门户「进行中的考试」常驻一条幽灵考试；
+     *   ③ 该场考生被 isStudentInExam() 永久钉死在「考生在考」硬约束上。
+     * 读取侧已用 SQL_NOT_EXPIRED 兜住①②③不再发生，这里负责让状态**最终收敛**，
+     * 使管理端 / 教师端列表与成绩模块都能看到真实的「已结束」。
+     *
+     * endExam() 自带事务且幂等（已交卷者跳过判分），重复调用安全。
+     *
+     * @return bool 本次是否发生了状态推进
+     */
+    public static function autoEndIfDue(int $examId): bool
+    {
+        if ($examId <= 0) {
+            return false;
+        }
+        // 先用一条廉价的 COUNT 判断，避免在每次答题轮询上都做一次完整 find。
+        $row = \Core\Database::fetch(
+            "SELECT COUNT(*) AS c FROM `examinfo` e
+             WHERE e.id = ? AND e.exam_status = ?
+               AND e.exam_end IS NOT NULL AND e.exam_end <> ''
+               AND e.exam_end <> '0000-00-00 00:00:00'
+               AND e.exam_end <= NOW()",
+            [$examId, self::STATUS_TESTING]
+        );
+        if ((int) ($row['c'] ?? 0) === 0) {
+            return false;
+        }
+        ExamEngine::endExam($examId);
+        return true;    }
+
+    /**
      * 开放入场：生成符合后台配置位数的考场口令，状态保持「未开考」。
      * 开放入场后考生才能凭口令在入场窗口内进场。
      * @return string 新的考场口令
@@ -591,7 +655,13 @@ class Exam extends Model
         return in_array($classId, $set, true);
     }
 
-    /** 已登录考生的待考考试（按班级匹配 + 交卷状态） */
+    /**
+     * 已登录考生的待考考试（按班级匹配 + 交卷状态）。
+     *
+     * 已过 exam_end 的考场不再计入「待考」：考试窗口已关闭，考生进去也只会
+     * 看到「不可入场」，留着它只是让列表里躺着一条永远点不动的死条目。
+     * 管理端 / 教师端的考试列表**不受**此过滤影响，教师仍需看到并清理它。
+     */
     public static function pendingForStudent(string $stuId, string $classId): array
     {        $stuId = trim($stuId);
         $classId = trim($classId);
@@ -608,6 +678,7 @@ class Exam extends Model
              WHERE e.exam_status IN ('exam', 'paper', 'testing')
                AND COALESCE(e.exam_class, '') <> ?
                AND FIND_IN_SET(?, e.stu_class) > 0
+               AND " . self::SQL_NOT_EXPIRED . "
              ORDER BY e.exam_start ASC, e.id DESC",
             [self::MOCK_CLASS, $stuId, $classId]
         );

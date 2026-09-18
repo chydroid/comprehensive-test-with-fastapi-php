@@ -170,25 +170,15 @@ class HomeController extends BaseController
         return $this->ok(array_slice((new ExamNews())->all('id DESC'), 0, 5));
     }
 
-    /** 按班级匹配的待考列表（含该考生交卷状态） */
+    /**
+     * 按班级匹配的待考列表（含该考生交卷状态）。
+     *
+     * 直接委托 Exam::pendingForStudent() —— 此处原先另写了一份几乎相同的 SQL，
+     * 是「待考」定义的第三份拷贝：口径一变（例如新增排除模拟考试、排除已过
+     * exam_end 的考场）就得三处同改，必然漏。（BUG-251 收敛）
+     */
     private function pendingForClass(string $classId, string $stuId): array
     {
-        $classId = trim($classId);
-        if ($classId === '') {
-            return [];
-        }
-        return Database::fetchAll(
-            "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
-                    e.exam_score, e.subj_id, s.subj_name, c.category_name,
-                    sc.stu_status, sc.stu_score
-             FROM `examinfo` e
-             INNER JOIN `subject` s ON s.id = e.subj_id
-             LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
-             LEFT JOIN `stuscore` sc ON sc.exam_id = e.id AND sc.stu_id = ?
-             WHERE e.exam_status IN ('exam', 'paper', 'testing')
-               AND FIND_IN_SET(?, e.stu_class) > 0
-             ORDER BY e.exam_start ASC, e.id DESC",
-            [$stuId, $classId]
-        );
+        return Exam::pendingForStudent($stuId, $classId);
     }
 }

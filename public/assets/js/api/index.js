@@ -69,6 +69,9 @@ export const teacherApi = {
   monitor:   (params) => http.get('/teacher/monitor', { query: params }),
   lock:      (body) => http.post('/teacher/monitor/lock', body),
   unlock:    (body) => http.post('/teacher/monitor/unlock', body),
+  // 单人与全员是两个不同的入口：行内「交卷」必须走 submit-one，
+  // 否则监考员想收 1 人却把全场判了分（与管理端 adminApi.submit 同构）。
+  submitOne: (body) => http.post('/teacher/monitor/submit-one', body),
   submit:    (body) => http.post('/teacher/monitor/submit', body),
   lockAll:   (body) => http.post('/teacher/monitor/lock-all', body),
   unlockAll: (body) => http.post('/teacher/monitor/unlock-all', body),

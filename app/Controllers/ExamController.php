@@ -51,6 +51,9 @@ class ExamController extends BaseController
 
         // 到点则惰性自动开考（无需常驻定时任务）
         Exam::autoStartIfDue($examId);
+        // 到点则惰性自动结束：否则一场过期的 testing 考场会让考生「入场」通过校验，
+        // 随后所有接口都在 reading 一个早已结束的场次（BUG-251）。
+        Exam::autoEndIfDue($examId);
 
         $exam = (new Exam())->find($examId);
         if ($exam === null) {
@@ -204,14 +207,13 @@ class ExamController extends BaseController
         $scores = new StuScore();
         $score = $scores->findOne($examId, $stuId);
 
-        // 到结束时间 → 自动交卷
-        if ($exam !== null && (string) $exam['exam_status'] === Exam::STATUS_TESTING
-            && $score !== null && !str_starts_with((string) $score['stu_status'], 'over')) {
-            $end = strtotime((string) $exam['exam_end']);
-            if ($end !== false && time() > $end) {
-                ExamEngine::autoGrade($examId, $stuId);
-                $score = $scores->findOne($examId, $stuId);
-            }
+        // 到结束时间 → 强制交卷。
+        // 原来这里只对「当前考生」判分，考场会永远停在 testing，把全站练习/模拟
+        // 与门户「进行中考试」永久冻结；现改为整场惰性结束（含本考生判分），
+        // 结束后必须重新取场次与分数，否则 phase 仍按旧状态计算（BUG-251）。
+        if ($this->guardExamTime($examId)) {
+            $exam  = (new Exam())->find($examId);
+            $score = $scores->findOne($examId, $stuId);
         }
 
         $phase = $this->phaseOf($exam, $score);
@@ -281,8 +283,8 @@ class ExamController extends BaseController
         if ($exam === null || (string) $exam['exam_status'] !== Exam::STATUS_TESTING) {
             throw new HttpException(409, '考试尚未开始，请稍候', 40903);
         }
-        // 超时 → 已自动交卷
-        if ($this->guardExamTime($examId, $stuId)) {
+        // 超时 → 整场惰性结束（本考生已一并判分）
+        if ($this->guardExamTime($examId)) {
             throw new HttpException(409, '考试时间已到，已自动交卷', 40901);
         }
 
@@ -540,19 +542,16 @@ class ExamController extends BaseController
 
     /**
      * 考试时间兜底：超过 exam_end 后强制交卷（含自动判分）。
-     * @return bool 是否已因超时交卷
+     *
+     * 实现收敛为「整场惰性结束」——原先只判分当前考生，考场会永远停在 testing，
+     * 导致全站练习/模拟被永久冻结、门户常驻幽灵考试、考生被钉死在「在考」硬约束
+     * （BUG-251）。整场结束后 exam_status 变为 over，本场全部未交卷考生一并判分，
+     * 且 autoEndIfDue() 幂等，故重复轮询不会重复判分。
+     *
+     * @return bool 是否已因超时结束（本场考生均已交卷）
      */
-    private function guardExamTime(int $examId, string $stuId): bool
+    private function guardExamTime(int $examId): bool
     {
-        $exam = (new Exam())->find($examId);
-        if ($exam === null || $exam['exam_status'] !== Exam::STATUS_TESTING) {
-            return false;
-        }
-        $end = strtotime((string) $exam['exam_end']);
-        if ($end === false || $end >= time()) {
-            return false;
-        }
-        ExamEngine::autoGrade($examId, $stuId);
-        return true;
+        return Exam::autoEndIfDue($examId);
     }
 }
