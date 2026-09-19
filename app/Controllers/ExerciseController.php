@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Models\Exam;
 use App\Models\Subject;
+use App\Services\WrongBook;
 use Core\Database;
 use Core\HttpException;
 use Core\Response;
@@ -149,6 +150,14 @@ class ExerciseController extends BaseController
             'UPDATE `quizlib` SET quiz_hits = quiz_hits + 1' . ($isRight ? ', quiz_key_ok = quiz_key_ok + 1' : '') . ' WHERE id = ?',
             [$quizId]
         );
+
+        // 错题本沉淀（旁路，不影响练习校验）：答对则标记掌握，答错则归集。
+        $stuId = (string) $sess['id'];
+        if ($isRight) {
+            WrongBook::markMastered($stuId, $quizId);
+        } else {
+            WrongBook::collect($stuId, $quizId, 'exercise');
+        }
 
         return $this->ok([
             'correct'      => $isRight,

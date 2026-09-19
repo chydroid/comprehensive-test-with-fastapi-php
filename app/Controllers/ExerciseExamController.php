@@ -8,6 +8,7 @@ use App\Models\Exam;
 use App\Models\Quiz;
 use App\Models\Subject;
 use App\Services\ExamEngine;
+use App\Services\WrongBook;
 use Core\Database;
 use Core\HttpException;
 use Core\Response;
@@ -477,7 +478,7 @@ class ExerciseExamController extends BaseController
     private static function gradeMock(int $examId, string $stuId): array
     {
         $papers = Database::fetchAll(
-            'SELECT sp.paper_id, sp.quiz_class, sp.stu_key, q.quiz_key
+            'SELECT sp.paper_id, sp.quiz_id, sp.quiz_class, sp.stu_key, q.quiz_key
              FROM `stupaper` sp
              INNER JOIN `quizlib` q ON q.id = sp.quiz_id
              WHERE sp.exam_id = ? AND sp.stu_id = ?
@@ -488,6 +489,16 @@ class ExerciseExamController extends BaseController
         $score = 0;
         $total = 0;
         $right = 0;
+        $wrong = [];
+        // 已交卷的模拟考试重交：成绩不覆盖（下方 UPDATE 已用 LEFT(stu_status,4)<>'over' 守卫），
+        // 错题本也不应重复累加 → 仅当本场尚未结束才沉淀。
+        $alreadyOver = (function () use ($examId, $stuId): bool {
+            $s = Database::fetch(
+                'SELECT stu_status FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
+                [$examId, $stuId]
+            );
+            return $s !== null && str_starts_with((string) $s['stu_status'], 'over');
+        })();
         Database::beginTransaction();
         try {
             foreach ($papers as $p) {
@@ -506,6 +517,9 @@ class ExerciseExamController extends BaseController
                 if ($val > 0 && $correct !== '' && Quiz::isCorrect($type, $correct, $user)) {
                     $score += $val;
                     $right++;
+                } else {
+                    // 答错：收集进错题本（旁路，不阻断交卷）
+                    $wrong[] = ['quiz_id' => (int) $p['quiz_id'], 'paper_id' => (int) $p['paper_id']];
                 }
             }
             // 幂等门禁：已交卷的不再覆盖成绩（与 ExamEngine::autoGrade 对齐）
@@ -514,6 +528,10 @@ class ExerciseExamController extends BaseController
                  WHERE exam_id = ? AND stu_id = ? AND LEFT(stu_status, 4) <> 'over'",
                 [$score, $examId, $stuId]
             );
+            // 沉淀错题本（仅首次交卷，避免重复累加）
+            if (!$alreadyOver) {
+                WrongBook::collectMany($stuId, $wrong, 'mock', $examId);
+            }
             // 模拟考试结束，阶段流转到 over
             Database::query("UPDATE `examinfo` SET exam_status = 'over' WHERE id = ?", [$examId]);
             Database::commit();

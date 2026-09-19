@@ -31,6 +31,9 @@ export const studentApi = {
   updatePassword: (body) => http.put('/student/password', body),
   scores:   (params) => http.get('/student/scores', { query: params }),
   exams:    () => http.get('/student/exams'),
+  wrongBookList:     (params) => http.get('/student/wrong-book', { query: params }),
+  wrongBookPractice: (params) => http.get('/student/wrong-book/practice', { query: params }),
+  wrongBookCheck:    (body) => http.post('/student/wrong-book/check', body),
 };
 
 /* ============================ 考场（正式考试） ============================ */

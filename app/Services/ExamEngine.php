@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Exam;
 use App\Models\Quiz;
+use App\Services\WrongBook;
 use Core\Database;
 
 /**
@@ -264,7 +265,7 @@ final class ExamEngine
         ];
 
         $rows = Database::fetchAll(
-            'SELECT sp.paper_id, sp.quiz_class, sp.stu_key, q.quiz_key
+            'SELECT sp.paper_id, sp.quiz_id, sp.quiz_class, sp.stu_key, q.quiz_key
              FROM `stupaper` sp
              INNER JOIN `quizlib` q ON q.id = sp.quiz_id
              WHERE sp.exam_id = ? AND sp.stu_id = ?
@@ -273,6 +274,7 @@ final class ExamEngine
         );
 
         $score = 0;
+        $wrong = []; // 本次答错的题目（quiz_id + paper_id），用于沉淀错题本
         Database::beginTransaction();
         try {
             // 一次性标记全部已批阅（此前循环内逐条 UPDATE，百题试卷会产生上百次往返
@@ -294,6 +296,9 @@ final class ExamEngine
                 }
                 if (Quiz::isCorrect($type, $correct, $answer)) {
                     $score += $valMap[$type] ?? 0;
+                } else {
+                    // 答错：收集进错题本（旁路，绝不打断判分）
+                    $wrong[] = ['quiz_id' => (int) $r['quiz_id'], 'paper_id' => (int) $r['paper_id']];
                 }
             }
 
@@ -320,6 +325,9 @@ final class ExamEngine
                 );
                 return (int) ($existing['stu_score'] ?? $score);
             }
+
+            // 仅在「本次真正落分」时沉淀错题本（幂等门禁已挡住重复交卷）
+            WrongBook::collectMany($stuId, $wrong, 'formal', $examId);
 
             Database::commit();
         } catch (\Throwable $e) {

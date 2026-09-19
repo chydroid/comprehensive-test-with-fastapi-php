@@ -15,6 +15,7 @@ import {
 } from '../views/student/center.js';
 import { ExerciseView } from '../views/student/exercise.js';
 import { MockSetupView, MockTakeView, MockReviewView } from '../views/student/mock.js';
+import { WrongBookView } from '../views/student/wrongbook.js';
 
 const APP_NAME = '考生中心';
 
@@ -26,6 +27,7 @@ const NAV = [
   { key: 'scores',   label: '我的成绩', icon: 'award', group: 'exam' },
   { key: 'exercise', label: '在线练习', icon: 'edit-3', group: 'practice' },
   { key: 'mock',     label: '模拟考试', icon: 'target', group: 'practice' },
+  { key: 'wrongbook', label: '错题本', icon: 'book-open', group: 'practice' },
   { key: 'info',     label: '个人资料', icon: 'user', group: 'account' },
   { key: 'password', label: '修改密码', icon: 'key', group: 'account' },
 ];
@@ -41,6 +43,7 @@ const VIEWS = {
   scores: StudentScoresView,
   exercise: ExerciseView,
   mock: MockSetupView,
+  wrongbook: WrongBookView,
   info: StudentInfoView,
   password: StudentPasswordView,
 };

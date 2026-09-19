@@ -62,7 +62,7 @@
 
 ## 四、逐项落地可行性简评（供决策参考）
 
-- **A1 错题本**：复用现有 `stupaper`/`stuscore` 结构，新增 `wrong_book` 表按 `stu_id + quiz_id` 归集，练习/模拟/正式考试交卷时沉淀错题，前端加「错题本」页与「错题重练」入口。成本：中。
+- **A1 错题本**：✅ 已完成（2026-09-19）。新增 `wrong_book` 表按 `stu_id + quiz_id` 归集，练习/模拟/正式考试三个判分落点旁路沉淀错题，前端「错题本」页（按科目分组、掌握状态过滤、来源筛选、错题重练）已上线。成本：中。
 - **A2 成绩分析**：后端在 `ScoreController` 增加班级维度聚合接口（及格率/优秀率/各分数段人数/知识点正确率），前端用轻量图表（项目已有 SVG/CSS 图表能力，无需引重型库）。成本：中。
 - **A3 组卷多样化**：在 `Exam`/`ExamEngine` 组卷入口增加「手动选题」「按知识点比例」「按难度比例」三种模式，前端组卷页增加选题器。成本：中高（涉及组卷算法与前端）。
 - **A4 主观题批改**：新增教师批阅入口（针对 longtext 留空的分数），`ExamEngine` 支持「待批改」状态与二次给分，`score` 页支持按题批阅。成本：中。
@@ -97,3 +97,26 @@
 **验证**：`audit_log_test.php` 20 PASS（含旁路熔断）；全量后端回归 782 PASS / 0 FAIL / 1 SKIP（无回归）；`admin_live_smoke` 17/17（logs 视图 22 行正常）；`browser_sweep_v6` 103/103；前端 43 文件 0 错误。
 
 > 说明：A5 题库批量导入在原始表格编号中为 A5，与多选项里的「B3 题库批量导入」为同一项，统一按「题库批量导入」推进。
+
+---
+
+### ✅ A1 错题本（2026-09-19 完成）
+
+**设计原则：与 B2 一致的纯旁路设计——所有错题沉淀包在 `try/catch` 内，失败只 `error_log`，绝不抛异常/回滚/打断判分主流程；并设幂等护栏，避免重复交卷/重复判分重复累加。**
+
+错题在三个判分落点自动沉淀到 `wrong_book` 表（按 `stu_id + quiz_id` 唯一），练习答对即标记掌握、答错归集；正式/模拟交卷判分时沉淀错题，重复判分靠幂等门禁（`autoGrade` 的 `LEFT(stu_status,4)<>'over'` 分支之后、`gradeMock` 的 `$alreadyOver` 预判）保证不重复计数。
+
+**改动清单**
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 数据 | `db/add_wrong_book.sql` | 新建 `wrong_book` 表（stu_id/quiz_id/exam_type/exam_id/paper_id/wrong_count/mastered/时间戳 + 唯一键 `uq_stu_quiz(stu_id,quiz_id)` + 索引）。已通过 `temp/apply_wrongbook_ddl.php` 执行建表 |
+| 服务 | `app/Services/WrongBook.php` | `collect/collectMany/markMastered/list/stats/practicePick/clear`；所有写包 try/catch；`list/stats/practicePick` JOIN quizlib/subject 输出题型/难度/科目/选项 |
+| 落点1 | `app/Services/ExamEngine.php` | `autoGrade()` SELECT 取 `sp.quiz_id`，答错收集，幂等门禁后沉淀 `collectMany(stuId, wrong, 'formal', examId)` |
+| 落点2 | `app/Controllers/ExerciseExamController.php` | `gradeMock()` SELECT 取 `sp.quiz_id`，答错收集，`$alreadyOver` 预判后 `collectMany(stuId, wrong, 'mock', examId)` |
+| 落点3 | `app/Controllers/ExerciseController.php` | `check()` 答对 `markMastered`、答错 `collect(stuId, quizId, 'exercise')` |
+| 接口 | `config/routes.php` + `StudentWrongBookController.php` | `GET /api/student/wrong-book`（列表+统计+科目+过滤）、`GET /api/student/wrong-book/practice`（抽题不下发答案）、`POST /api/student/wrong-book/check`（重练校验+标记/归集） |
+| 前端 | `api/index.js` + `views/student/wrongbook.js` + `apps/student.js` | 错题本视图（统计卡、科目分组列表、掌握状态/来源筛选、单题+批量错提重练会话）；NAV 加「错题本」（`practice` 组，图标 `book-open`） |
+
+**已知设计取舍**：`wrong_book` 唯一键不含 `exam_type`，同一题在多个模式答错会合并为一行、行内 `exam_type` 反映最近一次来源；统计按科目+题型+难度聚合（题库无独立知识点字段）。如需「按来源分布」精确统计可后续把 `exam_type` 纳入唯一键。
+
+**验证**：`wrong_book_test.php` 39 PASS（练习沉淀/重复累加/答对标记掌握、formal 沉淀+幂等、mock 沉淀+重复交卷不重复、列表/统计/过滤/抽题/重练、熔断 RENAME 表仍 200）；全量后端回归 821 PASS / 0 FAIL（无回归）；`check_frontend` 44 文件 0 错误 0 未解析导入；`check_icons` 88 图标无无效引用。

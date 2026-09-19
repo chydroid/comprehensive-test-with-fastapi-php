@@ -42,6 +42,7 @@ use App\Controllers\NewsController as PublicNewsController;
 use App\Controllers\ScoreController as PublicScoreController;
 use App\Controllers\StudentAuthController;
 use App\Controllers\StudentController as StudentCenterController;
+use App\Controllers\StudentWrongBookController;
 use App\Controllers\TeacherAuthController;
 use App\Controllers\TeacherExamController;
 use App\Controllers\TeacherMonitorController;
@@ -96,6 +97,11 @@ return [
     ['PUT',  '/api/student/password',      [StudentCenterController::class, 'savePwd']],
     ['GET',  '/api/student/scores',        [StudentCenterController::class, 'scores']],
     ['GET',  '/api/student/exams',         [StudentCenterController::class, 'exams']],
+
+    /* ==================== 考生错题本（A1） ==================== */
+    ['GET',  '/api/student/wrong-book',           [StudentWrongBookController::class, 'index']],
+    ['GET',  '/api/student/wrong-book/practice',  [StudentWrongBookController::class, 'practice']],
+    ['POST', '/api/student/wrong-book/check',     [StudentWrongBookController::class, 'check']],
 
     /* ==================== 正式考试 ==================== */
     ['POST', '/api/exam/login',            [StudentExamController::class, 'login']],
