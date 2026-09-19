@@ -9,7 +9,7 @@
 import { el, clear } from '../../core/dom.js';
 import {
   button, card, openModal, notify, alertBox, table, field, input, select,
-  emptyStated, confirmDialog, badge, checkboxGroup,
+  emptyStated, confirmDialog, badge, checkboxGroup, segmented, loadingOverlay,
 } from '../../ui/components.js';
 import { teacherApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
@@ -244,6 +244,251 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     }, { silent: true }),
   });
 
+  /* ---------- A3 组卷模式：随机抽题 / 手动选题 / 按知识点 ---------- */
+  const randomPane = el('div.stack', {}, [
+    el('div.table-wrap', {}, [matrixTable]),
+    el('div.flex.items-center.gap-4.flex-wrap', {}, [
+      el('span.fs-sm.c-secondary', { text: '合计题量' }), totalQty,
+      el('span.fs-sm.c-secondary', { text: '满分' }), totalScore,
+      checkBtn,
+    ]),
+    stockSlot,
+  ]);
+
+  const manualPane = el('div.stack');
+  const kpPane = el('div.stack');
+  const modeSlot = el('div');
+
+  const MODE_ITEMS = [
+    { key: 'random', label: '随机抽题' },
+    { key: 'manual', label: '手动选题' },
+    { key: 'by_kp',  label: '按知识点' },
+  ];
+  const modeInfo = row.paper_mode_info || {};
+  let paperMode = MODE_ITEMS.some((m) => m.key === row.paper_mode) ? String(row.paper_mode) : 'random';
+
+  const manualIds = new Set((modeInfo.manual_ids || []).map((v) => String(v)));
+  const manualMeta = new Map();   // quiz_id(str) -> { title, type }
+  /** 已选题目：编辑态先按 id 占位，加载题库检索后补标题 */
+  for (const qid of manualIds) manualMeta.set(String(qid), { title: '', type: '' });
+
+  const kpPlan = [];              // [{ kp, available, diff, ctl }]
+  let manualLoaded = false;
+  let kpLoaded = false;
+
+  function renderMode() {
+    clear(modeSlot);
+    modeSlot.append(segmented(MODE_ITEMS, paperMode, (k) => { paperMode = k; renderMode(); }));
+    randomPane.style.display = paperMode === 'random' ? '' : 'none';
+    manualPane.style.display = paperMode === 'manual' ? '' : 'none';
+    kpPane.style.display = paperMode === 'by_kp' ? '' : 'none';
+    if (paperMode === 'manual' && !manualLoaded) { manualLoaded = true; renderManualPane(); }
+    if (paperMode === 'by_kp' && !kpLoaded) { kpLoaded = true; renderKpPane(); }
+  }
+
+  /* ---- 手动选题 ---- */
+  function renderManualPane() {
+    clear(manualPane);
+    const classSel = select(
+      [{ value: '', label: '全部题型' }, ...PAPER_TYPES.map((t) => ({ value: t, label: TYPE_LABELS[t] }))],
+      { value: '' },
+    );
+    const kwInput = input({ value: '', placeholder: '按题干 / 答案搜索' });
+    const listSlot = el('div');
+    const hintSlot = el('div');
+
+    function currentSubj() { return Number(subjSelect.value) || 0; }
+
+    async function doSearch() {
+      clear(hintSlot);
+      const subjId = currentSubj();
+      if (subjId <= 0) {
+        listSlot.replaceChildren(alertBox('请先选择科目', { type: 'warning' }));
+        return;
+      }
+      listSlot.replaceChildren(loadingOverlay('加载题库…'));
+      const res = await teacherApi.quizSearch({
+        subj_id: subjId,
+        quiz_class: classSel.value,
+        keyword: kwInput.value.trim(),
+        per_page: 30,
+      }).catch(() => null);
+      const list = res?.list || [];
+      clear(listSlot);
+      if (!list.length) {
+        listSlot.append(emptyStated('未找到题目', { iconName: 'search', desc: '调整筛选条件后重试' }));
+        return;
+      }
+      listSlot.append(table({
+        size: 'sm',
+        columns: [
+          { key: 'quiz_title', title: '题干', render: (r) => el('div.fs-sm', { text: r.quiz_title || '（无题干）' }) },
+          { key: 'quiz_class', title: '题型', align: 'center', render: (r) => badge(r.quiz_type_label || r.quiz_class, { tone: 'info' }) },
+          { key: 'quiz_diff', title: '难度', align: 'center', render: (r) => badge(r.quiz_diff_label || r.quiz_diff || '—', { tone: '' }) },
+          {
+            key: 'op',
+            title: '操作',
+            align: 'center',
+            render: (r) => button(manualIds.has(String(r.id)) ? '已选' : '加入', {
+              variant: manualIds.has(String(r.id)) ? 'ghost' : 'secondary',
+              size: 'sm',
+              disabled: manualIds.has(String(r.id)),
+              onClick: () => {
+                manualIds.add(String(r.id));
+                manualMeta.set(String(r.id), { title: r.quiz_title || '', type: r.quiz_class || '' });
+                void doSearch();
+                renderSelected();
+              },
+            }),
+          },
+        ],
+        rows: list,
+      }));
+      if (res?.total > list.length) {
+        hintSlot.append(el('div.fs-xs.c-tertiary', { text: `仅显示前 ${list.length} 条（共 ${res.total} 条），可输入关键字缩小范围` }));
+      }
+    }
+
+    const selectedSlot = el('div');
+    function renderSelected() {
+      clear(selectedSlot);
+      const ids = [...manualIds];
+      if (!ids.length) {
+        selectedSlot.append(el('div.fs-sm.c-tertiary', { text: '尚未选择题目' }));
+        return;
+      }
+      const byType = {};
+      for (const qid of ids) {
+        const t = manualMeta.get(qid)?.type || '';
+        byType[t] = (byType[t] || 0) + 1;
+      }
+      const summary = Object.entries(byType)
+        .filter(([t]) => t)
+        .map(([t, n]) => `${TYPE_LABELS[t] || t} ×${n}`)
+        .join('，');
+      const wrap = el('div.stack', { style: { gap: '6px' } }, [
+        el('div.flex.items-center.gap-2', {}, [
+          badge(`已选 ${ids.length} 题`, { tone: 'brand' }),
+          el('span.fs-xs.c-secondary', { text: summary || '题型待确认' }),
+        ]),
+      ]);
+      const chips = el('div.flex.flex-wrap.gap-2');
+      for (const qid of ids) {
+        const meta = manualMeta.get(qid) || {};
+        const chip = el('span.chip', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, [
+          el('span.fs-xs', { text: (meta.title || `#${qid}`).slice(0, 24) + ((meta.title || '').length > 24 ? '…' : '') }),
+          el('button.btn-ghost.btn-xs', {
+            type: 'button', title: '移除', text: '×',
+            onClick: () => { manualIds.delete(qid); renderSelected(); void doSearch(); },
+          }),
+        ]);
+        chips.append(chip);
+      }
+      wrap.append(chips);
+      selectedSlot.append(wrap);
+    }
+
+    // 首次进入时若已有选中项，补拉一次题库以显示题干
+    if (manualIds.size > 0) { void doSearch(); }
+    renderSelected();
+
+    manualPane.append(
+      el('div.flex.gap-2.items-end.flex-wrap', {}, [
+        el('div', { style: { width: '140px' } }, [field('题型', classSel)]),
+        el('div', { style: { flex: '1 1 220px' } }, [field('关键字', kwInput)]),
+        button('搜索', {
+          variant: 'secondary', iconName: 'search',
+          onClick: (e) => withLoading(e.currentTarget, () => doSearch(), { silent: true }),
+        }),
+      ]),
+      hintSlot,
+      listSlot,
+      el('div.divider'),
+      selectedSlot,
+    );
+  }
+
+  /* ---- 按知识点 ---- */
+  function renderKpPane() {
+    clear(kpPane);
+    const body = el('div.stack');
+    const totalSlot = el('div.flex.items-center.gap-4', {}, [
+      el('span.fs-sm.c-secondary', { text: '合计题量' }),
+      el('span.mono.fw-700', { text: '0' }),
+    ]);
+    const totalNum = totalSlot.lastChild;
+    function recalc() {
+      let n = 0;
+      for (const r of kpPlan) n += Number(r.ctl.value) || 0;
+      totalNum.textContent = String(n);
+    }
+
+    async function load() {
+      clear(body);
+      const subjId = Number(subjSelect.value) || 0;
+      if (subjId <= 0) {
+        body.append(alertBox('请先选择科目，再按知识点组卷', { type: 'warning' }));
+        return;
+      }
+      body.append(loadingOverlay('加载知识点…'));
+      const res = await teacherApi.quizKps({ subj_id: subjId }).catch(() => null);
+      const kps = res?.list || [];
+      clear(body);
+      kpPlan.length = 0;
+      if (!kps.length) {
+        body.append(emptyStated('该科目暂无知识点数据', {
+          iconName: 'target',
+          desc: '可在题库管理为题目填写「知识点」后再按知识点组卷；也可改用随机抽题或手动选题',
+        }));
+        recalc();
+        return;
+      }
+      const existing = new Map((modeInfo.kp_plan || []).map((p) => [String(p.kp), p]));
+      const rows = kps.map((k) => {
+        const prev = existing.get(String(k.kp));
+        const diffSel = select(
+          [{ value: '', label: '不限' }, ...DIFFS.map((d) => ({ value: DIFF_CODES[d], label: DIFF_LABELS[d] }))],
+          { value: prev?.diff || '', class: 'input-sm' },
+        );
+        const cntCtl = input({ type: 'text', value: prev?.cnt ?? 0, class: 'input-sm', inputmode: 'numeric' });
+        cntCtl.style.width = '76px';
+        cntCtl.addEventListener('input', () => {
+          cntCtl.value = String(cntCtl.value).replace(/\D+/g, '').replace(/^0+(?=\d)/, '');
+        });
+        cntCtl.addEventListener('input', recalc);
+        kpPlan.push({ kp: String(k.kp), available: Number(k.count) || 0, diff: diffSel, ctl: cntCtl });
+        return {
+          kp: k.kp,
+          count: k.count,
+          diff: diffSel,
+          cnt: cntCtl,
+        };
+      });
+      body.append(table({
+        size: 'sm',
+        columns: [
+          { key: 'kp', title: '知识点', render: (r) => el('span.fw-500', { text: r.kp }) },
+          { key: 'count', title: '题库可用', align: 'center', render: (r) => el('span.mono.fs-sm', { text: String(r.count) }) },
+          { key: 'diff', title: '难度', align: 'center', render: (r) => r.diff },
+          { key: 'cnt', title: '抽题数量', align: 'center', render: (r) => r.cnt },
+        ],
+        rows,
+      }));
+      recalc();
+    }
+
+    // 「加载知识点」放在 body 之外：load() 首行会 clear(body)，
+    // 若按钮在 body 内会被首次加载直接清掉（按钮凭空消失）。
+    const reloadBtn = button('加载知识点', {
+      variant: 'secondary', iconName: 'refresh', size: 'sm',
+      onClick: (e) => withLoading(e.currentTarget, () => load(), { silent: true }),
+    });
+    void load();
+    kpPane.append(reloadBtn, body, totalSlot);
+  }
+
+  renderMode();
+
   const form = el('div.stack', {}, [
     el('div.form-grid', {}, [
       el('div.span-2', {}, [field('考试名称', nameInput, { required: true })]),
@@ -260,15 +505,13 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
       })]),
     ]),
     card({
-      title: '组卷参数',
+      title: '组卷方式',
       iconName: 'layers',
       body: el('div.stack', {}, [
-        el('div.table-wrap', {}, [matrixTable]),
-        el('div.flex.items-center.gap-4', {}, [
-          el('span.fs-sm.c-secondary', { text: '合计题量' }), totalQty,
-          el('span.fs-sm.c-secondary', { text: '满分' }), totalScore,
-        ]),
-        stockSlot,
+        modeSlot,
+        randomPane,
+        manualPane,
+        kpPane,
       ]),
     }),
   ]);
@@ -277,7 +520,7 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
   const submitBtn = button(isEdit ? '保存修改' : '创建考试', { variant: 'primary' });
   const dlg = openModal({
     title: isEdit ? `编辑考试 #${id}` : '新建考试',
-    body: el('div.stack', {}, [form, el('div.flex.gap-2', {}, [checkBtn]), errSlot]),
+    body: el('div.stack', {}, [form, errSlot]),
     size: 'xl',
     footer: [button('取消', { variant: 'secondary', onClick: () => dlg.close() }), submitBtn],
   });
@@ -293,8 +536,27 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
       exam_end_time: normalizeTime(endInput.value),
       exam_tea: teacherInput.value.trim(),
       stu_class: classCtrl.values().join(','),
+      paper_mode: paperMode,
       ...collectMatrix(),
     };
+
+    // A3：按模式附加明细（手动选题 / 知识点计划）
+    if (paperMode === 'manual') {
+      payload.manual_ids = [...manualIds].map((v) => Number(v)).filter((n) => n > 0);
+      if (payload.manual_ids.length === 0) {
+        errSlot.append(alertBox('「手动选题」模式请至少加入一道题目', { type: 'warning' }));
+        return;
+      }
+    } else if (paperMode === 'by_kp') {
+      payload.kp_plan = kpPlan
+        .map((r) => ({ kp: r.kp, diff: r.diff.value, cnt: Number(r.ctl.value) || 0 }))
+        .filter((p) => p.cnt > 0);
+      if (payload.kp_plan.length === 0) {
+        errSlot.append(alertBox('「按知识点」模式请至少为一个知识点配置抽题数量', { type: 'warning' }));
+        return;
+      }
+    }
+
     if (!payload.exam_name) { errSlot.append(alertBox('请填写考试名称', { type: 'warning' })); return; }
     if (!payload.subj_id) { errSlot.append(alertBox('请选择科目', { type: 'warning' })); return; }
     if (!payload.exam_start_time) { errSlot.append(alertBox('请填写开始时间', { type: 'warning' })); return; }

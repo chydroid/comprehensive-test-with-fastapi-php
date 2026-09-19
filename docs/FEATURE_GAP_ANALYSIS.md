@@ -25,9 +25,9 @@
 
 | # | 功能 | 同类是否标配 | 本项目现状 | 差距说明 |
 |---|---|---|---|---|
-| A1 | **持久化错题本** | 几乎标配（exam-ai / exam-system / Examify / 优考试） | 仅模拟考试 session 内临时回顾；练习模式不留痕、正式考试错题不可归集重练 | 缺少「跨模式归集 + 错题重练」的个人错题本，练习价值大打折扣 |
-| A2 | **班级 / 知识点维度成绩分析报表** | 标配（及格率/优秀率/得分率/错题率/正确率可视化） | 管理端仅有「平均分/得分率」stat 卡片 | 缺班级横向对比、知识点薄弱项定位、分数分布图，无法支撑精准教学 |
-| A3 | **组卷多样化（手动固定 + 按知识点/难度比例）** | 标配 | 仅有随机抽题（`ORDER BY RAND()`） | 教师无法精确指定题目或按章节配比，无法出单元测试/章节测验 |
+| A1 | **持久化错题本** | 几乎标配（exam-ai / exam-system / Examify / 优考试） | 仅模拟考试 session 内临时回顾；练习模式不留痕、正式考试错题不可归集重练 | 缺少「跨模式归集 + 错题重练」的个人错题本，练习价值大打折扣 | **✅ 已完成（2026-09-19）** |
+| A2 | **班级 / 知识点维度成绩分析报表** | 标配（及格率/优秀率/得分率/错题率/正确率可视化） | 管理端仅有「平均分/得分率」stat 卡片 | 缺班级横向对比、知识点薄弱项定位、分数分布图，无法支撑精准教学 | **✅ 已完成（2026-09-19）** |
+| A3 | **组卷多样化（手动固定 + 按知识点/难度比例）** | 标配 | 仅有随机抽题（`ORDER BY RAND()`） | 教师无法精确指定题目或按章节配比，无法出单元测试/章节测验 | **✅ 已完成（2026-09-19）** |
 | A4 | **主观题批改闭环** | 标配（关键词自动给分 + 人工复核） | 问答题(longtext)直接记 0 分、无人工批阅入口；填空靠精确匹配 | 问答题形同虚设，考试公平性/实用性受损 |
 | A5 | **题库批量导入（Excel/Word）** | 标配 | 仅学生可批量导入；题目只能单条录入 | 题库建设成本极高，教师录题痛苦 |
 
@@ -63,8 +63,8 @@
 ## 四、逐项落地可行性简评（供决策参考）
 
 - **A1 错题本**：✅ 已完成（2026-09-19）。新增 `wrong_book` 表按 `stu_id + quiz_id` 归集，练习/模拟/正式考试三个判分落点旁路沉淀错题，前端「错题本」页（按科目分组、掌握状态过滤、来源筛选、错题重练）已上线。成本：中。
-- **A2 成绩分析**：后端在 `ScoreController` 增加班级维度聚合接口（及格率/优秀率/各分数段人数/知识点正确率），前端用轻量图表（项目已有 SVG/CSS 图表能力，无需引重型库）。成本：中。
-- **A3 组卷多样化**：在 `Exam`/`ExamEngine` 组卷入口增加「手动选题」「按知识点比例」「按难度比例」三种模式，前端组卷页增加选题器。成本：中高（涉及组卷算法与前端）。
+- **A2 成绩分析**：✅ 已完成（2026-09-19）。新增只读服务 `ScoreAnalysis`（均分/中位数/标准差/及格率/优秀率、分数段分布、按题型·难度·科目·知识点正确率、薄弱题 TOP、班级横向对比），教师端与管理端共用视图 `views/analysis.js`（含两端 NAV 入口与路由）。成本：中。
+- **A3 组卷多样化**：✅ 已完成（2026-09-19）。`examinfo.paper_mode`（random/manual/by_kp）+ `exam_manual_quiz` / `exam_kp_plan` 两表；`ExamEngine::generatePaper` 按模式分发；教师端组卷弹窗「组卷方式」三选一（手动选题器 / 知识点规划器）；题库检索与知识点清单接口双端开放。成本：中高（涉及组卷算法与前端）。
 - **A4 主观题批改**：新增教师批阅入口（针对 longtext 留空的分数），`ExamEngine` 支持「待批改」状态与二次给分，`score` 页支持按题批阅。成本：中。
 - **A5 批量导入**：新增 `QuizController#import`，解析 Excel（引 PhpSpreadsheet 或轻量 CSV），与现有学生导入对称。成本：低中。
 - **B1 防作弊**：前端切屏/失焦监听 + 考试水印 + 服务端异常行为记录 + 选项乱序（组卷时打乱）。成本：中（需前端+后端协同，且不能破坏现有随机卷机制）。
@@ -120,3 +120,58 @@
 **已知设计取舍**：`wrong_book` 唯一键不含 `exam_type`，同一题在多个模式答错会合并为一行、行内 `exam_type` 反映最近一次来源；统计按科目+题型+难度聚合（题库无独立知识点字段）。如需「按来源分布」精确统计可后续把 `exam_type` 纳入唯一键。
 
 **验证**：`wrong_book_test.php` 39 PASS（练习沉淀/重复累加/答对标记掌握、formal 沉淀+幂等、mock 沉淀+重复交卷不重复、列表/统计/过滤/抽题/重练、熔断 RENAME 表仍 200）；全量后端回归 821 PASS / 0 FAIL（无回归）；`check_frontend` 44 文件 0 错误 0 未解析导入；`check_icons` 88 图标无无效引用。
+
+---
+
+### ✅ A2 成绩与学情分析（2026-09-19 完成）
+
+**设计原则：单一只读服务统一口径。** 所有统计在 `ScoreAnalysis` 一处完成，前端只负责呈现，避免前后端各算一套导致统计口径分叉；全部走 `Quiz::isCorrect()` 复算正确性（与判分同一出处），不信任历史列。
+
+**统计口径**
+- 只统计 `stu_status` 以 `over` 开头的已交卷考生，未交卷不进分母。
+- 未作答按答错计入分母（更能反映掌握度）。
+- 问答题（`longtext`）无自动判分，**不纳入正确率**，单独以 `pending_types` 提示需人工批阅。
+- 满分优先取 `examinfo.exam_score`；为 0 时用实际最高分兜底，避免得分率除零。
+- 及格线/优秀线默认 60%/85%，可经 query `pass_line` / `excellent_line` / `weak_limit` 调整。
+
+**改动清单**
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 服务 | `app/Services/ScoreAnalysis.php`（新增） | `analyze()` 产出 exam/summary/distribution/by_type/by_diff/by_subject/by_kp/pending_types/weak_items/classes |
+| 接口 | `config/routes.php` + 两端控制器 | `GET /api/teacher/exams/{id}/analysis`（`assertOwnExam` 归属校验）、`GET /api/admin/exams/{id}/analysis` |
+| 前端 | `public/assets/js/views/analysis.js`（新增，工厂 `createAnalysisView`） | 两端复用的共享视图：统计卡 8 张、分数段分布、题型/难度/知识点正确率条、班级横向对比表、薄弱题 TOP 表、待批阅提示、统计口径说明 |
+| 注册 | `apps/teacher.js` / `apps/admin.js` | 注入各自数据源（教师 `scores` / 管理端 `exams`），NAV 加「成绩分析」（图标 `bar-chart-2`），路由 `/analysis` |
+| 联动 | `views/teacher/index.js` | 考试详情展示组卷方式与题量/满分，并提供「查看成绩分析」直达按钮 |
+
+**验证**：`score_analysis_test.php` 54 PASS（确定性数据下逐项校验均分/中位数/最高最低/及格率/优秀率/分数段/题型正确率/薄弱题升序/班级对比/未交卷排除/阈值可调/双端 404 守卫）；全量后端回归 929 PASS / 0 FAIL / 1 SKIP（无回归）。
+
+---
+
+### ✅ A3 组卷多样化（2026-09-19 完成）
+
+**设计原则：新增模式与旧随机卷互不干扰。** `paper_mode` 默认 `random`，旧考试与旧调用完全不受影响；`manual`/`by_kp` 的明细存独立表而非 `examinfo` 列，避免污染主行。
+
+**三种模式**
+| 模式 | 取值 | 抽题依据 | 满分 |
+|---|---|---|---|
+| 随机抽题 | `random` | `{type}_{easy\|mid\|hard}_sum` 计数列（原有行为） | 矩阵推算（确定值） |
+| 手动选题 | `manual` | `exam_manual_quiz`（按 `sort` 顺序，所有考生同卷） | 按所选题目的实际题型 × 每题分值合计 |
+| 按知识点 | `by_kp` | `exam_kp_plan`（每知识点按数量随机抽、可限难度） | 组卷时按实际卷面题型回填 `exam_score` |
+
+**改动清单**
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 数据 | `db/add_paper_mode.sql`（新增） | `examinfo.paper_mode` 列；`quizlib.quiz_kp` 知识点列；新建 `exam_manual_quiz`、`exam_kp_plan` 表。已执行建表 |
+| 模型 | `app/Models/Exam.php` | `PAPER_MODES` 常量；`paperPlan`（兼容新旧直方图）、新增 `paperMode()`（回读明细）、`totalQuestions()`/`computedTotalScore()` 按模式分支 |
+| 引擎 | `app/Services/ExamEngine.php` | `generatePaper()` 按模式分发：manual 取 `exam_manual_quiz`、by_kp 用 `drawQuestionsByKp()`；新增 `scoreOfPaper()`，在 `exam_score` 为空时按真实卷面回填（保证 `autoGrade` 封顶基于真实卷面） |
+| 控制器 | `TeacherExamController` / `Admin\ExamController` | `collectParams` 读 `paper_mode` + `manual_ids`/`kp_plan`；`assertValid` 按模式分支（manual 校验非空/存在/归属本考试科目/分值>0）；`persistPaperMode()` 先清后写固化明细；新增 `quizSearch()` / `quizKps()`；管理端 `show`/`start` 的题库容量校验仅对 `random` 生效 |
+| 权限 | `app/Middlewares/SessionAuthMiddleware.php` | 新增 `/api/admin/quiz-search`、`/api/admin/quiz-kps` → `quiz.view`（二者为单数路径，不会命中 `quizzes` 前缀，不登记会落到 `admin.access` 兜底而语义过宽） |
+| 路由 | `config/routes.php` | 教师端/管理端各 2 条检索路由 |
+| 前端 | `api/index.js` + `views/teacher/exam-editor.js` + `views/teacher/index.js` | 组卷弹窗新增「组卷方式」segmented 三选一 + 手动选题器（题型/关键字检索、加入/移除 chip）+ 知识点规划器（知识点清单 + 难度 + 数量）；列表加「组卷」列标识模式 |
+
+**验证**：`paper_mode_test.php` 54 PASS（三模式全链路：创建→落库→出题→卷面校正；手动选题空选择/跨科目 400；题库检索不下发答案；双端检索与清单；管理端保存）；全量后端回归 929 PASS / 0 FAIL / 1 SKIP（无回归）；`api_route_audit` 前端 156 调用全部有对应路由；`admin_401_guard` 8/8、`verify_me_401` 64/64；`check_frontend` 45 文件 0 错误；`check_icons` 88 图标无无效引用；`a2a3_smoke.mjs` 17/17（真实浏览器渲染）。
+
+**修复的真实缺陷**：知识点面板的「加载知识点」按钮原位于 `body` 内，而 `load()` 首行 `clear(body)` 会把按钮一并清掉（按钮凭空消失）——已移出 body 之外。
+
+**已知限制**：题库 `quiz_kp` 当前为空，按知识点组卷需先在题库为题目补填知识点；手动选题为「所有考生同一份卷」（如需逐人随机需改用 `random` 或 `by_kp`）。
+

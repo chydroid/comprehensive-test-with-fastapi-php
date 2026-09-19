@@ -18,12 +18,20 @@ class Exam extends Model
 
     protected array $fillable = [
         'exam_name', 'exam_class', 'exam_category_id', 'subj_id',
-        'exam_start', 'exam_end', 'exam_tea', 'stu_class',
+        'exam_start', 'exam_end', 'exam_tea', 'stu_class', 'paper_mode',
         'radio1_easy_sum', 'radio1_mid_sum', 'radio1_hard_sum', 'radio1_val',
         'radio2_easy_sum', 'radio2_mid_sum', 'radio2_hard_sum', 'radio2_val',
         'checkbox_easy_sum', 'checkbox_mid_sum', 'checkbox_hard_sum', 'checkbox_val',
         'text_easy_sum', 'text_mid_sum', 'text_hard_sum', 'text_val',
         'exam_status', 'exam_pwd', 'exam_score',
+    ];
+
+    /** 组卷模式（A3 组卷多样化） */
+    public const PAPER_MODES = ['random', 'manual', 'by_kp'];
+    public const PAPER_MODE_LABELS = [
+        'random' => '按难度随机',
+        'manual' => '手动选题',
+        'by_kp'  => '按知识点比例',
     ];
 
     /** 四种题型的组卷字段前缀 */
@@ -700,9 +708,86 @@ class Exam extends Model
         return $plan;
     }
 
-    /** 该场考试应出题总数 */
+    /**
+     * 组卷模式相关信息（A3 组卷多样化）。
+     * 返回 mode +（manual 的 manual_ids 列表 / by_kp 的 kp_plan 列表）。
+     * 优先读传入的 _manual_ids / _kp_plan（创建/编辑时前端提交），
+     * 否则从持久化表读取（详情展示时）。
+     */
+    public static function paperMode(array $exam): array
+    {
+        $mode = (string) ($exam['paper_mode'] ?? 'random');
+        $out = ['mode' => $mode];
+        if ($mode === 'manual') {
+            if (isset($exam['_manual_ids'])) {
+                $out['manual_ids'] = array_values(array_filter(
+                    array_map('intval', (array) $exam['_manual_ids']),
+                    static fn (int $i): bool => $i > 0
+                ));
+            } elseif (!empty($exam['id'])) {
+                $rows = \Core\Database::fetchAll(
+                    'SELECT quiz_id FROM `exam_manual_quiz` WHERE exam_id = ? ORDER BY sort, quiz_id',
+                    [(int) $exam['id']]
+                );
+                $out['manual_ids'] = array_map(static fn (array $r): int => (int) $r['quiz_id'], $rows);
+            } else {
+                $out['manual_ids'] = [];
+            }
+        } elseif ($mode === 'by_kp') {
+            if (isset($exam['_kp_plan'])) {
+                $out['kp_plan'] = array_values(array_map(static function (array $p): array {
+                    return [
+                        'kp'   => (string) ($p['kp'] ?? ''),
+                        'diff' => (string) ($p['diff'] ?? ''),
+                        'cnt'  => (int) ($p['cnt'] ?? 0),
+                    ];
+                }, (array) $exam['_kp_plan']));
+            } elseif (!empty($exam['id'])) {
+                $rows = \Core\Database::fetchAll(
+                    'SELECT kp, diff, cnt, sort FROM `exam_kp_plan` WHERE exam_id = ? ORDER BY sort, kp, diff',
+                    [(int) $exam['id']]
+                );
+                $out['kp_plan'] = array_map(static fn (array $r): array => [
+                    'kp'   => (string) $r['kp'],
+                    'diff' => (string) $r['diff'],
+                    'cnt'  => (int) $r['cnt'],
+                ], $rows);
+            } else {
+                $out['kp_plan'] = [];
+            }
+        }
+        return $out;
+    }
+
+    /** 该场考试应出题总数（按当前组卷模式计算） */
     public static function totalQuestions(array $exam): int
     {
+        $mode = (string) ($exam['paper_mode'] ?? 'random');
+        if ($mode === 'manual') {
+            if (isset($exam['_manual_ids'])) {
+                return count(array_filter(array_map('intval', (array) $exam['_manual_ids']), static fn (int $i): bool => $i > 0));
+            }
+            if (!empty($exam['id'])) {
+                $r = \Core\Database::fetch('SELECT COUNT(*) AS c FROM `exam_manual_quiz` WHERE exam_id = ?', [(int) $exam['id']]);
+                return (int) ($r['c'] ?? 0);
+            }
+            return 0;
+        }
+        if ($mode === 'by_kp') {
+            if (isset($exam['_kp_plan'])) {
+                $n = 0;
+                foreach ((array) $exam['_kp_plan'] as $p) {
+                    $n += (int) ($p['cnt'] ?? 0);
+                }
+                return $n;
+            }
+            if (!empty($exam['id'])) {
+                $r = \Core\Database::fetch('SELECT COALESCE(SUM(cnt),0) AS c FROM `exam_kp_plan` WHERE exam_id = ?', [(int) $exam['id']]);
+                return (int) ($r['c'] ?? 0);
+            }
+            return 0;
+        }
+        // random：题型×难度计数列求和
         $n = 0;
         foreach (self::paperPlan($exam) as $p) {
             $n += $p['easy'] + $p['mid'] + $p['hard'];
@@ -710,9 +795,53 @@ class Exam extends Model
         return $n;
     }
 
-    /** 按组卷参数推算的满分 */
+    /**
+     * 按组卷参数推算的满分。
+     * - random：题型×难度计数列 × 每题分值（确定值）。
+     * - manual：按所选题目实际题型 × 每题分值求和（从 _manual_ids 或持久化表取题型）。
+     * - by_kp：实际分值取决于随机抽到的题目题型，组卷时才能确定；若已落库 exam_score 则直接用它，
+     *          否则返回 0，由 ExamEngine::generatePaper 在首次出题时回填 exam_score。
+     */
     public static function computedTotalScore(array $exam): int
     {
+        $mode = (string) ($exam['paper_mode'] ?? 'random');
+        $valMap = [];
+        foreach (self::TYPE_PREFIXES as $t) {
+            $valMap[$t] = (int) ($exam["{$t}_val"] ?? 0);
+        }
+        if ($mode === 'manual') {
+            $types = [];
+            if (isset($exam['_manual_ids'])) {
+                $ids = array_filter(array_map('intval', (array) $exam['_manual_ids']), static fn (int $i): bool => $i > 0);
+                if ($ids !== []) {
+                    $ph = implode(',', $ids);
+                    $rows = \Core\Database::fetchAll("SELECT quiz_class FROM `quizlib` WHERE id IN ({$ph})");
+                    foreach ($rows as $r) {
+                        $types[] = (string) $r['quiz_class'];
+                    }
+                }
+            } elseif (!empty($exam['id'])) {
+                $rows = \Core\Database::fetchAll(
+                    'SELECT q.quiz_class FROM `exam_manual_quiz` m INNER JOIN `quizlib` q ON q.id = m.quiz_id WHERE m.exam_id = ?',
+                    [(int) $exam['id']]
+                );
+                foreach ($rows as $r) {
+                    $types[] = (string) $r['quiz_class'];
+                }
+            }
+            $s = 0;
+            foreach ($types as $t) {
+                $s += $valMap[$t] ?? 0;
+            }
+            return $s;
+        }
+        if ($mode === 'by_kp') {
+            if (!empty($exam['exam_score'])) {
+                return (int) $exam['exam_score'];
+            }
+            return 0;
+        }
+        // random
         $n = 0;
         foreach (self::paperPlan($exam) as $p) {
             $n += ($p['easy'] + $p['mid'] + $p['hard']) * $p['val'];

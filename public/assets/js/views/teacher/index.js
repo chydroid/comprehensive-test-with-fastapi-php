@@ -36,6 +36,11 @@ const STU_STATUS = {
   over:    { label: '已交卷', tone: 'info' },
 };
 
+/** 题型标签（与后端 Quiz::TYPE_LABELS 一致） */
+const TYPE_LABELS = {
+  radio1: '判断题', radio2: '单选题', checkbox: '多选题', text: '填空题', longtext: '问答题',
+};
+
 function stuStatusBadge(s) {
   const key = String(s || 'waiting');
   const m = STU_STATUS[key] || (key.startsWith('over') ? STU_STATUS.over : { label: key, tone: '' });
@@ -98,6 +103,14 @@ export function TeacherExamsView({ router }) {
           el('div.muted.small', { text: r.subj_name || '' }),
         ]) },
         { key: 'exam_status', title: '状态', render: (r) => examStatusBadge(r.exam_status) },
+        // A3 组卷模式标识：random 为默认（不展示标签），manual/by_kp 显式标出，
+        // 避免教师对「题量/满分与组卷矩阵对不上」产生误解。
+        { key: 'paper_mode', title: '组卷', align: 'center', render: (r) => {
+          const m = String(r.paper_mode || 'random');
+          if (m === 'manual') return badge('手动选题', { tone: 'brand' });
+          if (m === 'by_kp') return badge('按知识点', { tone: 'info' });
+          return el('span.muted.small', { text: '随机' });
+        } },
         { key: 'exam_start', title: '开始', render: (r) => el('span.muted', { text: r.exam_start ? fmtDateTime(r.exam_start) : '—' }) },
         { key: 'exam_end', title: '结束', render: (r) => el('span.muted', { text: r.exam_end ? fmtDateTime(r.exam_end) : '—' }) },
         { key: 'exam_score', title: '总分', align: 'right', render: (r) => el('span', { text: fmtScore(r.exam_score) }) },
@@ -257,19 +270,44 @@ export function TeacherExamsView({ router }) {
     const res = await withLoading(root, () => teacherApi.exam(id));
     if (!res.ok) return;
     const d = res.result || {};
-    openModal({
+    const info = d.paper_mode_info || {};
+    const MODE_LABEL = { random: '随机抽题', manual: '手动选题', by_kp: '按知识点' };
+    const rows = [
+      ['考试编号', String(d.id ?? '')],
+      ['科目', d.subj_name || '—'],
+      ['状态', (EXAM_STATUS[d.exam_status] || {}).label || d.exam_status || '—'],
+      ['组卷方式', MODE_LABEL[info.mode] || '随机抽题'],
+      ['开始时间', d.exam_start ? fmtDateTime(d.exam_start) : '—'],
+      ['结束时间', d.exam_end ? fmtDateTime(d.exam_end) : '—'],
+      ['题量', `${fmtNumber(d.total_questions)} 题`],
+      ['满分', fmtScore(d.exam_score || d.computed_score)],
+    ];
+    if (info.mode === 'manual') {
+      rows.push(['选题数量', `${(info.manual_ids || []).length} 题`]);
+    } else if (info.mode === 'by_kp') {
+      rows.push(['知识点条目', (info.kp_plan || [])
+        .map((p) => `${p.kp}×${p.cnt}`).join('，') || '—']);
+    } else {
+      rows.push(['组卷矩阵', (d.paper_plan || [])
+        .filter((p) => (p.easy + p.mid + p.hard) > 0)
+        .map((p) => `${TYPE_LABELS[p.type] || p.type} 易${p.easy}/中${p.mid}/难${p.hard}（每题${p.val}分）`)
+        .join('；') || '—']);
+    }
+
+    const dlg = openModal({
       title: d.exam_name || '考试详情',
       size: 'lg',
       body: el('div.stack', {}, [
-        descList([
-          ['考试编号', String(d.id ?? '')],
-          ['科目', d.subj_name || '—'],
-          ['状态', (EXAM_STATUS[d.exam_status] || {}).label || d.exam_status || '—'],
-          ['开始时间', d.exam_start ? fmtDateTime(d.exam_start) : '—'],
-          ['结束时间', d.exam_end ? fmtDateTime(d.exam_end) : '—'],
-          ['总分', fmtScore(d.exam_score)],
-        ]),
+        descList(rows),
+        el('div.fs-xs.c-tertiary', { text: '提示：考试结束后可在「成绩分析」查看班级、题型、难度与知识点维度的完整学情报告。' }),
       ]),
+      footer: [
+        button('查看成绩分析', {
+          variant: 'secondary', iconName: 'bar-chart-2',
+          onClick: () => { dlg.close(); router.navigate(`/analysis?exam_id=${d.id}`); },
+        }),
+        button('关闭', { variant: 'ghost', onClick: () => dlg.close() }),
+      ],
     });
   }
 

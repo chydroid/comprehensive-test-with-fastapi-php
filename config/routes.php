@@ -157,6 +157,11 @@ return [
     ['DELETE', '/api/teacher/exams/{id}',  [TeacherExamController::class, 'delete']],
     ['GET',  '/api/teacher/exams/{id}/students', [TeacherExamController::class, 'students']],
     ['GET',  '/api/teacher/exams/{id}/quiz-count', [TeacherExamController::class, 'checkQuizCount']],
+    // A2 成绩与学情分析（按考试维度）
+    ['GET',  '/api/teacher/exams/{id}/analysis', [TeacherExamController::class, 'analysis']],
+    // A3 组卷多样化：手动选题题库检索、知识点清单
+    ['GET',  '/api/teacher/quiz-search',   [TeacherExamController::class, 'quizSearch']],
+    ['GET',  '/api/teacher/quiz-kps',      [TeacherExamController::class, 'quizKps']],
     ['GET',  '/api/teacher/scores',        [TeacherExamController::class, 'scores']],
     ['GET',  '/api/teacher/scores/export', [TeacherExamController::class, 'exportScores']],
 
@@ -212,6 +217,11 @@ return [
     ['POST',   '/api/admin/exams/{id}/start', [ExamController::class, 'start']],
     ['POST',   '/api/admin/exams/{id}/open', [ExamController::class, 'open']],
     ['POST',   '/api/admin/exams/{id}/generate', [ExamController::class, 'generatePapers']],
+    // A2 成绩与学情分析（按考试维度）
+    ['GET',    '/api/admin/exams/{id}/analysis', [ExamController::class, 'analysis']],
+    // A3 组卷多样化：手动选题题库检索、知识点清单
+    ['GET',    '/api/admin/quiz-search',   [ExamController::class, 'quizSearch']],
+    ['GET',    '/api/admin/quiz-kps',      [ExamController::class, 'quizKps']],
 
     /* ---------- 考试类别管理 ---------- */
     ['GET',    '/api/admin/exam-categories',       [ExamCategoryController::class, 'index']],

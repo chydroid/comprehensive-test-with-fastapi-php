@@ -112,6 +112,11 @@ class SessionAuthMiddleware implements Middleware
         ['/api/admin/exam-categories', 'admin', 'category.view'],
         ['/api/admin/exams',      'admin', 'exam.view'],
         ['/api/admin/quizzes',    'admin', 'quiz.view'],
+        // A3 手动选题/知识点检索：只读题库，按题库读权限点授权。
+        // 路径是 /api/admin/quiz-search（单数），不会命中上面的 quizzes 前缀，
+        // 若不显式登记会落到 admin.access 兜底（任何管理员可读，语义过宽）。
+        ['/api/admin/quiz-search', 'admin', 'quiz.view'],
+        ['/api/admin/quiz-kps',    'admin', 'quiz.view'],
         ['/api/admin/students',   'admin', 'student.view'],
         ['/api/admin/teachers',   'admin', 'teacher.view'],
         ['/api/admin/grades',     'admin', 'grade.view'],

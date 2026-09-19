@@ -70,33 +70,83 @@ final class ExamEngine
 
             $paperId = 1;
             $subjId = (int) ($exam['subj_id'] ?? 0);
+            $mode = (string) ($exam['paper_mode'] ?? 'random');
 
-            foreach (Exam::TYPE_PREFIXES as $type) {
-                foreach (self::DIFF_ORDER as $field => $diffCode) {
-                    $need = (int) ($exam["{$type}_{$field}_sum"] ?? 0);
-                    if ($need <= 0) {
+            if ($mode === 'manual') {
+                // 手动选题：使用考试绑定的具体题目（exam_manual_quiz），所有考生同卷
+                $rows = Database::fetchAll(
+                    'SELECT m.quiz_id, q.quiz_class
+                     FROM `exam_manual_quiz` m INNER JOIN `quizlib` q ON q.id = m.quiz_id
+                     WHERE m.exam_id = ? ORDER BY m.sort, m.quiz_id',
+                    [$examId]
+                );
+                foreach ($rows as $q) {
+                    self::insertPaperRow($examId, $stuId, $paperId, (int) $q['quiz_id'], (string) $q['quiz_class']);
+                    $paperId++;
+                }
+                if ($rows === []) {
+                    $warnings[] = ['type' => 'manual', 'diff' => '', 'need' => 1, 'have' => 0];
+                }
+            } elseif ($mode === 'by_kp') {
+                // 按知识点比例：每个知识点按配置数量随机抽题（可限定难度）
+                $plan = Database::fetchAll(
+                    'SELECT kp, diff, cnt FROM `exam_kp_plan` WHERE exam_id = ? ORDER BY sort, kp, diff',
+                    [$examId]
+                );
+                foreach ($plan as $p) {
+                    $cnt = (int) $p['cnt'];
+                    if ($cnt <= 0) {
                         continue;
                     }
-                    $questions = self::drawQuestions($subjId, $type, $diffCode, $need);
-                    if (count($questions) < $need) {
-                        // 缺题：记录但不中断，保证已抽到的题仍可用（行为与旧系统一致，但不再静默）
+                    $qs = self::drawQuestionsByKp($subjId, (string) $p['kp'], (string) $p['diff'], $cnt);
+                    if (count($qs) < $cnt) {
                         $warnings[] = [
-                            'type' => $type,
-                            'diff' => $diffCode,
-                            'need' => $need,
-                            'have' => count($questions),
+                            'type' => (string) $p['kp'],
+                            'diff' => (string) $p['diff'],
+                            'need' => $cnt,
+                            'have' => count($qs),
                         ];
                     }
-                    foreach ($questions as $q) {
-                        Database::query(
-                            'INSERT INTO `stupaper`
-                                (exam_id, stu_id, paper_id, quiz_id, quiz_class, stu_key, quiz_status)
-                             VALUES (?, ?, ?, ?, ?, \'\', 0)',
-                            [$examId, $stuId, $paperId, (int) $q['id'], $type]
-                        );
+                    foreach ($qs as $q) {
+                        self::insertPaperRow($examId, $stuId, $paperId, (int) $q['id'], (string) $q['quiz_class']);
                         $paperId++;
                     }
                 }
+            } else {
+                // random：按题型 × 难度计数列随机抽题（原有行为）
+                foreach (Exam::TYPE_PREFIXES as $type) {
+                    foreach (self::DIFF_ORDER as $field => $diffCode) {
+                        $need = (int) ($exam["{$type}_{$field}_sum"] ?? 0);
+                        if ($need <= 0) {
+                            continue;
+                        }
+                        $questions = self::drawQuestions($subjId, $type, $diffCode, $need);
+                        if (count($questions) < $need) {
+                            // 缺题：记录但不中断，保证已抽到的题仍可用（行为与旧系统一致，但不再静默）
+                            $warnings[] = [
+                                'type' => $type,
+                                'diff' => $diffCode,
+                                'need' => $need,
+                                'have' => count($questions),
+                            ];
+                        }
+                        foreach ($questions as $q) {
+                            self::insertPaperRow($examId, $stuId, $paperId, (int) $q['id'], $type);
+                            $paperId++;
+                        }
+                    }
+                }
+            }
+
+            // 校正满分：按实际卷面题目题型 × 每题分值求和；
+            // 仅当 exam_score 未设置时回填（by_kp 首次出题时才能确定真实分值）。
+            // 这保证 autoGrade 的总分封顶永远基于真实卷面，不会因 by_kp 难度分布不同而误封顶。
+            $paperScore = self::scoreOfPaper($examId, $stuId);
+            if ($paperScore > 0) {
+                Database::query(
+                    'UPDATE `examinfo` SET exam_score = ? WHERE id = ? AND (exam_score IS NULL OR exam_score = 0)',
+                    [$paperScore, $examId]
+                );
             }
 
             Database::commit();
@@ -110,6 +160,43 @@ final class ExamEngine
         return ['generated' => true, 'warnings' => $warnings];
     }
 
+    /** 插入一条试卷题目（stupaper） */
+    private static function insertPaperRow(int $examId, string $stuId, int $paperId, int $quizId, string $quizClass): void
+    {
+        Database::query(
+            'INSERT INTO `stupaper` (exam_id, stu_id, paper_id, quiz_id, quiz_class, stu_key, quiz_status)
+             VALUES (?, ?, ?, ?, ?, \'\', 0)',
+            [$examId, $stuId, $paperId, $quizId, $quizClass]
+        );
+    }
+
+    /** 计算某考生某场试卷的实际分值（按卷面题型 × examinfo 每题分值） */
+    private static function scoreOfPaper(int $examId, string $stuId): int
+    {
+        static $valCache = [];
+        if (!isset($valCache[$examId])) {
+            $exam = (new Exam())->find($examId);
+            $valCache[$examId] = [
+                'radio1'   => (int) ($exam['radio1_val'] ?? 0),
+                'radio2'   => (int) ($exam['radio2_val'] ?? 0),
+                'checkbox' => (int) ($exam['checkbox_val'] ?? 0),
+                'text'     => (int) ($exam['text_val'] ?? 0),
+                'longtext' => 0,
+            ];
+        }
+        $valMap = $valCache[$examId];
+        $rows = Database::fetchAll(
+            'SELECT q.quiz_class FROM `stupaper` sp INNER JOIN `quizlib` q ON q.id = sp.quiz_id
+             WHERE sp.exam_id = ? AND sp.stu_id = ?',
+            [$examId, $stuId]
+        );
+        $score = 0;
+        foreach ($rows as $r) {
+            $score += $valMap[(string) $r['quiz_class']] ?? 0;
+        }
+        return $score;
+    }
+
     /** 随机抽题：按科目 + 题型 + 难度 */
     private static function drawQuestions(int $subjId, string $type, string $diffCode, int $limit): array
     {
@@ -120,6 +207,20 @@ final class ExamEngine
              ORDER BY RAND() LIMIT ' . $limit,
             [$subjId, $type, $diffCode]
         );
+    }
+
+    /** 按知识点(章节)随机抽题：可限定难度（diff 为空表示不限） */
+    private static function drawQuestionsByKp(int $subjId, string $kp, string $diff, int $limit): array
+    {
+        $limit = max(1, $limit);
+        $sql = 'SELECT id, quiz_class FROM `quizlib` WHERE subj_id = ? AND quiz_kp = ?';
+        $params = [$subjId, $kp];
+        if ($diff !== '' && $diff !== null) {
+            $sql .= ' AND quiz_diff = ?';
+            $params[] = $diff;
+        }
+        $sql .= ' ORDER BY RAND() LIMIT ' . $limit;
+        return Database::fetchAll($sql, $params);
     }
 
     /**

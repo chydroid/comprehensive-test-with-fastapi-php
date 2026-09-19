@@ -14,13 +14,23 @@ import { setCsrfToken } from '../core/http.js';
 import {
   TeacherExamsView, TeacherMonitorView, TeacherScoresView,
 } from '../views/teacher/index.js';
+import { createAnalysisView } from '../views/analysis.js';
 
 const APP_NAME = '教师工作台';
+
+/** A2 成绩与学情分析：复用共享视图，注入教师端数据源 */
+const TeacherAnalysisView = createAnalysisView({
+  fetchExams: (params) => teacherApi.scores(params),
+  fetchAnalysis: (id) => teacherApi.examAnalysis(id),
+  title: '成绩分析',
+  subtitle: '班级、题型、难度与知识点多维度学情诊断',
+});
 
 const NAV = [
   { key: 'exams',   label: '考试管理', icon: 'clipboard', group: 'exam' },
   { key: 'monitor', label: '监考中心', icon: 'eye',       group: 'exam' },
   { key: 'scores',  label: '成绩查询', icon: 'award',     group: 'exam' },
+  { key: 'analysis', label: '成绩分析', icon: 'bar-chart-2', group: 'exam' },
 ];
 
 const GROUPS = [{ key: 'exam', label: '考务' }];
@@ -29,6 +39,7 @@ const VIEWS = {
   exams: TeacherExamsView,
   monitor: TeacherMonitorView,
   scores: TeacherScoresView,
+  analysis: TeacherAnalysisView,
 };
 
 applyInitialTheme();

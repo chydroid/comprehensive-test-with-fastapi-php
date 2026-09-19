@@ -21,6 +21,7 @@ import { MonitorView } from '../views/admin/monitor.js';
 import { ScoreView } from '../views/admin/score.js';
 import { ConfigView, SystemView, ProfileView } from '../views/admin/system.js';
 import { LogsView } from '../views/admin/logs.js';
+import { createAnalysisView } from '../views/analysis.js';
 import {
   SubjectView, CategoryView, GradeView, ClassView, TeacherView, AdminView, NewsView,
 } from '../views/admin/basics.js';
@@ -42,6 +43,7 @@ const NAV = [
   { key: 'exams',    label: '考试管理', icon: 'clipboard', perm: 'exam.view', group: 'exam' },
   { key: 'monitor',  label: '在线监考', icon: 'eye',       perm: 'monitor.view', group: 'exam' },
   { key: 'scores',   label: '成绩管理', icon: 'award',     perm: 'score.view', group: 'exam' },
+  { key: 'analysis', label: '成绩分析', icon: 'bar-chart-2', perm: 'exam.view', group: 'exam' },
   { key: 'categories', label: '考试类别', icon: 'flag',    perm: 'category.view', group: 'exam' },
 
   { key: 'quizzes',  label: '题库管理', icon: 'database',  perm: 'quiz.view', group: 'bank' },
@@ -62,6 +64,15 @@ const NAV = [
 ];
 
 /* ---------- 视图工厂映射 ---------- */
+/** A2 成绩与学情分析：复用共享视图，注入管理端数据源 */
+const AnalysisView = createAnalysisView({
+  // 只列出可分析的考试：先取一页，再由视图按 exam_status 过滤（over / overBak）
+  fetchExams: (params) => adminApi.exams({ ...params, per_page: 100 }),
+  fetchAnalysis: (id) => adminApi.examAnalysis(id),
+  title: '成绩分析',
+  subtitle: '全站考试数据的班级、题型、难度与知识点学情诊断',
+});
+
 const VIEWS = {
   dashboard: DashboardView,
   quizzes: QuizView,
@@ -69,6 +80,7 @@ const VIEWS = {
   students: StudentView,
   monitor: MonitorView,
   scores: ScoreView,
+  analysis: AnalysisView,
   config: ConfigView,
   system: SystemView,
   profile: ProfileView,

@@ -90,6 +90,11 @@ export const teacherApi = {
   generatePapers: (id, body) => http.post(`/teacher/exams/${id}/generate`, body),
   examStudents: (id, params) => http.get(`/teacher/exams/${id}/students`, { query: params }),
   examQuizCount:(id, params) => http.get(`/teacher/exams/${id}/quiz-count`, { query: params }),
+  // A2 成绩与学情分析（按考试）
+  examAnalysis: (id, params) => http.get(`/teacher/exams/${id}/analysis`, { query: params }),
+  // A3 组卷多样化：手动选题检索 / 知识点清单
+  quizSearch:   (params) => http.get('/teacher/quiz-search', { query: params }),
+  quizKps:      (params) => http.get('/teacher/quiz-kps', { query: params }),
 
   scores:    (params) => http.get('/teacher/scores', { query: params }),
   exportScores: (params) => download('/teacher/scores/export', { query: params }),
@@ -143,6 +148,11 @@ export const adminApi = {
   openExam:     (id) => http.post(`/admin/exams/${id}/open`),
   generatePapers: (id, body) => http.post(`/admin/exams/${id}/generate`, body),
   examQuizCount:(id, params) => http.get(`/admin/exams/${id}/quiz-count`, { query: params }),
+  // A2 成绩与学情分析（按考试）
+  examAnalysis: (id, params) => http.get(`/admin/exams/${id}/analysis`, { query: params }),
+  // A3 组卷多样化：手动选题检索 / 知识点清单
+  quizSearch:   (params) => http.get('/admin/quiz-search', { query: params }),
+  quizKps:      (params) => http.get('/admin/quiz-kps', { query: params }),
 
   categories:      (params) => http.get('/admin/exam-categories', { query: params }),
   createCategory:  (body) => http.post('/admin/exam-categories', body),

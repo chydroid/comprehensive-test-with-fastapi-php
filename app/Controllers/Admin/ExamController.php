@@ -14,6 +14,7 @@ use App\Models\Student;
 use App\Models\Subject;
 use App\Models\Teacher;
 use App\Services\ExamEngine;
+use App\Services\ScoreAnalysis;
 use Core\Database;
 use Core\HttpException;
 use Core\Response;
@@ -88,9 +89,13 @@ class ExamController extends BaseController
         }
 
         $row['paper_plan']      = Exam::paperPlan($row);
+        $row['paper_mode_info'] = Exam::paperMode($row);
         $row['total_questions'] = Exam::totalQuestions($row);
         $row['computed_score']  = Exam::computedTotalScore($row);
-        $row['stock']           = Exam::checkStock($row);
+        // 仅 random 模式按题型×难度计数列校验题库容量；manual/by_kp 不依赖该矩阵
+        $row['stock']           = ((string) ($row['paper_mode'] ?? 'random') === 'random')
+            ? Exam::checkStock($row)
+            : ['ok' => true, 'shortfall' => []];
         $row['available']       = Exam::availableCounts((int) $row['subj_id']);
         $row['status_summary']  = $this->model->statusSummary($id);
 
@@ -131,6 +136,8 @@ class ExamController extends BaseController
         $this->assertValid($data, true);
 
         $id = $this->model->create($data + ['exam_status' => Exam::STATUS_EXAM, 'exam_pwd' => 0]);
+        $this->persistPaperMode($id, $data);
+        $this->recomputeScore($id, $data);
         $this->audit('exam.create', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? '']);
         return $this->ok($this->model->detail($id), '添加成功');
     }
@@ -166,6 +173,8 @@ class ExamController extends BaseController
         // 一旦被改回 exam，到点将永不自动开考，考生会卡在等待室。
         // 状态流转只由 启动/出题/开考/结束 这些专用接口负责。
         $this->model->update($id, $data);
+        $this->persistPaperMode($id, $data);
+        $this->recomputeScore($id, $data);
         $this->audit('exam.update', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? null]);
         return $this->ok($this->model->detail($id), '修改成功');
     }
@@ -219,8 +228,10 @@ class ExamController extends BaseController
         }
 
         // 启动前必须确保题库容量充足，避免开考后考生拿到残缺试卷
-        $stock = Exam::checkStock($row);
-        if (!$stock['ok']) {
+        // 仅 random 模式依赖题型×难度矩阵；manual/by_kp 的题目在出题时已确定，无需此校验
+        if ((string) ($row['paper_mode'] ?? 'random') === 'random') {
+            $stock = Exam::checkStock($row);
+            if (!$stock['ok']) {
             throw new HttpException(
                 400,
                 '题库题量不足，无法开考：' . implode('；', array_map(
@@ -236,6 +247,7 @@ class ExamController extends BaseController
                 40002,
                 $stock['shortfall']
             );
+            }
         }
 
         $pwd = $this->model->start($id);
@@ -341,11 +353,25 @@ class ExamController extends BaseController
             'stu_class'        => $this->resolveClasses($ip('stu_class', '')),
         ];
 
+        // A3 组卷多样化：组卷模式（random / manual / by_kp）
+        $mode = trim((string) $ip('paper_mode', 'random'));
+        if (!in_array($mode, Exam::PAPER_MODES, true)) {
+            $mode = 'random';
+        }
+        $data['paper_mode'] = $mode;
+
         foreach (Exam::TYPE_PREFIXES as $type) {
             $data["{$type}_easy_sum"] = (int) $ip("{$type}_easy_sum", 0);
             $data["{$type}_mid_sum"]  = (int) $ip("{$type}_mid_sum", 0);
             $data["{$type}_hard_sum"] = (int) $ip("{$type}_hard_sum", 0);
             $data["{$type}_val"]      = (int) $ip("{$type}_val", 0);
+        }
+
+        // 手动选题 / 按知识点比例 的明细随考试一起保存（存入独立表，非 examinfo 列）
+        if ($mode === 'manual') {
+            $data['_manual_ids'] = $this->parseIntList($ip('manual_ids', []));
+        } elseif ($mode === 'by_kp') {
+            $data['_kp_plan'] = $this->parseKpPlan($ip('kp_plan', []));
         }
 
         $data['exam_score'] = Exam::computedTotalScore($data);
@@ -401,39 +427,273 @@ class ExamController extends BaseController
         if ($data['exam_start'] === null || $data['exam_end'] === null) {
             throw new HttpException(400, '请填写完整的考试开始与结束时间', 40002);
         }
-        if (Exam::totalQuestions($data) <= 0) {
-            throw new HttpException(400, '请至少配置一道题目的抽题数量', 40003);
-        }
-        foreach (Exam::TYPE_PREFIXES as $type) {
-            $n = $data["{$type}_easy_sum"] + $data["{$type}_mid_sum"] + $data["{$type}_hard_sum"];
-            if ($n > 0 && (int) $data["{$type}_val"] <= 0) {
-                throw new HttpException(400, sprintf(
-                    '%s 已配置抽题数量，但每题分值必须大于 0',
-                    Quiz::TYPE_LABELS[$type] ?? $type
-                ), 40004);
+
+        $mode = (string) ($data['paper_mode'] ?? 'random');
+        if ($mode === 'manual') {
+            $ids = $data['_manual_ids'] ?? [];
+            if (count($ids) <= 0) {
+                throw new HttpException(400, '手动选题模式请至少选择一道题目', 40003);
+            }
+            $ph = implode(',', $ids);
+            $rows = \Core\Database::fetchAll("SELECT id, subj_id, quiz_class FROM `quizlib` WHERE id IN ({$ph})");
+            if (count($rows) !== count($ids)) {
+                throw new HttpException(400, '存在无效或已删除的题目', 40005);
+            }
+            foreach ($rows as $r) {
+                if ((int) $r['subj_id'] !== (int) $data['subj_id']) {
+                    throw new HttpException(400, '所选题目必须与考试科目一致', 40006);
+                }
+                $type = (string) $r['quiz_class'];
+                if ((int) ($data["{$type}_val"] ?? 0) <= 0) {
+                    throw new HttpException(400, sprintf(
+                        '%s 在手动选题中已选用，其每题分值必须大于 0',
+                        Quiz::TYPE_LABELS[$type] ?? $type
+                    ), 40004);
+                }
+            }
+        } elseif ($mode === 'by_kp') {
+            $plan = $data['_kp_plan'] ?? [];
+            $sum = 0;
+            foreach ($plan as $p) {
+                $sum += (int) ($p['cnt'] ?? 0);
+            }
+            if ($sum <= 0) {
+                throw new HttpException(400, '按知识点比例模式请至少为某个知识点配置抽题数量', 40003);
+            }
+            if ($strictStock) {
+                // 校验每个知识点（及难度）的可用题量是否足够
+                $shortfall = [];
+                foreach ($plan as $p) {
+                    $kp = (string) ($p['kp'] ?? '');
+                    $diff = (string) ($p['diff'] ?? '');
+                    $need = (int) ($p['cnt'] ?? 0);
+                    if ($need <= 0) {
+                        continue;
+                    }
+                    $sql = 'SELECT COUNT(*) AS c FROM `quizlib` WHERE subj_id = ? AND quiz_kp = ?';
+                    $params = [(int) $data['subj_id'], $kp];
+                    if ($diff !== '') {
+                        $sql .= ' AND quiz_diff = ?';
+                        $params[] = $diff;
+                    }
+                    $have = (int) (\Core\Database::fetch($sql, $params)['c'] ?? 0);
+                    if ($have < $need) {
+                        $shortfall[] = sprintf(
+                            '知识点「%s」(%s)：题库有 %d 道，需要 %d 道',
+                            $kp,
+                            $diff === '' ? '不限难度' : (Quiz::DIFF_LABELS[$diff] ?? $diff),
+                            $have,
+                            $need
+                        );
+                    }
+                }
+                if ($shortfall !== []) {
+                    throw new HttpException(400, '题库题量不足：' . implode('；', $shortfall), 40005, $shortfall);
+                }
+            }
+        } else {
+            if (Exam::totalQuestions($data) <= 0) {
+                throw new HttpException(400, '请至少配置一道题目的抽题数量', 40003);
+            }
+            foreach (Exam::TYPE_PREFIXES as $type) {
+                $n = $data["{$type}_easy_sum"] + $data["{$type}_mid_sum"] + $data["{$type}_hard_sum"];
+                if ($n > 0 && (int) $data["{$type}_val"] <= 0) {
+                    throw new HttpException(400, sprintf(
+                        '%s 已配置抽题数量，但每题分值必须大于 0',
+                        Quiz::TYPE_LABELS[$type] ?? $type
+                    ), 40004);
+                }
+            }
+            if ($strictStock) {
+                $stock = Exam::checkStock($data);
+                if (!$stock['ok']) {
+                    throw new HttpException(
+                        400,
+                        '题库题量不足：' . implode('；', array_map(
+                            static fn (array $s): string => sprintf(
+                                '%s(%s)：题库有 %d 道，需要 %d 道',
+                                Quiz::TYPE_LABELS[$s['type']] ?? $s['type'],
+                                Quiz::DIFF_LABELS[$s['diff']] ?? $s['diff'],
+                                $s['have'],
+                                $s['need']
+                            ),
+                            $stock['shortfall']
+                        )),
+                        40005,
+                        $stock['shortfall']
+                    );
+                }
             }
         }
+    }
 
-        if ($strictStock) {
-            $stock = Exam::checkStock($data);
-            if (!$stock['ok']) {
-                throw new HttpException(
-                    400,
-                    '题库题量不足：' . implode('；', array_map(
-                        static fn (array $s): string => sprintf(
-                            '%s(%s)：题库有 %d 道，需要 %d 道',
-                            Quiz::TYPE_LABELS[$s['type']] ?? $s['type'],
-                            Quiz::DIFF_LABELS[$s['diff']] ?? $s['diff'],
-                            $s['have'],
-                            $s['need']
-                        ),
-                        $stock['shortfall']
-                    )),
-                    40005,
-                    $stock['shortfall']
+    /** 保存/更新后固化组卷模式明细（手动选题 / 按知识点计划） */
+    private function persistPaperMode(int $examId, array $data): void
+    {
+        $mode = (string) ($data['paper_mode'] ?? 'random');
+        if ($mode === 'manual') {
+            \Core\Database::query('DELETE FROM `exam_manual_quiz` WHERE exam_id = ?', [$examId]);
+            $ids = array_values(array_unique($data['_manual_ids'] ?? []));
+            foreach ($ids as $i => $qid) {
+                \Core\Database::query(
+                    'INSERT INTO `exam_manual_quiz` (exam_id, quiz_id, sort) VALUES (?, ?, ?)
+                     ON DUPLICATE KEY UPDATE sort = VALUES(sort)',
+                    [$examId, (int) $qid, $i]
                 );
             }
+        } elseif ($mode === 'by_kp') {
+            \Core\Database::query('DELETE FROM `exam_kp_plan` WHERE exam_id = ?', [$examId]);
+            $plan = $data['_kp_plan'] ?? [];
+            foreach ($plan as $i => $p) {
+                $cnt = (int) ($p['cnt'] ?? 0);
+                if ($cnt <= 0) {
+                    continue;
+                }
+                \Core\Database::query(
+                    'INSERT INTO `exam_kp_plan` (exam_id, kp, diff, cnt, sort) VALUES (?, ?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE cnt = VALUES(cnt), sort = VALUES(sort)',
+                    [$examId, (string) ($p['kp'] ?? ''), (string) ($p['diff'] ?? ''), $cnt, $i]
+                );
+            }
+        } else {
+            \Core\Database::query('DELETE FROM `exam_manual_quiz` WHERE exam_id = ?', [$examId]);
+            \Core\Database::query('DELETE FROM `exam_kp_plan` WHERE exam_id = ?', [$examId]);
         }
+    }
+
+    /** 保存/更新后回填准确满分 */
+    private function recomputeScore(int $examId, array $data): void
+    {
+        $score = Exam::computedTotalScore($data);
+        if ($score > 0) {
+            \Core\Database::query('UPDATE `examinfo` SET exam_score = ? WHERE id = ?', [$score, $examId]);
+        }
+    }
+
+    /** 将 input 解析为整数列表（兼容数组或 JSON 字符串） */
+    private function parseIntList(mixed $raw): array
+    {
+        if (is_string($raw)) {
+            $dec = json_decode($raw, true);
+            if (is_array($dec)) {
+                $raw = $dec;
+            }
+        }
+        if (!is_array($raw)) {
+            return [];
+        }
+        return array_values(array_filter(array_map('intval', $raw), static fn (int $i): bool => $i > 0));
+    }
+
+    /** 将 input 解析为知识点计划列表 */
+    private function parseKpPlan(mixed $raw): array
+    {
+        if (is_string($raw)) {
+            $dec = json_decode($raw, true);
+            if (is_array($dec)) {
+                $raw = $dec;
+            }
+        }
+        if (!is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        foreach ($raw as $p) {
+            if (!is_array($p)) {
+                continue;
+            }
+            $kp = trim((string) ($p['kp'] ?? ''));
+            $cnt = (int) ($p['cnt'] ?? 0);
+            if ($kp === '' || $cnt <= 0) {
+                continue;
+            }
+            $out[] = ['kp' => $kp, 'diff' => trim((string) ($p['diff'] ?? '')), 'cnt' => $cnt];
+        }
+        return $out;
+    }
+
+    /** GET /api/admin/exams/{id}/analysis —— 成绩与学情分析（A2） */
+    public function analysis(): Response
+    {
+        $this->authAdmin();
+        $id = $this->idParam();
+        if ($this->model->find($id) === null) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+
+        $passLine      = (int) $this->request->query('pass_line', 60);
+        $excellentLine = (int) $this->request->query('excellent_line', 85);
+        $weakLimit     = (int) $this->request->query('weak_limit', 10);
+
+        return $this->ok(ScoreAnalysis::analyze($id, $passLine, $excellentLine, $weakLimit));
+    }
+
+    /** GET /api/admin/quiz-search —— 手动选题：题库检索 */
+    public function quizSearch(): Response
+    {
+        $this->authAdmin();
+        $subjId = (int) $this->request->query('subj_id', 0);
+        $class   = trim((string) $this->request->query('quiz_class', ''));
+        $kp      = trim((string) $this->request->query('quiz_kp', ''));
+        $keyword = trim((string) $this->request->query('keyword', ''));
+        $p = $this->page();
+
+        $where = ['q.subj_id = ?'];
+        $params = [$subjId];
+        if ($class !== '') {
+            $where[] = 'q.quiz_class = ?';
+            $params[] = $class;
+        }
+        if ($kp !== '') {
+            $where[] = 'q.quiz_kp = ?';
+            $params[] = $kp;
+        }
+        if ($keyword !== '') {
+            $where[] = '(q.quiz_title LIKE ? OR q.quiz_key LIKE ?)';
+            $kw = '%' . addcslashes($keyword, '%_\\') . '%';
+            $params[] = $kw;
+            $params[] = $kw;
+        }
+        $sqlWhere = implode(' AND ', $where);
+
+        $total = (int) (\Core\Database::fetch("SELECT COUNT(*) AS c FROM `quizlib` q WHERE {$sqlWhere}", $params)['c'] ?? 0);
+        $rows = \Core\Database::fetchAll(
+            "SELECT q.id, q.quiz_title, q.quiz_class, q.quiz_diff, q.quiz_kp, q.quiz_option, s.subj_name
+             FROM `quizlib` q INNER JOIN `subject` s ON s.id = q.subj_id
+             WHERE {$sqlWhere} ORDER BY q.id DESC LIMIT {$p['per_page']} OFFSET {$p['offset']}",
+            $params
+        );
+        foreach ($rows as &$r) {
+            $r['quiz_type_label']  = Quiz::TYPE_LABELS[$r['quiz_class']] ?? '';
+            $r['quiz_diff_label']  = Quiz::DIFF_LABELS[$r['quiz_diff']] ?? '';
+            $r['quiz_option_list'] = Quiz::parseOptions((string) ($r['quiz_option'] ?? ''));
+            unset($r['quiz_option']);
+        }
+        unset($r);
+
+        return $this->ok([
+            'list'        => $rows,
+            'total'       => $total,
+            'page'        => $p['page'],
+            'per_page'    => $p['per_page'],
+            'total_pages' => (int) ceil($total / max(1, $p['per_page'])),
+        ]);
+    }
+
+    /** GET /api/admin/quiz-kps —— 某科目下的知识点列表与可用题量 */
+    public function quizKps(): Response
+    {
+        $this->authAdmin();
+        $subjId = (int) $this->request->query('subj_id', 0);
+        $rows = \Core\Database::fetchAll(
+            "SELECT quiz_kp, COUNT(*) AS c FROM `quizlib` WHERE subj_id = ? AND quiz_kp <> '' GROUP BY quiz_kp ORDER BY quiz_kp",
+            [$subjId]
+        );
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = ['kp' => (string) $r['quiz_kp'], 'count' => (int) $r['c']];
+        }
+        return $this->ok(['list' => $out]);
     }
 
     /** 表单下拉选项 */
