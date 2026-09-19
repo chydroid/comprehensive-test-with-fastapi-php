@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Exam;
+use App\Services\Grading\GraderFactory;
 use Core\Database;
 
 /**
@@ -130,6 +131,72 @@ final class SubjectiveGrading
             'graded'     => $graded,
             'pending'    => count($items) - $graded,
             'breakdown'  => ExamEngine::scoreBreakdown($examId, $stuId),
+        ];
+    }
+
+    /**
+     * C4：为某考生**尚未批阅**的主观题生成建议分。
+     *
+     * 三条刻意的设计约束：
+     *  1. **只读**：本方法不写任何一行数据。建议分必须经教师在批阅页确认保存
+     *     （走 grade()）才生效 —— AI 永远不能直接改成绩。
+     *  2. **只处理未批阅题**：已批阅的题目教师已有判断，再给建议只会造成干扰，
+     *     也会白白消耗外部模型调用额度。
+     *  3. **逐题降级**：某一题远程模型失败不影响其余题目，degraded 标记让前端
+     *     能如实标注建议来源，而不是让教师误以为全部来自模型。
+     *
+     * @return array{provider:array,full_score:int,items:array,applicable:int,skipped_graded:int,truncated:bool}
+     */
+    public static function suggest(int $examId, string $stuId): array
+    {
+        $paper = self::paper($examId, $stuId);
+        $full = (int) $paper['full_score'];
+        $limit = Setting::int('ai_grading_max_items', 50);
+
+        $items = [];
+        $graded = 0;
+        $truncated = false;
+        foreach ($paper['items'] as $r) {
+            if (!empty($r['graded'])) {
+                $graded++;
+                continue;
+            }
+            if (count($items) >= $limit) {
+                $truncated = true;
+                continue;
+            }
+
+            $s = GraderFactory::suggest([
+                'paper_id'   => (int) ($r['paper_id'] ?? 0),
+                'title'      => (string) ($r['quiz_title'] ?? ''),
+                'reference'  => (string) ($r['quiz_key'] ?? ''),
+                'answer'     => (string) ($r['stu_key'] ?? ''),
+                'full_score' => $full,
+                'type'       => (string) ($r['quiz_class'] ?? ''),
+            ]);
+
+            $items[] = [
+                'paper_id'       => (int) ($r['paper_id'] ?? 0),
+                'quiz_title'     => (string) ($r['quiz_title'] ?? ''),
+                'answer'         => (string) ($r['stu_key'] ?? ''),
+                'score'          => $s['score'],
+                'confidence'     => $s['confidence'],
+                'reason'         => $s['reason'],
+                'hits'           => $s['hits'],
+                'missing'        => $s['missing'],
+                'provider'       => $s['provider'],
+                'provider_label' => $s['provider_label'],
+                'degraded'       => (bool) ($s['degraded'] ?? false),
+            ];
+        }
+
+        return [
+            'provider'        => GraderFactory::providerInfo(),
+            'full_score'      => $full,
+            'items'           => $items,
+            'applicable'      => count($items),
+            'skipped_graded'  => $graded,
+            'truncated'       => $truncated,
         ];
     }
 

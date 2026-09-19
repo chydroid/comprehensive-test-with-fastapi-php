@@ -138,6 +138,8 @@ return [
             // 与 student.* 对齐：既能查看也需要维护授课教师
             'teacher.view', 'teacher.add', 'teacher.edit', 'teacher.delete',
             'news.view',
+            // C3 学习资料库：testAdmin 负责教学资料的维护（与其「考试/教学相关」定位一致）
+            'material.view', 'material.add', 'material.delete',
             // 兜底权限点：所有管理端接口都要求的最小权限（见 SessionAuthMiddleware）
             'admin.access',
         ],
@@ -193,6 +195,15 @@ return [
             'image/gif'  => 'gif',
             'image/webp' => 'webp',
             'image/bmp'  => 'bmp',
+        ],
+        // C3 学习资料库：课件文档单独一套上限与白名单。
+        // 文档不是图片，不能走 getimagesize 校验；但若不加限制，任何人都能往
+        // public/uploads 里扔 .php 并直接执行 —— 因此这里只放行「浏览器不会
+        // 当作脚本执行」的文档/压缩包类型，且保存时用随机文件名 + 固定扩展名。
+        'doc_max_bytes' => (int) env('UPLOAD_DOC_MAX_BYTES', 20971520), // 20MB
+        'allowed_doc_ext' => [
+            'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+            'txt', 'md', 'csv', 'zip', 'rar', '7z', 'mp4', 'mp3',
         ],
     ],
 ];

@@ -13,6 +13,7 @@ import { withLoading } from '../../core/bootstrap.js';
 import { studentApi } from '../../api/index.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtDate } from '../../core/format.js';
 import { passwordHintText, appSettingInt } from '../../core/app-settings.js';
+import { openSurveyForm } from './survey.js';
 
 /** 考场状态 → 文案/色调 */
 export const STU_STATUS = {
@@ -66,14 +67,29 @@ export function StudentScoresView() {
           key: 'op',
           title: '操作',
           align: 'center',
-          // 成绩榜入口只在「本场对本班/全体公示」且考试已结束时才有意义；
-          // can_view_board 由服务端按 score_visibility 计算后下发，前端不重算。
-          render: (r) => (r.can_view_board && String(r.stu_status || '').startsWith('over')
-            ? button('成绩榜', {
+          // 操作列可能有多个入口，因此是「按钮组」而不是单个按钮：
+          // 成绩榜入口只在「本场对本班/全体公示」且考试已结束时才有意义
+          // （can_view_board 由服务端按 score_visibility 计算后下发，前端不重算）；
+          // 考后反馈入口由 has_survey 下发，同样要求已交卷。
+          render: (r) => {
+            const finished = String(r.stu_status || '').startsWith('over');
+            const btns = [];
+            if (r.can_view_board && finished) {
+              btns.push(button('成绩榜', {
                 variant: 'ghost', size: 'sm', iconName: 'chart',
                 onClick: () => openScoreBoard(r),
-              })
-            : el('span.c-tertiary.fs-xs', { text: '—' })),
+              }));
+            }
+            if (r.has_survey && finished) {
+              btns.push(button('反馈', {
+                variant: 'ghost', size: 'sm', iconName: 'help-circle',
+                onClick: () => openSurveyForm(Number(r.exam_id), r.exam_name),
+              }));
+            }
+            return btns.length
+              ? el('div.flex.gap-2.justify-center', {}, btns)
+              : el('span.c-tertiary.fs-xs', { text: '—' });
+          },
         },
       ],
       rows,

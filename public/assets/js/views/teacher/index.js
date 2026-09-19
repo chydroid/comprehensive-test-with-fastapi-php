@@ -14,6 +14,7 @@ import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
 import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
 import { openRetakeDialog, retakeBadge } from '../retake.js';
+import { openSurveyDialog } from '../survey.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtRelative } from '../../core/format.js';
 import { loadAppSettings, appSettingInt, entryWindowText } from '../../core/app-settings.js';
 
@@ -148,6 +149,13 @@ export function TeacherExamsView({ router }) {
                     api: teacherApi,
                     onDone: () => load(),
                   }),
+                })
+              : null,
+            // C5 问卷：同样只对已结束场次开放（考生交卷后才能填）
+            st.startsWith('over')
+              ? button('问卷', {
+                  variant: 'ghost', size: 'xs', iconName: 'help-circle',
+                  onClick: () => openSurveyDialog(r.id, r.exam_name, () => load()),
                 })
               : null,
             notTesting

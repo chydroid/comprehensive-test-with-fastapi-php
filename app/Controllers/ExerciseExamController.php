@@ -8,6 +8,7 @@ use App\Models\Exam;
 use App\Models\Quiz;
 use App\Models\Subject;
 use App\Services\ExamEngine;
+use App\Services\Setting;
 use App\Services\WrongBook;
 use Core\Database;
 use Core\HttpException;
@@ -181,8 +182,10 @@ class ExerciseExamController extends BaseController
         $examId  = 0;
         Database::beginTransaction();
         try {
-            // 事务内复检：两次请求几乎同时通过预检时，把上限守住（降低并发双开概率）。
-            if (Exam::mockUsedToday($stuId) >= $dailyLimit) {
+            // 事务内改走**命名锁 + 当前读计数**（见 Exam::mockConsumeQuota）：
+            // 单纯复检 COUNT 在 RR 隔离级别下读到的是快照，并发请求会同时通过，
+            // 上限守不住。锁把「检查 + 建场」整段临界区串行化。
+            if (!Exam::mockConsumeQuota($stuId)) {
                 throw new HttpException(
                     429,
                     "你今天的模拟考试场次已用完（每日上限 {$dailyLimit} 场），请明天再试",
@@ -226,6 +229,21 @@ class ExerciseExamController extends BaseController
                 Database::rollBack();
             }
             throw $e;
+        } finally {
+            // 配额锁不随事务结束自动释放，必须在提交/回滚之后显式释放。
+            // 放在 finally 里，任何异常路径都不会把锁留到连接关闭。
+            Exam::mockReleaseQuota($stuId);
+        }
+
+        // 惰性清理过期的模拟考试：项目没有常驻定时任务，借这次创建顺带清一次。
+        // 清理失败绝不能影响刚创建好的这场考试，因此旁路吞掉异常。
+        $retention = Setting::int('mock_retention_days', 0);
+        if ($retention > 0) {
+            try {
+                Exam::purgeMocks($retention);
+            } catch (\Throwable $e) {
+                error_log('[mock] purge failed: ' . $e->getMessage());
+            }
         }
 
         return $this->ok([

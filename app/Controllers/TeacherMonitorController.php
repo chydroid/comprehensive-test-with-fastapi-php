@@ -56,8 +56,17 @@ class TeacherMonitorController extends BaseController
             );
             foreach ($exams as &$e) {
                 Exam::autoStartIfDue((int) $e['id']);
-                $e['exam_status']    = (string) ((new Exam())->find((int) $e['id'])['exam_status'] ?? $e['exam_status']);
-                $e['status_summary'] = (new Exam())->statusSummary((int) $e['id']);
+            }
+            unset($e);
+
+            // 流转完成后一次性取回状态与统计（BUG-220）：原本每场各 2 次查询
+            $ids = array_map(static fn (array $e): int => (int) $e['id'], $exams);
+            $statusMap = Exam::statusMap($ids);
+            $summaries = Exam::statusSummaries($ids);
+            foreach ($exams as &$e) {
+                $id = (int) $e['id'];
+                $e['exam_status']    = $statusMap[$id] ?? $e['exam_status'];
+                $e['status_summary'] = $summaries[$id] ?? ['total' => 0, 'online' => 0, 'locked' => 0, 'waiting' => 0, 'over' => 0];
             }
             unset($e);
             return $this->ok(['exams' => $exams, 'exam_id' => 0]);

@@ -24,6 +24,7 @@ use App\Controllers\Admin\ConfigController;
 use App\Controllers\Admin\DashboardController;
 use App\Controllers\Admin\ExamCategoryController;
 use App\Controllers\Admin\ExamController;
+use App\Controllers\Admin\MaterialController;
 use App\Controllers\Admin\GradeController;
 use App\Controllers\Admin\MonitorController;
 use App\Controllers\Admin\NewsController;
@@ -48,6 +49,7 @@ use App\Controllers\StudentWrongBookController;
 use App\Controllers\TeacherAuthController;
 use App\Controllers\TeacherExamController;
 use App\Controllers\TeacherGradingController;
+use App\Controllers\TeacherSurveyController;
 use App\Controllers\TeacherMonitorController;
 use Core\Request;
 use Core\Response;
@@ -106,6 +108,12 @@ return [
     /* ==================== 成绩公示（文档 B4） ==================== */
     // 可见范围由逐场 score_visibility（private/class/public）决定，判定只在 ScoreBoard 一处
     ['GET',  '/api/student/score-board',   [StudentCenterController::class, 'scoreBoard']],
+    // C5 考后问卷：考生端（只读本场题目 + 提交自己的反馈）
+    ['GET',  '/api/student/survey',        [StudentCenterController::class, 'survey']],
+    ['POST', '/api/student/survey',        [StudentCenterController::class, 'submitSurvey']],
+    // C3 学习资料库（考生端：浏览 + 记浏览量）
+    ['GET',  '/api/student/materials',           [StudentCenterController::class, 'materials']],
+    ['POST', '/api/student/materials/{id}/hit',  [StudentCenterController::class, 'materialHit']],
 
     /* ==================== 电子证书（C1） ==================== */
     // 静态段在前：/certificates 不能被 /certificates/{examId} 抢先匹配
@@ -184,7 +192,12 @@ return [
     ['GET',  '/api/teacher/exams/{id}/subjective', [TeacherGradingController::class, 'index']],
     ['GET',  '/api/teacher/exams/{id}/subjective/{stuId}', [TeacherGradingController::class, 'show']],
     ['POST', '/api/teacher/exams/{id}/subjective/{stuId}', [TeacherGradingController::class, 'grade']],
+    // C4 AI 阅卷建议：只产出建议分，写入仍走 grade()
+    ['POST', '/api/teacher/exams/{id}/subjective/{stuId}/suggest', [TeacherGradingController::class, 'suggest']],
     ['POST', '/api/teacher/exams/{id}/subjective/{stuId}/revoke', [TeacherGradingController::class, 'revoke']],
+    // C5 考后问卷：教师端配置与统计
+    ['GET',  '/api/teacher/exams/{id}/survey', [TeacherSurveyController::class, 'show']],
+    ['PUT',  '/api/teacher/exams/{id}/survey', [TeacherSurveyController::class, 'save']],
     // A3 组卷多样化：手动选题题库检索、知识点清单
     ['GET',  '/api/teacher/quiz-search',   [TeacherExamController::class, 'quizSearch']],
     ['GET',  '/api/teacher/quiz-kps',      [TeacherExamController::class, 'quizKps']],
@@ -316,6 +329,11 @@ return [
 
     /* ---------- 上传 ---------- */
     ['POST', '/api/admin/upload/pic',      [UploadController::class, 'picUpload']],
+    // C3 学习资料库（管理端）
+    ['GET',    '/api/admin/materials',         [MaterialController::class, 'index']],
+    ['POST',   '/api/admin/materials',         [MaterialController::class, 'save']],
+    ['POST',   '/api/admin/materials/upload',  [MaterialController::class, 'upload']],
+    ['DELETE', '/api/admin/materials/{id}',    [MaterialController::class, 'delete']],
 
     /* ---------- 系统管理（systemAdmin） ---------- */
     ['GET',  '/api/admin/system',          [SystemController::class, 'index']],

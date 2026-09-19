@@ -112,6 +112,31 @@ class TeacherGradingController extends BaseController
         return $this->ok($result + ['stu_id' => $stuId], '批阅已保存');
     }
 
+    /**
+     * POST /api/teacher/exams/{id}/subjective/{stuId}/suggest —— C4 建议分。
+     *
+     * 用 POST 而非 GET：本接口可能触发外部模型调用（有费用、有副作用配额），
+     * 用 GET 会被浏览器预取、爬虫、缓存中间件无意间重复触发。
+     *
+     * 只产出建议，不写库 —— 落分必须走 grade()。
+     */
+    public function suggest(): Response
+    {
+        $exam = $this->assertOwnExam($this->idParam());
+        $stuId = $this->stuIdParam();
+
+        $result = SubjectiveGrading::suggest((int) $exam['id'], $stuId);
+
+        $this->audit('exam.grade.suggest', 'exam:' . $exam['id'], [
+            'actor'    => 'teacher',
+            'stu_id'   => $stuId,
+            'provider' => $result['provider']['key'] ?? '',
+            'items'    => $result['applicable'],
+        ]);
+
+        return $this->ok($result + ['stu_id' => $stuId]);
+    }
+
     /** POST /api/teacher/exams/{id}/subjective/{stuId}/revoke */
     public function revoke(): Response
     {

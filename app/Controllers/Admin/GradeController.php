@@ -44,12 +44,16 @@ class GradeController extends BaseController
             $total = $result['total'];
         }
 
-        // 附带每个单位下的考生数，便于前端提示「不可删除」
+        // 附带每个单位下的考生数，便于前端提示「不可删除」。
+        // 一次聚合代替逐行 COUNT（BUG-220）
+        $stuCount = [];
+        foreach (\Core\Database::fetchAll(
+            'SELECT grade_id, COUNT(*) AS c FROM `stuinfo` GROUP BY grade_id'
+        ) as $r) {
+            $stuCount[(string) $r['grade_id']] = (int) $r['c'];
+        }
         foreach ($list as &$row) {
-            $row['stu_count'] = (int) (\Core\Database::fetch(
-                'SELECT COUNT(*) AS c FROM `stuinfo` WHERE grade_id = ?',
-                [(string) $row['id']]
-            )['c'] ?? 0);
+            $row['stu_count'] = $stuCount[(string) $row['id']] ?? 0;
         }
         unset($row);
 

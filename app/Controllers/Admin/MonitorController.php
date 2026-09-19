@@ -38,7 +38,10 @@ class MonitorController extends BaseController
 
         if ($examId <= 0) {
             // 仅列出仍在流程中的考试（未开考/已排卷/进行中）
-            $rows = [];
+            // 两轮处理：先让所有场次完成惰性流转，再一次性取回状态与统计。
+            // 逐场「find + statusSummary」曾让这个列表在考试多时打出上百次查询
+            // （BUG-220），而状态必须在流转**之后**读，所以只能整体后移而不是提前聚合。
+            $kept = [];
             foreach ((new Exam())->adminList(['status' => ''], 0, 200)['data'] as $e) {
                 if (in_array((string) $e['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER, Exam::STATUS_TESTING], true)) {
                     // 到点惰性自动结束：过期考场立刻收敛为 over 并从这里消失，
@@ -48,10 +51,20 @@ class MonitorController extends BaseController
                     }
                     // 到点惰性自动开考
                     Exam::autoStartIfDue((int) $e['id']);
-                    $e['exam_status']    = (string) ((new Exam())->find((int) $e['id'])['exam_status'] ?? $e['exam_status']);
-                    $e['status_summary'] = (new Exam())->statusSummary((int) $e['id']);
-                    $rows[] = $e;
+                    $kept[] = $e;
                 }
+            }
+
+            $ids = array_map(static fn (array $e): int => (int) $e['id'], $kept);
+            $statusMap = Exam::statusMap($ids);
+            $summaries = Exam::statusSummaries($ids);
+
+            $rows = [];
+            foreach ($kept as $e) {
+                $id = (int) $e['id'];
+                $e['exam_status']    = $statusMap[$id] ?? $e['exam_status'];
+                $e['status_summary'] = $summaries[$id] ?? ['total' => 0, 'online' => 0, 'locked' => 0, 'waiting' => 0, 'over' => 0];
+                $rows[] = $e;
             }
             return $this->ok(['exams' => $rows, 'exam_id' => 0]);
         }

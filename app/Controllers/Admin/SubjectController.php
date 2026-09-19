@@ -48,17 +48,24 @@ class SubjectController extends BaseController
             $total = $result['total'];
         }
 
-        // 附带题量与考试数，便于前端提示
+        // 附带题量与考试数，便于前端提示。
+        // 两张表各一次 GROUP BY 代替每科目两次 COUNT（BUG-220）
+        $quizCount = [];
+        foreach (\Core\Database::fetchAll(
+            'SELECT subj_id, COUNT(*) AS c FROM `quizlib` GROUP BY subj_id'
+        ) as $r) {
+            $quizCount[(int) $r['subj_id']] = (int) $r['c'];
+        }
+        $examCount = [];
+        foreach (\Core\Database::fetchAll(
+            'SELECT subj_id, COUNT(*) AS c FROM `examinfo` GROUP BY subj_id'
+        ) as $r) {
+            $examCount[(int) $r['subj_id']] = (int) $r['c'];
+        }
         foreach ($list as &$row) {
             $sid = (int) $row['id'];
-            $row['quiz_count'] = (int) (\Core\Database::fetch(
-                'SELECT COUNT(*) AS c FROM `quizlib` WHERE subj_id = ?',
-                [$sid]
-            )['c'] ?? 0);
-            $row['exam_count'] = (int) (\Core\Database::fetch(
-                'SELECT COUNT(*) AS c FROM `examinfo` WHERE subj_id = ?',
-                [$sid]
-            )['c'] ?? 0);
+            $row['quiz_count'] = $quizCount[$sid] ?? 0;
+            $row['exam_count'] = $examCount[$sid] ?? 0;
         }
         unset($row);
 

@@ -46,9 +46,9 @@
 |---|---|---|---|
 | C1 | **电子证书** | 考后按阈值自动发放/下载成绩证书 | 教学考核场景加分，成本低 | **✅ 已完成（2026-09-19）** |
 | C2 | **补考 / 重考机制** | 针对未通过者开放二次考核入口 | 教学闭环有用，中等成本 | **✅ 已完成（2026-09-19）** |
-| C3 | **培训学习模块（课件/学习计划/课程库）** | 偏 LMS，含视频/音频/附件 | 可能超出「理论考核」定位，慎重 |
-| C4 | **AI 组卷 / AI 阅卷** | 引入大模型辅助命题与主观题评分 | 成本高、依赖外部 API，远期 |
-| C5 | **考后问卷 / 留言互动** | 收集考试难度反馈、师生答疑 | 轻量，可选 |
+| C3 | **培训学习模块（课件/学习计划/课程库）** | 偏 LMS，含视频/音频/附件 | 可能超出「理论考核」定位，慎重 | **✅ 已完成轻量版（2026-09-20）**：只做资料库上传/登记/浏览/下载，**不做**课程与学习进度 |
+| C4 | **AI 组卷 / AI 阅卷** | 引入大模型辅助命题与主观题评分 | 成本高、依赖外部 API，远期 | **✅ 阅卷已完成（2026-09-20）**：可插拔 provider + 本地启发式兜底，只给建议分；**AI 组卷未做** |
+| C5 | **考后问卷 / 留言互动** | 收集考试难度反馈、师生答疑 | 轻量，可选 | **✅ 已完成（2026-09-20）**：评分/单选/简答三题型 + 回收统计 |
 
 ---
 
@@ -413,3 +413,99 @@
 | 浏览器巡检 | `browser_sweep_v6.mjs` **130 PASS / 0 FAIL**，新增 D4（编辑器公示/证书字段三选项）与 D5（公开核验未知编号提示）探针，并把 `#/verify`、`#/certificates` 纳入路由巡检 |
 | 静态检查 | `check_frontend.mjs` 0 语法错误 / 0 未解析导入；`check_icons.py` 88 图标无非法引用；`api_route_audit.mjs` 前端 172 调用全部有路由 |
 
+
+---
+
+## 第十六轮（2026-09-20）：C4 AI 阅卷辅助 / C5 考后问卷 / C3 学习资料库 / 工程健壮性收尾
+
+### ✅ C4 AI 阅卷辅助（可插拔适配器，本地启发式兜底）
+
+**核心决策：AI 只「建议」，绝不直接落分；且本地启发式永远可用。**
+
+外部大模型 API 会超时、会改版、会欠费。若把批改进度挂在它身上，一次故障就会让教师无法阅卷。
+因此做成**双 provider + 静默降级**：
+
+| provider | 触发条件 | 说明 |
+|---|---|---|
+| `RemoteGrader` | 已启用且配置了 endpoint/model/key | OpenAI 兼容 `/chat/completions`，逐题请求，JSON 抽取后把分数夹到 `[0, 满分]` |
+| `HeuristicGrader` | 远程不可用 / 单题失败 | 纯本地：关键词命中 + 要点覆盖 + 长度合理性，**永远返回一个可用分数** |
+
+- `GraderFactory::select()` 先试远程，任一题抛错即对**该题**降级回启发式并标记 `degraded:true`，
+  不让一题的失败拖垮整份卷；
+- 建议接口是**只读**的：只返回 `suggest_score` 与理由，落分仍然走既有的 `grade()`。
+  AI 可以错，人的确认不能省；
+- `provider` 信息随结果下发，前端据此标注「本条建议来自本地启发式」，避免教师误以为是大模型结论。
+
+**启发式评分的两处坑（实测踩过并修）**：
+1. 归一化顺序错了 —— 先剥掉标点再按标点切关键词，结果「一整句」被当成「一个关键词」，
+   关键词覆盖率虚低。改为**先按标点切、再归一化**；
+2. ASCII 术语（如 `SYN`/`ACK`）参与中文二元组匹配时永远命中不了。改为
+   **ASCII 整词匹配**与**中文二元组覆盖**分开算，各计各的分。
+
+**验证**：`ai_grading_test.php` **55 PASS / 0 FAIL**（schema 含 string/secret 类型、密钥不下发到公开接口、
+suggest 只取未批且受 `max_items` 限制、远程失败逐题降级、抄袭标题识别、换措辞仍得分、满分封顶、权限守卫）。
+
+### ✅ C5 考后问卷（评分 / 单选 / 简答）
+
+**核心决策：题目改动即作废旧答案；统计分母只算已交卷考生。**
+
+- 保存题目会**清空本场已有作答**——题都换了，旧答案留着就是脏数据；
+- 一人一题一答靠 `UNIQUE(question_id, stu_id)` + UPSERT，重复提交算修改、不重复计数；
+- 必填校验**遍历题目**而不是遍历提交上来的答案，否则「整题不提交」会静默绕过必填；
+- 选项归一化：不在题目配置里的选项一律丢弃，且**归一化为空时跳过写入**（否则会把已有答案覆盖成空串）；
+- 统计按题型分流：评分题给均值 + 1–5 分分布条，单选题给选项占比，文本题逐条列原文（聚合无意义）。
+
+**验证**：`survey_material_test.php` 中 C5 部分（未登录 401 / 非本场考生不可见 / 未交卷不可见 /
+必填拦截 / 非法选项丢弃 / 重复提交不重复计数 / 改题后旧答案作废 / 统计分母只算交卷考生 / 越权 404）。
+
+### ✅ C3 学习资料库（轻量版：不做 LMS）
+
+**范围界定：只做「上传—登记—浏览—下载」，不做课程、学习计划、学习进度。**
+那套是 LMS，会偏离「理论考核系统」的定位，也会把权限模型拖复杂。
+
+- 上传与登记**分两步**：先选文件拿到 URL，再补标题/科目/分类保存。合成一步的话，
+  「只登记一个外链、不上传文件」这种常见做法无从表达，而且上传失败会把整张表单一起丢掉；
+- 落盘文件名**随机生成**（原始名只作为展示名入库），防止 `.php` 之类的可执行文件上传；
+- 外链 URL 做协议白名单，拒绝 `javascript:` / `data:` / `file:`，避免前端点击即 XSS；
+- 权限点 `material.view` / `material.add` / `material.delete` 已登记进
+  `SessionAuthMiddleware::WRITE_POINTS`，否则写接口会落入兜底权限点导致恒定 403。
+
+**验证**：`survey_material_test.php`（C5+C3 合计 **73 PASS / 0 FAIL**）。
+
+### ✅ 工程健壮性收尾（三项长期挂账）
+
+**1. N+1 查询（BUG-220）** —— 班级/年级/科目/考试类别/监考列表原本逐行查库。
+改为单条 `GROUP BY` 聚合后批量回填；监考与考生端用新增的
+`Exam::statusMap()` / `Exam::statusSummaries()` 一次取回。
+
+> 断言方式刻意**不数查询次数**（太脆），而是断言「批量聚合的结果 == 逐行查的结果」。
+> 这样即使将来有人改回逐行查，数据不一致也会立刻被抓到。
+
+**2. 模拟考试每日上限（预检 + 复检 → MySQL 命名锁）** —— 原方案在极端并发下可能多放行 1 场。
+先试过加配额表 + `FOR UPDATE` 行锁，随即发现**配额表会漂移**：考试记录被删（清理/回滚）后
+计数器不会跟着减，玩家被永久卡在上限。最终改成 `GET_LOCK` / `RELEASE_LOCK` 命名锁：
+**不引入任何新状态**，只把临界区串行化，已用场次仍然现数 `examinfo` 记录，`finally` 里释放。
+
+**3. 模拟考试自动清理** —— 新增 `mock_retention_days` 设置项（默认 0 = 不清理），
+惰性清理只删**过期的模拟考试**及其答卷/成绩，正式考试与近期模拟一概不动。
+
+### 顺带修掉的基建缺陷
+
+`core/Response::emitStatus()` / `emitHeader()` 在 CLI（或任何已有输出的场景）会抛
+`http_response_code(): Cannot set response code - headers already sent`，把真正的业务异常
+埋成一条无从定位的致命错误。本次加了 `headers_sent()` 守卫：状态码是尽力而为的事，
+丢掉它远好过丢掉异常本身。
+
+### 本轮交付汇总（2026-09-20）
+
+| 项 | 内容 |
+|---|---|
+| 新增文件 | `app/Services/Grading/{GraderProvider,HeuristicGrader,RemoteGrader,GraderFactory,GraderFailureException}.php`、`app/Services/{Survey,Material}.php`、`app/Controllers/Admin/MaterialController.php`、`app/Controllers/TeacherSurveyController.php`、`public/assets/js/views/{survey,admin/material,student/material,student/survey}.js`、`db/add_survey_material.sql`、`test/cases/{ai_grading,survey_material,robustness}_test.php`、`temp/domtest/c3c4c5_smoke.mjs` |
+| 单元测试 | `ai_grading_test.php` **55 PASS**；`survey_material_test.php` **73 PASS**；`robustness_test.php` **34 PASS** |
+| 全量回归 | **1576 PASS / 0 FAIL / 1 SKIP**（零回归） |
+| 浏览器巡检 | `browser_sweep_v6.mjs` **130 PASS / 0 FAIL**；新增 `c3c4c5_smoke.mjs` **26 PASS / 0 FAIL** |
+| 静态检查 | `check_frontend.mjs` 53 文件 0 语法错误 / 0 未解析导入；`check_icons.py` 88 图标无非法引用；`api_route_audit.mjs` 前端 182 调用全部有路由 |
+
+> 巡检踩坑记录（复现过，别再踩）：**上一轮的 dev server 若没被 kill，会一直占着 8099**，
+> 新起的 server 静默失败、所有请求打到旧进程，表现为「全站 404」的假故障。
+> 跑浏览器巡检前先 `netstat -ano | grep 8099` 确认端口干净。

@@ -164,6 +164,18 @@ export function ConfigView() {
         const sw = switchToggle('', { name: f.key, checked: Number(f.value) === 1 });
         node = el('div.flex.items-center', { style: { height: '38px' } }, [sw]);
         ctl[f.key] = { type: 'bool', input: sw.querySelector('input') };
+      } else if (f.type === 'string') {
+        // secret 项用密码框：API Key 不该在屏幕上明文铺开（尤其是共享屏幕的场景）。
+        // 值本身仍由服务端原样下发，管理员需要能核对填的是不是自己那一把钥匙。
+        const box = input({
+          name: f.key, type: f.secret ? 'password' : 'text',
+          value: f.value ?? '', maxlength: f.max || '',
+          placeholder: f.secret ? '未配置' : '',
+          autocomplete: 'off',
+        });
+        node = box;
+        // input() 无 suffix 时直接返回 <input>，有 suffix 时返回包裹层
+        ctl[f.key] = { type: 'string', input: box.tagName === 'INPUT' ? box : box.querySelector('input'), field: f };
       } else {
         node = input({
           name: f.key, type: 'number', value: String(f.value),
@@ -171,7 +183,9 @@ export function ConfigView() {
         });
         ctl[f.key] = { type: 'int', input: node.querySelector('input'), field: f };
       }
-      form.append(field(f.label, node, { hint: f.hint }));
+      // 文本项（URL、密钥）较长，单独占满一行更好填
+      const wrapNode = field(f.label, node, { hint: f.hint });
+      form.append(f.type === 'string' ? el('div.span-2', {}, [wrapNode]) : wrapNode);
     }
 
     const saveBtn = button('保存设置', { variant: 'primary', iconName: 'save' });
@@ -180,6 +194,13 @@ export function ConfigView() {
       for (const f of fields) {
         const c = ctl[f.key];
         if (c.type === 'bool') { payload[f.key] = c.input.checked ? 1 : 0; continue; }
+        if (c.type === 'string') {
+          // 清空文本项 = 撤销覆盖（传 null 让服务端删行回落默认），而不是落一个空串行。
+          // 这样「管理员清掉 API Key」与「从未配置过」在库里的形态一致。
+          const v = String(c.input.value).trim();
+          payload[f.key] = v === '' ? null : v;
+          continue;
+        }
 
         const raw = String(c.input.value).trim();
         const n = Number(raw);

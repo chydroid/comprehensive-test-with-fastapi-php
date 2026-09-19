@@ -41,6 +41,12 @@ export const studentApi = {
   wrongBookList:     (params) => http.get('/student/wrong-book', { query: params }),
   wrongBookPractice: (params) => http.get('/student/wrong-book/practice', { query: params }),
   wrongBookCheck:    (body) => http.post('/student/wrong-book/check', body),
+  // C5 考后问卷：读取本场题目（含本人已作答）+ 提交反馈
+  survey:        (params) => http.get('/student/survey', { query: params }),
+  submitSurvey:  (body) => http.post('/student/survey', body),
+  // C3 学习资料库：考生端只读浏览 + 记一次浏览/下载
+  materialList: (params) => http.get('/student/materials', { query: params }),
+  materialHit:  (id) => http.post(`/student/materials/${id}/hit`),
 };
 
 /* ============================ 考场（正式考试） ============================ */
@@ -110,6 +116,9 @@ export const teacherApi = {
   subjectivePaper:  (id, stuId) => http.get(`/teacher/exams/${id}/subjective/${stuId}`),
   subjectiveGrade:  (id, stuId, body) => http.post(`/teacher/exams/${id}/subjective/${stuId}`, body),
   subjectiveRevoke: (id, stuId) => http.post(`/teacher/exams/${id}/subjective/${stuId}/revoke`),
+  // C5 考后问卷：教师端配置与统计
+  surveyShow: (id) => http.get(`/teacher/exams/${id}/survey`),
+  surveySave: (id, body) => http.put(`/teacher/exams/${id}/survey`, body),
 
   scores:    (params) => http.get('/teacher/scores', { query: params }),
   exportScores: (params) => download('/teacher/scores/export', { query: params }),
@@ -236,6 +245,12 @@ export const adminApi = {
   initialize:    (body) => http.post('/admin/system/initialize', body),
   clearExams:    (body) => http.post('/admin/system/clear-exams', body),
   logs:          (params) => http.get('/admin/logs', { query: params }),
+  // C3 学习资料库（管理端：元数据 CRUD + 文档上传）
+  materials:      (params) => http.get('/admin/materials', { query: params }),
+  createMaterial: (body) => http.post('/admin/materials', body),
+  deleteMaterial: (id) => http.del(`/admin/materials/${id}`),
+  // 传 FormData 时 http.js 会自动走 multipart 并带上 CSRF 头
+  uploadMaterial: (formData) => http.post('/admin/materials/upload', formData),
   // B1 防作弊：监考端查看本场异常行为记录
   cheatEvents: (params) => http.get('/admin/monitor/cheat-events', { query: params }),
 };

@@ -25,6 +25,7 @@ import { createAnalysisView } from '../views/analysis.js';
 import {
   SubjectView, CategoryView, GradeView, ClassView, TeacherView, AdminView, NewsView,
 } from '../views/admin/basics.js';
+import { MaterialView } from '../views/admin/material.js';
 
 const APP_NAME = '考试管理后台';
 
@@ -48,6 +49,8 @@ const NAV = [
 
   { key: 'quizzes',  label: '题库管理', icon: 'database',  perm: 'quiz.view', group: 'bank' },
   { key: 'subjects', label: '考试科目', icon: 'book',      perm: 'subject.view', group: 'bank' },
+  // C3 学习资料库（轻量版）
+  { key: 'materials', label: '学习资料', icon: 'download',  perm: 'material.view', group: 'bank' },
 
   { key: 'students', label: '考生管理', icon: 'users',     perm: 'student.view', group: 'people' },
   { key: 'teachers', label: '教师管理', icon: 'teacher',   perm: 'teacher.view', group: 'people' },
@@ -85,6 +88,7 @@ const VIEWS = {
   system: SystemView,
   profile: ProfileView,
   subjects: SubjectView,
+  materials: MaterialView,
   categories: CategoryView,
   grades: GradeView,
   classes: ClassView,

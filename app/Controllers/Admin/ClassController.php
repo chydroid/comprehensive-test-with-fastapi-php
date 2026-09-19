@@ -44,11 +44,16 @@ class ClassController extends BaseController
             $total = $result['total'];
         }
 
+        // 一次聚合代替逐行 COUNT（BUG-220）：原本每班一行一次查询，班级一多就是
+        // 几十次往返，而这里只需要一个 map。
+        $stuCount = [];
+        foreach (\Core\Database::fetchAll(
+            'SELECT class_id, COUNT(*) AS c FROM `stuinfo` GROUP BY class_id'
+        ) as $r) {
+            $stuCount[(string) $r['class_id']] = (int) $r['c'];
+        }
         foreach ($list as &$row) {
-            $row['stu_count'] = (int) (\Core\Database::fetch(
-                'SELECT COUNT(*) AS c FROM `stuinfo` WHERE class_id = ?',
-                [(string) $row['id']]
-            )['c'] ?? 0);
+            $row['stu_count'] = $stuCount[(string) $row['id']] ?? 0;
         }
         unset($row);
 

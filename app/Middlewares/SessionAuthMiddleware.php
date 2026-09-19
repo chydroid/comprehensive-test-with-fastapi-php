@@ -125,6 +125,9 @@ class SessionAuthMiddleware implements Middleware
         ['/api/admin/scores',     'admin', 'score.view'],
         ['/api/admin/news',       'admin', 'news.view'],
         ['/api/admin/upload',     'admin', 'quiz.add'],
+        // C3 学习资料库。注意 /api/admin/materials/upload 会先命中本条前缀再判写权限点，
+        // 因此上传走的是 material.add（见 WRITE_POINTS），与题目配图上传（quiz.add）互不相干。
+        ['/api/admin/materials',  'admin', 'material.view'],
 
         // 兜底：其余 /api/admin/** 要求管理员登录。
         // 必须带上最小权限点 admin.access（各内置角色均已授予）：此前这里没有权限点，
@@ -171,6 +174,8 @@ class SessionAuthMiddleware implements Middleware
         'POST /api/admin/students/import'       => 'student.import',
         'PUT /api/admin/config'                 => 'system.config',
         'PUT /api/admin/settings'               => 'system.config',
+        // C3 资料上传：与「新增资料条目」同属 material.add，不另设点
+        'POST /api/admin/materials/upload'      => 'material.add',
     ];
 
     /** 只读权限点 → 写入权限点前缀映射（quiz.view → quiz） */

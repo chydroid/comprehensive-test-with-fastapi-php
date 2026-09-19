@@ -10,8 +10,10 @@ use App\Models\SchoolClass;
 use App\Models\StuScoreBak;
 use App\Models\Student;
 use App\Services\AuthSession;
+use App\Services\Material;
 use App\Services\Password;
 use App\Services\ScoreBoard;
+use App\Services\Survey;
 use Core\Database;
 use Core\HttpException;
 use Core\Response;
@@ -140,6 +142,23 @@ class StudentController extends BaseController
         ) as $c) {
             $certs[(int) $c['exam_id']] = (string) $c['cert_no'];
         }
+
+        // C5：哪些场次配了考后问卷。同样一次查完，不在循环里逐行问数据库。
+        $surveyed = [];
+        $examIds = array_values(array_filter(array_map(
+            static fn (array $r): int => (int) ($r['exam_id'] ?? 0),
+            $live
+        ), static fn (int $id): bool => $id > 0));
+        if ($examIds !== []) {
+            $ph = implode(',', array_fill(0, count($examIds), '?'));
+            foreach (Database::fetchAll(
+                "SELECT DISTINCT exam_id FROM `exam_survey` WHERE exam_id IN ({$ph})",
+                $examIds
+            ) as $r) {
+                $surveyed[(int) $r['exam_id']] = true;
+            }
+        }
+
         foreach ($live as &$row) {
             $row['cert_no'] = $certs[(int) $row['exam_id']] ?? '';
             $row['can_view_board'] = in_array(
@@ -147,6 +166,7 @@ class StudentController extends BaseController
                 [Exam::VIS_CLASS, Exam::VIS_PUBLIC],
                 true
             );
+            $row['has_survey'] = isset($surveyed[(int) $row['exam_id']]);
         }
         unset($row);
 
@@ -190,6 +210,105 @@ class StudentController extends BaseController
         ));
     }
 
+    /* ------------------------------------------------------------------ */
+    /* C5 考后问卷                                                          */
+    /* ------------------------------------------------------------------ */
+
+    /** GET /api/student/survey?exam_id=N —— 本场问卷（题目 + 本人已作答） */
+    public function survey(): Response
+    {
+        $sess = $this->authStudent();
+        $stuId = (string) $sess['id'];
+        $examId = (int) $this->request->query('exam_id', 0);
+        if ($examId <= 0) {
+            throw new HttpException(400, '缺少考试编号', 40000);
+        }
+
+        // 只有本场考生能看问卷：否则任何登录考生都能枚举 exam_id 读到别场的题目
+        $row = Database::fetch(
+            'SELECT stu_status FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
+            [$examId, $stuId]
+        );
+        if ($row === null) {
+            throw new HttpException(404, '您未参加本场考试', 40400);
+        }
+
+        return $this->ok(['exam_id' => $examId, 'finished' => str_starts_with((string) ($row['stu_status'] ?? ''), 'over')]
+            + Survey::forStudent($examId, $stuId));
+    }
+
+    /** POST /api/student/survey —— 提交考后反馈 */
+    public function submitSurvey(): Response
+    {
+        $sess = $this->authStudent();
+        $stuId = (string) $sess['id'];
+        $examId = (int) $this->request->input('exam_id', 0);
+        if ($examId <= 0) {
+            throw new HttpException(400, '缺少考试编号', 40000);
+        }
+
+        $row = Database::fetch(
+            'SELECT stu_status FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
+            [$examId, $stuId]
+        );
+        if ($row === null) {
+            throw new HttpException(404, '您未参加本场考试', 40400);
+        }
+        // 交卷前不允许填反馈：题目都还没做完，反馈没有意义，
+        // 而且会诱导考生为了填问卷而提前交卷。
+        if (!str_starts_with((string) ($row['stu_status'] ?? ''), 'over')) {
+            throw new HttpException(400, '考试交卷后才能填写反馈', 40000);
+        }
+
+        // 通用 validate() 会拒绝数组（"必须是标量值"），answers 天然是 map，手工取
+        $raw = $this->request->input('answers', []);
+        if (!is_array($raw)) {
+            throw new HttpException(400, '提交内容格式不正确', 40000);
+        }
+
+        $result = Survey::submit($examId, $stuId, $raw);
+        return $this->ok($result, '反馈已提交，感谢您的评价');
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* C3 学习资料库（考生端）                                              */
+    /* ------------------------------------------------------------------ */
+
+    /** GET /api/student/materials —— 浏览学习资料 */
+    public function materials(): Response
+    {
+        $this->authStudent();
+        $page = max(1, (int) $this->request->query('page', 1));
+        $perPage = min(60, max(5, (int) $this->request->query('per_page', 20)));
+
+        $result = Material::list(
+            [
+                'subj_id'  => (int) $this->request->query('subj_id', 0),
+                'category' => (string) $this->request->query('category', ''),
+                'keyword'  => (string) $this->request->query('keyword', ''),
+            ],
+            ($page - 1) * $perPage,
+            $perPage
+        );
+
+        return $this->ok([
+            'data'       => $result['data'],
+            'total'      => $result['total'],
+            'page'       => $page,
+            'per_page'   => $perPage,
+            'categories' => Material::categories(),
+        ]);
+    }
+
+    /** POST /api/student/materials/{id}/hit —— 记一次浏览/下载 */
+    public function materialHit(): Response
+    {
+        $this->authStudent();
+        $id = $this->idParam();
+        Material::hit($id);
+        return $this->ok(['id' => $id]);
+    }
+
     /**
      * GET /api/student/exams —— 我的待考考试
      * 每场附带入场状态（entry_state/can_enter/入场时间/是否已开放入场），
@@ -201,16 +320,28 @@ class StudentController extends BaseController
         $stuId = (string) $sess['id'];
         $list = Exam::pendingForStudent($stuId, (string) ($sess['class_id'] ?? ''));
 
-        $examModel = new Exam();
-        foreach ($list as &$e) {
-            // 到点自动开考（惰性）
+        // 两轮：先让所有场次完成惰性开考，再一次性取回最新状态。
+        // 逐场 find() 在这个列表上是典型的 N+1（BUG-220）；状态必须在流转之后读，
+        // 所以整体后移为一次 IN 查询，而不是把查询提到循环外。
+        foreach ($list as $e) {
             Exam::autoStartIfDue((int) $e['id']);
+        }
+        $freshMap = [];
+        $ids = array_map(static fn (array $e): int => (int) $e['id'], $list);
+        if ($ids !== []) {
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            foreach (Database::fetchAll(
+                "SELECT id, exam_status FROM `examinfo` WHERE id IN ({$ph})",
+                $ids
+            ) as $r) {
+                $freshMap[(int) $r['id']] = (string) ($r['exam_status'] ?? '');
+            }
+        }
 
-            // 取最新考试状态（autoStart 可能刚推进状态）
-            $fresh = $examModel->find((int) $e['id']);
-            if ($fresh !== null) {
-                $e['exam_status'] = $fresh['exam_status'];
-                $e['exam_pwd']    = $fresh['exam_pwd'] ?? '';
+        foreach ($list as &$e) {
+            // 惰性开考可能刚推进状态，用刷新后的值覆盖
+            if (isset($freshMap[(int) $e['id']])) {
+                $e['exam_status'] = $freshMap[(int) $e['id']];
             }
 
             // pendingForStudent 已 LEFT JOIN stuscore，直接据此判定入场状态

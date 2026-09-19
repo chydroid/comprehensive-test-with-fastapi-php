@@ -386,6 +386,99 @@ class Exam extends Model
         return (int) ($row['c'] ?? 0);
     }
 
+    /**
+     * 锁名：模拟考试配额的互斥键（GET_LOCK 名字上限 64 字符）。
+     * 按「考生 + 日期」分键，不同考生、不同日期互不阻塞。
+     */
+    private static function mockQuotaLockName(string $stuId): string
+    {
+        return 'mockq_' . md5(trim($stuId) . date('Y-m-d'));
+    }
+
+    /**
+     * 取得当日模拟考试配额锁并检查是否还有余量（强一致）。
+     *
+     * 背景：此前只有「预检 + 事务内复检」，两者都是普通 COUNT —— 事务里读到的是
+     * RR 快照，两个并发请求会各自看到 used=0 然后双双通过，上限形同虚设
+     * （原注释已承认「极端并发可能多 1 场」）。
+     *
+     * 为什么用 MySQL 的**命名锁（GET_LOCK）**而不是另建一张配额表：
+     *   配额表是「计数器」，而真正的权威是 examinfo 里的实际记录数，两者会漂移
+     *   （记录被删、清理任务跑过、测试反复执行……），漂移后要么误拒要么超发，
+     *   还要额外维护重置入口。命名锁不引入任何状态：它只保证「检查 + 建场」这段
+     *   临界区串行，计数仍然以实际记录为准，因此永远与库里的真实情况一致。
+     *
+     * 调用约定：
+     *  - 必须在**事务内**调用；
+     *  - 返回 true 后必须继续完成建场，并在事务提交/回滚**之后**调用
+     *    mockReleaseQuota()（建议放在 finally）—— 锁不随事务结束自动释放。
+     *
+     * @return bool false = 当日场次已用完（锁会被释放）
+     */
+    public static function mockConsumeQuota(string $stuId): bool
+    {
+        $name = self::mockQuotaLockName($stuId);
+
+        $row = \Core\Database::fetch('SELECT GET_LOCK(?, 5) AS got', [$name]);
+        if ((int) ($row['got'] ?? 0) !== 1) {
+            // 拿不到锁说明有并发请求正在建场且耗时异常，宁可让用户重试也不要放行
+            throw new \Core\HttpException(429, '系统繁忙，请稍后再试', 42902);
+        }
+
+        // 当前读：锁已持有，此时的计数是权威值
+        if (self::mockUsedToday($stuId) >= self::mockDailyLimit()) {
+            self::mockReleaseQuota($stuId);
+            return false;
+        }
+        return true;
+    }
+
+    /** 释放 mockConsumeQuota 取得的锁；未持有时调用无害 */
+    public static function mockReleaseQuota(string $stuId): void
+    {
+        try {
+            \Core\Database::query('SELECT RELEASE_LOCK(?)', [self::mockQuotaLockName($stuId)]);
+        } catch (\Throwable $e) {
+            // 释放失败不必打断主流程：连接关闭时 MySQL 会自动释放该会话持有的锁
+            error_log('[mock] release lock failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 惰性清理过期的模拟考试（无 cron，借日常请求顺带做一次）。
+     *
+     * 删除顺序是自下而上：先答卷、再成绩、最后考试记录。
+     * 只删模拟考试（exam_class = 模拟考试），正式考试一律不动。
+     *
+     * @return int 删除的场次数
+     */
+    public static function purgeMocks(int $days): int
+    {
+        if ($days <= 0) {
+            return 0;
+        }
+        $ids = [];
+        foreach (\Core\Database::fetchAll(
+            'SELECT id FROM `examinfo`
+             WHERE exam_class = ? AND exam_start IS NOT NULL
+               AND exam_start < DATE_SUB(NOW(), INTERVAL ? DAY)
+             LIMIT 500',
+            [self::MOCK_CLASS, $days]
+        ) as $r) {
+            $ids[] = (int) $r['id'];
+        }
+        if ($ids === []) {
+            return 0;
+        }
+
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        \Core\Database::query("DELETE FROM `stupaper` WHERE exam_id IN ({$ph})", $ids);
+        \Core\Database::query("DELETE FROM `stuscore` WHERE exam_id IN ({$ph})", $ids);
+        \Core\Database::query("DELETE FROM `examinfo` WHERE id IN ({$ph})", $ids);
+
+        return count($ids);
+    }
+
     /** 进行中的考试（含科目名/类别名），供前台门户展示 */
     public static function activeWithSubject(): array
     {
@@ -767,6 +860,74 @@ class Exam extends Model
     }
 
     /** 考生状态汇总：用于监控页与仪表盘 */
+    /**
+     * 批量版 statusSummary（BUG-220）。
+     *
+     * @param int[] $ids
+     * @return array<int,array{total:int,online:int,locked:int,waiting:int,over:int}>
+     */
+    public static function statusSummaries(array $ids): array
+    {
+        $out = [];
+        $ids = array_values(array_filter(array_map('intval', $ids), static fn (int $i): bool => $i > 0));
+        if ($ids === []) {
+            return $out;
+        }
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        foreach (\Core\Database::fetchAll(
+            "SELECT exam_id,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN stu_status = 'online'   THEN 1 ELSE 0 END) AS online,
+                    SUM(CASE WHEN stu_status = 'locked'   THEN 1 ELSE 0 END) AS locked,
+                    SUM(CASE WHEN stu_status = 'waiting'  THEN 1 ELSE 0 END) AS waiting,
+                    SUM(CASE WHEN LEFT(stu_status, 4) = 'over' THEN 1 ELSE 0 END) AS over_cnt
+             FROM `stuscore` WHERE exam_id IN ({$ph})
+             GROUP BY exam_id",
+            $ids
+        ) as $r) {
+            $out[(int) $r['exam_id']] = [
+                'total'   => (int) ($r['total'] ?? 0),
+                'online'  => (int) ($r['online'] ?? 0),
+                'locked'  => (int) ($r['locked'] ?? 0),
+                'waiting' => (int) ($r['waiting'] ?? 0),
+                'over'    => (int) ($r['over_cnt'] ?? 0),
+            ];
+        }
+        // 没有成绩行的场次也要给出全 0，否则前端拿到 undefined
+        foreach ($ids as $id) {
+            if (!isset($out[$id])) {
+                $out[$id] = ['total' => 0, 'online' => 0, 'locked' => 0, 'waiting' => 0, 'over' => 0];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * 批量取考试状态（BUG-220）。
+     *
+     * 监考列表会在循环里先跑惰性流转（autoStartIfDue / autoEndIfDue），状态可能
+     * 刚被改写过，因此必须**在流转之后**再取；这里把「逐场 find」换成一次 IN 查询。
+     *
+     * @param int[] $ids
+     * @return array<int,string>
+     */
+    public static function statusMap(array $ids): array
+    {
+        $out = [];
+        $ids = array_values(array_filter(array_map('intval', $ids), static fn (int $i): bool => $i > 0));
+        if ($ids === []) {
+            return $out;
+        }
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        foreach (\Core\Database::fetchAll(
+            "SELECT id, exam_status FROM `examinfo` WHERE id IN ({$ph})",
+            $ids
+        ) as $r) {
+            $out[(int) $r['id']] = (string) ($r['exam_status'] ?? '');
+        }
+        return $out;
+    }
+
     public function statusSummary(int $examId): array
     {
         $row = \Core\Database::fetch(

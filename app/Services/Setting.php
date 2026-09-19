@@ -31,6 +31,7 @@ final class Setting
         'exam'     => ['label' => '考试规则', 'desc' => '入场窗口、口令与成绩展示等考试行为', 'icon' => 'clipboard'],
         'practice' => ['label' => '模拟考试与练习', 'desc' => '模拟考试、在线练习与正式考试的隔离策略及数据上限', 'icon' => 'target'],
         'security' => ['label' => '安全策略', 'desc' => '登录限流与密码强度要求', 'icon' => 'shield'],
+        'ai'       => ['label' => 'AI 阅卷辅助', 'desc' => '主观题「建议分」的模型服务配置（C4）', 'icon' => 'sparkles'],
         'ui'       => ['label' => '界面与体验', 'desc' => '分页条数与页面自动刷新频率', 'icon' => 'sliders'],
     ];
 
@@ -39,9 +40,10 @@ final class Setting
      *
      * 字段说明：
      *   group   分组键（见 GROUPS）
-     *   type    int | bool
+     *   type    int | bool | string
      *   default 缺省值（DB 无记录时使用）
-     *   min/max int 类型的取值范围
+     *   min/max int 类型的取值范围；string 类型复用 max 作**字符数上限**
+     *   secret  string 类型专用：前端渲染为密码框且不在公开接口下发（即便 public=true 也跳过）
      *   label   表单标签
      *   unit    单位（仅用于展示）
      *   hint    帮助文案
@@ -111,6 +113,13 @@ final class Setting
             'label' => '单场模拟考试题目总数上限', 'unit' => '题', 'public' => true,
             'hint'  => '考生自主组卷时，一场模拟考试可抽取的题目总数上限（各题型数量之和）。',
         ],
+        'mock_retention_days' => [
+            'group' => 'practice', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 365,
+            'label' => '模拟考试记录保留天数', 'unit' => '天',
+            'hint'  => '超过该天数的模拟考试（含其答卷与成绩）会在下次有人发起模拟考试时被顺带清理，'
+                     . '因为项目没有常驻定时任务。**填 0 表示不自动清理**，需由管理端「清空考试」手动回收。'
+                     . '正式考试记录任何情况下都不会被自动删除。',
+        ],
 
         /* ---------------- 安全策略 ---------------- */
         'login_max_attempts' => [
@@ -164,6 +173,48 @@ final class Setting
             'group' => 'ui', 'type' => 'int', 'default' => 10, 'min' => 3, 'max' => 120,
             'label' => '监考页面自动刷新间隔', 'unit' => '秒', 'public' => true,
             'hint'  => '在线监考页自动拉取在场考生名单的间隔。',
+        ],
+
+        /* ---------------- AI 阅卷辅助（C4） ----------------
+         *
+         * 全部开关默认**关闭**、凭据默认**为空**：不开箱即调用任何外部服务。
+         * 管理员填好 endpoint/model/api_key 并打开开关后，教师端「AI 建议」才
+         * 会走远程模型；否则一律使用内置的本地启发式（不联网、零成本）。
+         * 任何一次远程调用失败都会**静默降级**为启发式，绝不因为外部服务不可用
+         * 而让批阅页报错。
+         */
+        'ai_grading_enabled' => [
+            'group' => 'ai', 'type' => 'bool', 'default' => 0,
+            'label' => '启用 AI 阅卷建议',
+            'hint'  => '开启后，教师批阅主观题时可请求「建议分」：已配置远程模型则调用模型，'
+                     . '否则（或调用失败时）自动使用内置的本地启发式评分（关键词覆盖 + 文本相似度）。'
+                     . '**建议分永远只是建议**，必须教师确认保存后才会写入成绩。',
+        ],
+        'ai_grading_endpoint' => [
+            'group' => 'ai', 'type' => 'string', 'default' => '', 'max' => 500,
+            'label' => '模型服务地址',
+            'hint'  => 'OpenAI 兼容的 chat/completions 地址，例如 https://api.openai.com/v1/chat/completions。'
+                     . '留空则始终使用本地启发式。',
+        ],
+        'ai_grading_model' => [
+            'group' => 'ai', 'type' => 'string', 'default' => '', 'max' => 100,
+            'label' => '模型名称', 'hint' => '例如 gpt-4o-mini、qwen-plus、deepseek-chat 等。',
+        ],
+        'ai_grading_api_key' => [
+            'group' => 'ai', 'type' => 'string', 'default' => '', 'max' => 300, 'secret' => true,
+            'label' => 'API Key',
+            'hint'  => '保存在系统设置表中，仅管理端可见。**该密钥会随评分请求发往上面的服务地址**，'
+                     . '请确认你信任该服务提供方。',
+        ],
+        'ai_grading_timeout' => [
+            'group' => 'ai', 'type' => 'int', 'default' => 20, 'min' => 3, 'max' => 120,
+            'label' => '单次请求超时', 'unit' => '秒',
+            'hint'  => '超过该时长未返回即视为失败并降级为本地启发式。',
+        ],
+        'ai_grading_max_items' => [
+            'group' => 'ai', 'type' => 'int', 'default' => 50, 'min' => 1, 'max' => 200,
+            'label' => '单次建议题目上限', 'unit' => '题',
+            'hint'  => '一次「AI 建议」最多处理的题目数，防止误操作触发大量外部调用。',
         ],
     ];
 
@@ -262,9 +313,15 @@ final class Setting
         $all = self::all();
         $out = [];
         foreach (self::SCHEMA as $key => $def) {
-            if (!empty($def['public'])) {
-                $out[$key] = $all[$key];
+            if (empty($def['public'])) {
+                continue;
             }
+            // 二次保险：secret 永不下发。public 标记是「可以公开」的声明，
+            // 而 secret 是「绝不公开」的约束，两者冲突时以后者为准。
+            if (!empty($def['secret'])) {
+                continue;
+            }
+            $out[$key] = $all[$key];
         }
         return $out;
     }
@@ -287,6 +344,8 @@ final class Setting
                 'hint'    => $def['hint'] ?? '',
                 'min'     => $def['min'] ?? null,
                 'max'     => $def['max'] ?? null,
+                // secret 项即便标了 public 也绝不外泄（见 publicSubset）
+                'secret'  => !empty($def['secret']),
                 'default' => $def['default'],
                 'value'   => $values[$key],
             ];
@@ -368,6 +427,19 @@ final class Setting
     /** DB 字符串 → 声明类型；缺失或非法时返回默认值 */
     private static function cast(array $def, mixed $raw): mixed
     {
+        if ($def['type'] === 'string') {
+            // 空串视为「未配置」回落默认：DB 里存 '' 与没有这行，语义应当一致，
+            // 否则管理员清空 API Key 后读回默认值的期望会落空。
+            $s = trim((string) ($raw ?? ''));
+            if ($s === '') {
+                return (string) $def['default'];
+            }
+            $max = $def['max'] ?? 0;
+            if ($max > 0 && mb_strlen($s) > $max) {
+                return (string) $def['default'];
+            }
+            return $s;
+        }
         if ($raw === null || $raw === '') {
             return $def['default'];
         }
@@ -390,6 +462,18 @@ final class Setting
     /** 校验并归一化待写入的值；非法值抛 400 */
     private static function normalize(string $key, array $def, mixed $input): mixed
     {
+        if ($def['type'] === 'string') {
+            if (is_array($input) || is_object($input)) {
+                throw new \Core\HttpException(400, "设置项「{$def['label']}」必须是文本", 40000);
+            }
+            $s = trim((string) $input);
+            $max = $def['max'] ?? 0;
+            if ($max > 0 && mb_strlen($s) > $max) {
+                throw new \Core\HttpException(400, "设置项「{$def['label']}」不能超过 {$max} 个字符", 40000);
+            }
+            return $s;
+        }
+
         if ($def['type'] === 'bool') {
             if (is_bool($input)) {
                 return $input ? 1 : 0;

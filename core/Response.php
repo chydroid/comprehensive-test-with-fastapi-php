@@ -234,18 +234,27 @@ class Response
     {
         if (self::$capturing) {
             self::$capturedStatus = $code;
-        } else {
-            http_response_code($code);
+            return;
         }
+        // CLI / 已输出场景下 http_response_code() 会抛 ErrorException，把真正的
+        // 业务异常埋成一条无从定位的 "headers already sent"。状态码是尽力而为的
+        // 事，丢掉它远好过丢掉异常本身。
+        if (headers_sent()) {
+            return;
+        }
+        http_response_code($code);
     }
 
     private static function emitHeader(string $name, string $value): void
     {
         if (self::$capturing) {
             self::$capturedHeaders[$name] = $value;
-        } else {
-            header("$name: $value");
+            return;
         }
+        if (headers_sent()) {
+            return;
+        }
+        header("$name: $value");
     }
 
     private static function emitBody(string $s): void

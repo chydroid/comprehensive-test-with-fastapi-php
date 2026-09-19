@@ -27,11 +27,16 @@ class ExamCategoryController extends BaseController
     public function index(): Response
     {
         $list = $this->model->ordered();
+
+        // 一次聚合代替逐行 COUNT（BUG-220）
+        $examCount = [];
+        foreach (\Core\Database::fetchAll(
+            'SELECT exam_category_id, COUNT(*) AS c FROM `examinfo` GROUP BY exam_category_id'
+        ) as $r) {
+            $examCount[(int) $r['exam_category_id']] = (int) $r['c'];
+        }
         foreach ($list as &$row) {
-            $row['exam_count'] = (int) (\Core\Database::fetch(
-                'SELECT COUNT(*) AS c FROM `examinfo` WHERE exam_category_id = ?',
-                [(int) $row['id']]
-            )['c'] ?? 0);
+            $row['exam_count'] = $examCount[(int) $row['id']] ?? 0;
         }
         unset($row);
 

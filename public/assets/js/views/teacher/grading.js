@@ -151,7 +151,8 @@ export function TeacherGradingView({ query } = {}) {
     }
     const fullScore = Number(data.full_score) || 0;
 
-    const inputs = new Map();  // paper_id -> { scoreCtl, commentCtl }
+    const inputs = new Map();        // paper_id -> { scoreCtl, commentCtl }
+    const suggestSlots = new Map();  // paper_id -> 建议依据展示位
     const body = el('div.stack');
     const sumLine = el('div.fs-sm.c-secondary');
 
@@ -173,6 +174,10 @@ export function TeacherGradingView({ query } = {}) {
         rows: 2,
       });
       inputs.set(Number(it.paper_id), { scoreCtl, commentCtl });
+
+      // C4 建议依据展示位：请求前留空，避免布局跳动
+      const suggestSlot = el('div');
+      suggestSlots.set(Number(it.paper_id), suggestSlot);
 
       const answer = String(it.stu_key ?? '');
       body.append(card({
@@ -196,6 +201,7 @@ export function TeacherGradingView({ query } = {}) {
               hint: fullScore > 0 ? `0 – ${fullScore} 分` : '该场未设置问答题分值',
             }),
           ]),
+          suggestSlot,
           field('评语', commentCtl),
         ].filter(Boolean)),
       }));
@@ -213,6 +219,62 @@ export function TeacherGradingView({ query } = {}) {
     };
     body.addEventListener('input', recalc);
     recalc();
+
+    /**
+     * C4 建议依据渲染。
+     *
+     * 刻意**把依据写出来**而不是只填一个分数：教师必须能判断这个建议该不该采纳，
+     * 一个没有理由的分数反而会增加复核负担（还得自己重读一遍作答）。
+     * score 为 null 表示无法判断（例如本题没有参考答案），此时绝不填 0 分 ——
+     * 「无法判断」与「答得零分」是两件事，填 0 会让教师误判为已批改。
+     */
+    function renderSuggestHint(s) {
+      const slot = suggestSlots.get(Number(s.paper_id));
+      if (!slot) return;
+      const conf = Math.round(Number(s.confidence || 0) * 100);
+      const head = s.score === null
+        ? `${s.provider_label || '建议'}：无法给出建议分`
+        : `${s.provider_label || '建议'}：${s.score} 分（置信度 ${conf}%）`;
+      slot.replaceChildren(alertBox(
+        s.reason ? `${head} —— ${s.reason}` : head,
+        { type: s.score === null ? 'warning' : (s.degraded ? 'warning' : 'info') },
+      ));
+    }
+
+    const aiBtn = button('AI 建议分', {
+      variant: 'ghost',
+      iconName: 'sparkles',
+      title: '为尚未批阅的题目生成建议分；建议只作参考，需你确认后保存',
+      onClick: async (e) => {
+        const r = await withLoading(e.currentTarget, () => teacherApi.subjectiveSuggest(state.examId, row.stu_id), { silent: true });
+        if (!r.ok) { notify.error(r.error?.message || '获取建议失败'); return; }
+
+        const data = r.result || {};
+        const list = data.items || [];
+        if (!list.length) {
+          notify.info(`没有可建议的题目（${Number(data.skipped_graded) || 0} 题已批阅）`);
+          return;
+        }
+
+        let filled = 0;
+        let undetermined = 0;
+        for (const s of list) {
+          renderSuggestHint(s);
+          const ctl = inputs.get(Number(s.paper_id));
+          if (!ctl) continue;
+          if (s.score === null) { undetermined++; continue; }
+          ctl.scoreCtl.value = String(s.score);
+          filled++;
+        }
+        recalc();
+
+        const label = data.provider?.label || '建议';
+        let msg = `已填入 ${filled} 题建议分（来源：${label}）`;
+        if (undetermined > 0) msg += `，${undetermined} 题无法判断`;
+        if (data.truncated) msg += '；本场题目超过单次上限，其余未处理';
+        (filled > 0 ? notify.success : notify.warning).call(notify, msg + '，请确认后再保存。');
+      },
+    });
 
     const closeBtn = button('关闭', { variant: 'secondary', onClick: () => modal.close() });
     const revokeBtn = button('撤销批阅', {
@@ -263,7 +325,7 @@ export function TeacherGradingView({ query } = {}) {
       size: 'lg',
       closable: false,
       body: el('div.stack', {}, [sumLine, body]),
-      footer: [revokeBtn, el('div.flex-1'), closeBtn, saveBtn],
+      footer: [aiBtn, revokeBtn, el('div.flex-1'), closeBtn, saveBtn],
     });
   }
 
