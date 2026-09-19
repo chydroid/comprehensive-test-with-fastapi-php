@@ -30,9 +30,12 @@ const AVATAR_TONES = [
  * @param {()=>void} cfg.onLogout
  * @param {(perm:string)=>boolean} [cfg.can]  权限判定
  * @param {number} [cfg.activeCount]  顶栏实时提示
+ * @param {(string|{key:string,label?:string,icon?:string})[]} [cfg.mobileTabs]
+ *        移动端底部标签栏要展示的导航项（最多 5 个，按 key 关联 nav）。
+ *        不传则不渲染底部标签栏 —— 管理/教师端导航项多，仍走「汉堡 + 抽屉」。
  */
 export function createShell(cfg) {
-  const { brandName, brandSub, nav, user, onNavigate, onLogout, can, groups, profileKey = 'profile' } = cfg;
+  const { brandName, brandSub, nav, user, onNavigate, onLogout, can, groups, profileKey = 'profile', mobileTabs } = cfg;
 
   const persistKey = 'csip:sidebar:collapsed';
 
@@ -100,6 +103,44 @@ export function createShell(cfg) {
 
   const sidebar = el('aside.sidebar', { id: 'sidebar' }, [brand, sidebarNav, sidebarFooter]);
 
+  /* ---------- 移动端底部标签栏（可选） ---------- */
+  // 侧栏在 ≤900px 会缩成抽屉，主路径需要「先点汉堡再点项」两步。
+  // 考生端把最常用的 4~5 个入口固化为底部标签栏，一步直达；其余项仍可从抽屉进入。
+  const tabButtons = new Map();
+  const mobileTabbar = (() => {
+    if (!Array.isArray(mobileTabs) || !mobileTabs.length) return null;
+
+    const picked = mobileTabs
+      .slice(0, 5)
+      .map((t) => (typeof t === 'string' ? { key: t } : t))
+      .map((t) => {
+        const item = nav.find((n) => n.key === t.key);
+        if (!item) return null;
+        // 与侧栏同一套可见性判定：无权限的项不落到标签栏
+        if (item.perm && can && !can(item.perm) && !can('*')) return null;
+        return { key: item.key, label: t.label || item.label, icon: t.icon || item.icon };
+      })
+      .filter(Boolean);
+
+    if (!picked.length) return null;
+
+    const bar = el('nav.mobile-tabbar', { 'aria-label': '主导航' });
+    for (const item of picked) {
+      const btn = el('button', {
+        class: 'mobile-tabbar-item', type: 'button',
+        dataset: { key: item.key },
+        'aria-label': item.label,
+      }, [
+        icon(item.icon, { size: 20 }),
+        el('span.tab-label', { text: item.label }),
+      ]);
+      btn.addEventListener('click', () => onNavigate(item.key));
+      tabButtons.set(item.key, btn);
+      bar.append(btn);
+    }
+    return bar;
+  })();
+
   /* ---------- 顶栏 ---------- */
   const pageTitle = el('div.header-title');
   const headerActions = el('div.header-actions');
@@ -165,7 +206,9 @@ export function createShell(cfg) {
   const content = el('main.app-content', { id: 'app-content' });
   const scrim = el('div.sidebar-scrim', { on: { click: () => shell.closeMobile() } });
   const main = el('div.app-main', {}, [header, content]);
-  const root = el('div.app-shell', {}, [sidebar, main, scrim]);
+  const root = el('div.app-shell', {}, [sidebar, main, scrim, mobileTabbar].filter(Boolean));
+  // 有底部标签栏时给根节点打标：内容区需要用底部内边距为其让位
+  if (mobileTabbar) root.classList.add('has-mobile-tabs');
 
   /* ---------- 主题 ---------- */
   function currentTheme() {
@@ -249,6 +292,12 @@ export function createShell(cfg) {
 
     setActive(key) {
       for (const [k, btn] of navButtons) btn.classList.toggle('is-active', k === key);
+      // 底部标签栏与侧栏共用同一 key：不匹配任何标签时整栏不着色（如处于子页面）
+      for (const [k, btn] of tabButtons) {
+        const on = k === key;
+        btn.classList.toggle('is-active', on);
+        btn.setAttribute('aria-current', on ? 'page' : 'false');
+      }
       return this;
     },
 

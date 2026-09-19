@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Models\Exam;
+use App\Services\CheatGuard;
 use App\Services\InvigilationService;
 use Core\HttpException;
 use Core\Response;
@@ -143,12 +144,22 @@ class TeacherMonitorController extends BaseController
         return $this->ok($result, "考试已结束，共判分 {$result['graded']} 人");
     }
 
+    /** GET /api/teacher/monitor/cheat-events?exam_id=&stu_id= —— 本场异常行为记录 */
+    public function cheatEvents(): Response
+    {
+        $examId = $this->ownExamId();
+        $stuId = trim((string) $this->request->query('stu_id', ''));
+        return $this->ok(['events' => CheatGuard::events($examId, $stuId === '' ? null : $stuId)]);
+    }
+
     /* ------------------------------------------------------------------ */
 
     private function ownExamId(): int
     {
         $sess = $this->authTeacher();
-        $examId = (int) $this->request->input('exam_id', $this->request->input('examId', 0));
+        // 兼容 query（GET）与 body（POST）两种来源
+        $all = $this->request->all();
+        $examId = (int) ($all['exam_id'] ?? $all['examId'] ?? 0);
         if ($examId <= 0) {
             throw new HttpException(400, '缺少 exam_id 参数', 40000);
         }

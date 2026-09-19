@@ -7,7 +7,7 @@ import { el, mount, clear } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import {
   button, badge, card, notify, openModal, confirmDialog, alertBox,
-  tabs, segmented, descList, codeBlock, emptyStated, field, input, select,
+  tabs, segmented, descList, codeBlock, emptyStated, field, input, select, textarea,
 } from '../../ui/components.js';
 import { createListView, openFormModal, confirmDelete } from '../../ui/crud.js';
 import { adminApi } from '../../api/index.js';
@@ -67,6 +67,9 @@ export async function QuizView({ router, can }) {
 
     actions: () => [
       button('新增题目', { variant: 'primary', iconName: 'plus', onClick: () => openEditor(null) }),
+      ...(can && can('quiz.import')
+        ? [button('批量导入', { variant: 'secondary', iconName: 'upload', onClick: () => openImport() })]
+        : []),
       button('清理工具', { variant: 'secondary', iconName: 'sparkles', onClick: () => openCleanTools() }),
     ],
 
@@ -98,6 +101,8 @@ export async function QuizView({ router, can }) {
         ].filter(Boolean)) },
       { key: 'subj_name', title: '科目', width: '140px', render: (r) => el('span.fs-sm', { text: r.subj_name || '—' }) },
       { key: 'quiz_class', title: '题型', width: '90px', align: 'center', render: (r) => typeBadge(r.quiz_class) },
+      { key: 'quiz_kp', title: '知识点', width: '130px',
+        render: (r) => (r.quiz_kp ? el('span.fs-sm', { text: r.quiz_kp }) : el('span.c-tertiary', { text: '—' })) },
       { key: 'quiz_diff', title: '难度', width: '70px', align: 'center',
         render: (r) => badge(DIFF_LABELS[r.quiz_diff] || r.quiz_diff || '—', { tone: r.quiz_diff === 'N' ? 'danger' : r.quiz_diff === 'Y' ? 'success' : '' }) },
       { key: 'quiz_key', title: '答案', width: '88px', align: 'center',
@@ -281,6 +286,8 @@ export async function QuizView({ router, can }) {
       const diffSelect = select(QUIZ_DIFFS, { name: 'quiz_diff', value: values.quiz_diff || 'Z' });
       const writerInput = input({ name: 'quiz_writer', value: values.quiz_writer || '', placeholder: '录题人' });
       const timeInput = input({ name: 'quiz_time', type: 'date', value: values.quiz_time || new Date().toISOString().slice(0, 10) });
+      // 知识点（A3 维度）：按知识点组卷与学情分析的唯一分组依据，留空表示未归类
+      const kpInput = input({ name: 'quiz_kp', value: values.quiz_kp || '', placeholder: '如：船舶避碰规则' });
 
       // 必须是 <form>：此前的 div 永不派发 submit 事件，
       // 且提交按钮在 .modal-footer（form 之外），导致「创建题目 / 保存修改」完全无法提交。
@@ -292,6 +299,7 @@ export async function QuizView({ router, can }) {
         optionWrap,
         keyField,
         field('难度', diffSelect),
+        field('知识点', kpInput, { hint: '用于按知识点组卷，留空则不计入' }),
         field('录题人', writerInput),
         field('日期', timeInput),
       ]);
@@ -335,6 +343,7 @@ export async function QuizView({ router, can }) {
           quiz_writer: writerInput.value.trim(),
           quiz_time: timeInput.value,
           quiz_pic_name: picName,
+          quiz_kp: kpInput.value.trim(),
           quiz_key: OPTION_TYPES.includes(type) ? collectKey() : keyInput.value.trim(),
         };
 
@@ -423,12 +432,126 @@ export async function QuizView({ router, can }) {
       ['科目', row.subj_name || '—'],
       ['题型', `${QUIZ_TYPE_LABELS[row.quiz_class] || row.quiz_class}（${row.quiz_class}）`],
       ['难度', DIFF_LABELS[row.quiz_diff] || row.quiz_diff || '—'],
+      ['知识点', row.quiz_kp || '—'],
       ['录题人', row.quiz_writer || '—'],
       ['录入日期', fmtDate(row.quiz_time)],
       ['被作答次数', String(row.quiz_hits ?? 0)],
     ]));
 
     openModal({ title: '题目详情', body, size: 'lg' });
+  }
+
+  /* ============================ 批量导入 ============================ */
+  function openImport() {
+    const body = el('div.stack');
+    const resultSlot = el('div');
+
+    body.append(alertBox(
+      '支持 CSV / TXT 文本，每行一道题。字段顺序：科目,题型,题干,选项,答案,难度,录题人,知识点（后三项可留空）。首行若为表头会自动跳过。',
+      { type: 'info', title: '导入格式说明' }
+    ));
+
+    body.append(codeBlock(
+      '科目,题型,题干,选项,答案,难度,录题人,知识点\n' +
+      '船舶驾驶,单选题,船舶在航行中应保持什么瞭望？,A.视觉瞭望|B.雷达瞭望|C.两者兼顾|D.无需瞭望,C,易,,航行瞭望\n' +
+      '船舶驾驶,多选题,下列属于船舶法定文书的有哪些？,航海日志|轮机日志|船员名单,A B,中,,文书管理\n' +
+      '船舶驾驶,判断题,船舶靠泊前必须显示规定的信号。,对|错,A,,,靠离泊\n' +
+      '船舶驾驶,填空题,船舶号笛长声的持续时间不得少于____秒。,,1,中,,声号设备\n' +
+      '船舶驾驶,问答题,简述雾航时的安全措施。,,,难,,雾航安全'
+    ));
+
+    body.append(el('div.fs-sm.c-secondary', {}, [
+      el('span', { text: '· 题型可写中文名（判断题 / 单选题 / 多选题 / 填空题 / 问答题）或代码（radio1 / radio2 / checkbox / text / longtext）' }),
+    ]));
+    body.append(el('div.fs-sm.c-secondary', {}, [
+      el('span', { text: '· 科目可写科目名称或科目 ID；选项用「|」或换行分隔；多选答案如 AC / CA 会自动去重排序' }),
+    ]));
+    body.append(el('div.fs-sm.c-secondary', {}, [
+      el('span', { text: '· 知识点用于「按知识点组卷」，留空则该题不计入任何知识点统计' }),
+    ]));
+
+    const fileInput = el('input', { type: 'file', accept: '.csv,.txt', class: 'input' });
+    const textArea = textarea({ rows: 10, placeholder: '也可以直接粘贴 CSV 文本内容…' });
+
+    let mode = 'file';
+    const fileWrap = el('div', {}, [field('选择文件', fileInput, { hint: '支持 .csv / .txt，UTF-8 编码，上限 2MB' })]);
+    const textWrap = el('div', { style: { display: 'none' } }, [field('粘贴内容', textArea)]);
+
+    const modeTabs = tabs([
+      { key: 'file', label: '上传文件' },
+      { key: 'text', label: '粘贴文本' },
+    ], 'file', (k) => {
+      mode = k;
+      fileWrap.style.display = k === 'file' ? '' : 'none';
+      textWrap.style.display = k === 'text' ? '' : 'none';
+    });
+
+    // 读文件到 textarea 便于预览与二次确认
+    fileInput.addEventListener('change', async () => {
+      const f = fileInput.files?.[0];
+      if (!f) return;
+      if (f.size > 2 * 1024 * 1024) { notify.error('文件过大（上限 2MB）'); fileInput.value = ''; return; }
+      textArea.value = await f.text();
+    });
+
+    const templateBtn = button('下载 CSV 模板', {
+      variant: 'ghost', size: 'sm', iconName: 'download',
+      onClick: () => {
+        const csv = '\uFEFF科目,题型,题干,选项,答案,难度,录题人,知识点\n'
+          + '船舶驾驶,单选题,示例：题干内容,A.选项一|B.选项二|C.选项三,C,易,,示例知识点\n'
+          + '船舶驾驶,多选题,示例：多选题干,A.选项一|B.选项二|C.选项三,A C,中,,示例知识点\n'
+          + '船舶驾驶,判断题,示例：判断题干,对|错,A,,,示例知识点\n'
+          + '船舶驾驶,填空题,示例：填空题干。,,答案内容,中,,示例知识点\n'
+          + '船舶驾驶,问答题,示例：问答题干。,,,难,,示例知识点';
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        const a = el('a', { href: url, download: '题库导入模板.csv' });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        // 交给浏览器发起下载后立即释放，避免 objectURL 泄漏
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      },
+    });
+
+    body.append(modeTabs, fileWrap, textWrap, el('div.mt-2', {}, [templateBtn]), resultSlot);
+
+    const importBtn = button('开始导入', { variant: 'primary', iconName: 'upload' });
+    const dlg = openModal({
+      title: '批量导入题库',
+      body, size: 'lg',
+      footer: [button('关闭', { variant: 'secondary', onClick: () => dlg.close() }), importBtn],
+    });
+
+    importBtn.addEventListener('click', async () => {
+      const content = textArea.value.trim();
+      if (!content) { notify.warning('请先选择文件或粘贴内容'); return; }
+
+      const { ok, error, result } = await withLoading(importBtn, () => adminApi.importQuizzes({ content }), { silent: true });
+      clear(resultSlot);
+
+      const errBox = (msgs, tone) => el('div', {
+        style: {
+          maxHeight: '220px', overflowY: 'auto', padding: 'var(--sp-3)',
+          background: `var(--${tone}-50)`, border: `1px solid var(--${tone}-500)`,
+          borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-sm)',
+        },
+      }, msgs.map((msg) => el('div', { text: String(msg) })));
+
+      if (ok) {
+        const r = result || {};
+        const errs = r.errors || [];
+        resultSlot.append(alertBox(
+          `导入完成：成功 ${r.imported ?? 0} 条${r.failed ? `，失败 ${r.failed} 条` : ''}`,
+          { type: r.failed ? 'warning' : 'success', title: '导入结果' }
+        ));
+        if (errs.length) resultSlot.append(errBox(errs, 'warning'));
+        list.load();
+      } else if (error) {
+        resultSlot.append(alertBox(error.message || '导入失败', { type: 'danger' }));
+        const errs = error.data?.errors || [];
+        if (errs.length) resultSlot.append(errBox(errs, 'danger'));
+      }
+    });
   }
 
   /* ============================ 清理工具 ============================ */

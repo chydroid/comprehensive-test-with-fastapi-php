@@ -16,6 +16,7 @@ class StuPaper extends Model
 
     protected array $fillable = [
         'exam_id', 'stu_id', 'paper_id', 'quiz_id', 'quiz_class', 'stu_key', 'quiz_status',
+        'option_order',
     ];
 
     /** 某考生在某场考试的答题卡（已带出题目内容） */

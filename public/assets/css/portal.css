@@ -378,6 +378,32 @@
 .option-item.is-wrong .option-key { background: var(--danger-500); border-color: var(--danger-500); color: #fff; }
 .option-text { flex: 1; padding-top: 2px; line-height: var(--lh-normal); word-break: break-word; }
 
+/* B1 防作弊：浮水印遮罩（仅启用防作弊的正式考试挂载）。
+   平铺考生标识，极低不透明度 + pointer-events:none，不挡操作，仅作威慑。 */
+.exam-watermark {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: var(--sp-6) var(--sp-10);
+  padding: var(--sp-10);
+  overflow: hidden;
+  transform: rotate(-16deg) scale(1.18);
+  transform-origin: center;
+  opacity: 0.06;
+  user-select: none;
+}
+.exam-watermark-item {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-strong);
+  white-space: nowrap;
+  letter-spacing: 0.06em;
+}
+
 /* 填空题 */
 .blank-input {
   border: 0;

@@ -113,6 +113,8 @@ return [
     ['POST', '/api/exam/paper/submit',     [StudentExamController::class, 'submitPaper']],
     ['GET',  '/api/exam/over',             [StudentExamController::class, 'over']],
     ['GET',  '/api/exam/answer',           [StudentExamController::class, 'viewAnswer']],
+    // B1 防作弊：考生端上报切屏/失焦等异常（受考试会话保护，未入场会被中间件挡 401）
+    ['POST', '/api/exam/cheat',            [StudentExamController::class, 'reportCheat']],
 
     /* ==================== 在线练习 ==================== */
     ['GET',  '/api/exercise',              [ExerciseController::class, 'index']],
@@ -146,6 +148,8 @@ return [
     ['POST', '/api/teacher/monitor/lock-all', [TeacherMonitorController::class, 'lockAll']],
     ['POST', '/api/teacher/monitor/unlock-all', [TeacherMonitorController::class, 'unlockAll']],
     ['POST', '/api/teacher/monitor/over-all', [TeacherMonitorController::class, 'overAll']],
+    // B1 防作弊：监考端查看本场异常行为记录（仅本教师监考的考试）
+    ['GET',  '/api/teacher/monitor/cheat-events', [TeacherMonitorController::class, 'cheatEvents']],
 
     /* ---------- 监考教师 - 考试管理 ---------- */
     ['GET',  '/api/teacher/exams',         [TeacherExamController::class, 'index']],
@@ -209,6 +213,7 @@ return [
     ['PUT',    '/api/admin/quizzes/{id}',  [QuizController::class, 'update']],
     ['DELETE', '/api/admin/quizzes/{id}',  [QuizController::class, 'delete']],
     ['POST',   '/api/admin/quizzes/batch-delete', [QuizController::class, 'batchDelete']],
+    ['POST',   '/api/admin/quizzes/import', [QuizController::class, 'import']],
     ['GET',    '/api/admin/quizzes/clean/preview', [QuizController::class, 'cleanPreview']],
     ['POST',   '/api/admin/quizzes/clean', [QuizController::class, 'autoClean']],
     ['POST',   '/api/admin/quizzes/advanced-clean', [QuizController::class, 'doAdvancedClean']],
@@ -265,6 +270,8 @@ return [
     ['POST', '/api/admin/monitor/lock-all', [MonitorController::class, 'lockAll']],
     ['POST', '/api/admin/monitor/unlock-all', [MonitorController::class, 'unlockAll']],
     ['POST', '/api/admin/monitor/over-all', [MonitorController::class, 'overAll']],
+    // B1 防作弊：监考端查看本场异常行为记录
+    ['GET',  '/api/admin/monitor/cheat-events', [MonitorController::class, 'cheatEvents']],
 
     /* ---------- 成绩管理 ---------- */
     ['GET',  '/api/admin/scores',          [ScoreController::class, 'index']],

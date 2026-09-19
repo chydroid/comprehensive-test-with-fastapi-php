@@ -99,6 +99,14 @@ function startShell() {
     can: () => true,
     user: { name: s.stu_name || '考生', role: s.grade_id || '考生', avatar: '' },
     profileKey: 'info',
+    // 移动端底部标签栏：考生端最常用的五个入口，窄屏下一步直达（桌面端不渲染）
+    mobileTabs: [
+      'exams',
+      'exercise',
+      'wrongbook',
+      'scores',
+      { key: 'info', label: '我的' },
+    ],
     onNavigate: (key) => router.navigate(key === 'exams' ? '/' : `/${key}`),
     onLogout: async () => {
       await studentSession.logout();

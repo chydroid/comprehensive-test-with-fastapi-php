@@ -22,6 +22,7 @@ class StuScore extends Model
 
     protected array $fillable = [
         'exam_id', 'stu_id', 'stu_score', 'stu_status', 'stu_pwd',
+        'cheat_count', 'exam_token',
     ];
 
     public const STATUS_UNSUBMITTED = '0';
@@ -42,6 +43,34 @@ class StuScore extends Model
         return $this->firstWhere(['exam_id' => $examId, 'stu_id' => $stuId]);
     }
 
+    /** 写入本次考场登录的设备令牌（多端互踢） */
+    public function setToken(int $examId, string $stuId, string $token): int
+    {
+        return Database::query(
+            'UPDATE `stuscore` SET exam_token = ? WHERE exam_id = ? AND stu_id = ?',
+            [$token, $examId, $stuId]
+        )->rowCount();
+    }
+
+    /** 读取设备令牌；无记录返回 null */
+    public function tokenOf(int $examId, string $stuId): ?string
+    {
+        $row = Database::fetch(
+            'SELECT exam_token FROM `stuscore` WHERE exam_id = ? AND stu_id = ?',
+            [$examId, $stuId]
+        );
+        return $row === null ? null : (string) $row['exam_token'];
+    }
+
+    /** 清空设备令牌（登出考场时调用） */
+    public function clearToken(int $examId, string $stuId): int
+    {
+        return Database::query(
+            'UPDATE `stuscore` SET exam_token = \'\' WHERE exam_id = ? AND stu_id = ?',
+            [$examId, $stuId]
+        )->rowCount();
+    }
+
     /**
      * 某场考试的考生成绩名单（含考生资料）。
      * @param string $orderBy 前端排序字段（白名单外的值回退到准考证号）
@@ -57,7 +86,7 @@ class StuScore extends Model
             // 不应顺带拿到它。需要口令的 CSV 导出由 InvigilationService::csv($withPwd)
             // 单独从 examinfo.exam_pwd 取。
             "SELECT si.id AS stu_id, si.stu_name, si.grade_id, si.class_id, si.stu_sex,
-                    ss.stu_score, ss.stu_status, ss.exam_id
+                    ss.stu_score, ss.stu_status, ss.exam_id, ss.cheat_count
              FROM `stuinfo` si
              INNER JOIN `stuscore` ss ON si.id = ss.stu_id
              WHERE ss.exam_id = ?

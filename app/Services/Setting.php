@@ -136,6 +136,11 @@ final class Setting
             'label' => '全站限流统计窗口', 'unit' => '秒',
             'hint'  => '仅在「启用全站接口限流」开启时生效。',
         ],
+        'enable_cheat_guard' => [
+            'group' => 'security', 'type' => 'bool', 'default' => 0, 'public' => true,
+            'label' => '启用考试防作弊',
+            'hint'  => '开启后：考生切屏/离开窗口将被记录异常、试卷选项随机乱序、同一账号多端登录互相挤下线（在监考名单中按异常次数汇总）。',
+        ],
 
         /* ---------------- 界面与体验 ---------------- */
         'page_size_default' => [

@@ -28,6 +28,9 @@ class Quiz extends Model
     protected array $fillable = [
         'subj_id', 'quiz_title', 'quiz_class', 'quiz_option', 'quiz_key',
         'quiz_diff', 'quiz_writer', 'quiz_time', 'quiz_pic_name', 'quiz_hits', 'quiz_key_ok',
+        // A3 引入的知识点（按知识点组卷/学情分析的维度）。此前只读不写，
+        // 导致 quiz_kp 全库为空、by_kp 组卷无题可选；补上写入口后可由批量导入灌数据。
+        'quiz_kp',
     ];
 
     public const TYPES = ['radio1', 'radio2', 'checkbox', 'text', 'longtext'];

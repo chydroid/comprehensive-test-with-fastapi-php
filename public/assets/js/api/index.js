@@ -46,6 +46,8 @@ export const examApi = {
   submit: (body) => http.post('/exam/paper/submit', body),
   over:   () => http.get('/exam/over'),
   answer: () => http.get('/exam/answer'),
+  // B1 防作弊：上报切屏 / 失焦等异常
+  reportCheat: (body) => http.post('/exam/cheat', body),
 };
 
 /* ============================ 练习 / 模拟考试 ============================ */
@@ -104,6 +106,8 @@ export const teacherApi = {
 
   scores:    (params) => http.get('/teacher/scores', { query: params }),
   exportScores: (params) => download('/teacher/scores/export', { query: params }),
+  // B1 防作弊：监考端查看本场异常行为记录
+  cheatEvents: (params) => http.get('/teacher/monitor/cheat-events', { query: params }),
 };
 
 /* ============================ 管理后台 ============================ */
@@ -141,6 +145,8 @@ export const adminApi = {
   updateQuiz:   (id, body) => http.put(`/admin/quizzes/${id}`, body),
   deleteQuiz:   (id) => http.del(`/admin/quizzes/${id}`),
   batchDeleteQuizzes: (ids) => http.post('/admin/quizzes/batch-delete', { ids }),
+  // 批量导入：传 { content } 或 FormData（file）
+  importQuizzes: (body) => http.post('/admin/quizzes/import', body),
   cleanPreview: () => http.get('/admin/quizzes/clean/preview'),
   cleanQuizzes: () => http.post('/admin/quizzes/clean'),
   advancedClean: () => http.post('/admin/quizzes/advanced-clean'),
@@ -217,4 +223,6 @@ export const adminApi = {
   initialize:    (body) => http.post('/admin/system/initialize', body),
   clearExams:    (body) => http.post('/admin/system/clear-exams', body),
   logs:          (params) => http.get('/admin/logs', { query: params }),
+  // B1 防作弊：监考端查看本场异常行为记录
+  cheatEvents: (params) => http.get('/admin/monitor/cheat-events', { query: params }),
 };

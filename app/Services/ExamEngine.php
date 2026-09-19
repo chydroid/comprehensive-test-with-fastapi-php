@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Exam;
 use App\Models\Quiz;
+use App\Services\Setting;
 use App\Services\WrongBook;
 use Core\Database;
 
@@ -81,7 +82,7 @@ final class ExamEngine
                     [$examId]
                 );
                 foreach ($rows as $q) {
-                    self::insertPaperRow($examId, $stuId, $paperId, (int) $q['quiz_id'], (string) $q['quiz_class']);
+                    self::insertPaperRow($examId, $stuId, $paperId, (int) $q['quiz_id'], (string) $q['quiz_class'], self::shuffledOrder((string) $q['quiz_class'], (int) $q['quiz_id']));
                     $paperId++;
                 }
                 if ($rows === []) {
@@ -108,7 +109,7 @@ final class ExamEngine
                         ];
                     }
                     foreach ($qs as $q) {
-                        self::insertPaperRow($examId, $stuId, $paperId, (int) $q['id'], (string) $q['quiz_class']);
+                        self::insertPaperRow($examId, $stuId, $paperId, (int) $q['id'], (string) $q['quiz_class'], self::shuffledOrder((string) $q['quiz_class'], (int) $q['id']));
                         $paperId++;
                     }
                 }
@@ -131,7 +132,7 @@ final class ExamEngine
                             ];
                         }
                         foreach ($questions as $q) {
-                            self::insertPaperRow($examId, $stuId, $paperId, (int) $q['id'], $type);
+                            self::insertPaperRow($examId, $stuId, $paperId, (int) $q['id'], $type, self::shuffledOrder($type, (int) $q['id']));
                             $paperId++;
                         }
                     }
@@ -160,14 +161,50 @@ final class ExamEngine
         return ['generated' => true, 'warnings' => $warnings];
     }
 
-    /** 插入一条试卷题目（stupaper） */
-    private static function insertPaperRow(int $examId, string $stuId, int $paperId, int $quizId, string $quizClass): void
+    /** 插入一条试卷题目（stupaper），optionOrder 为选项乱序展示序列（字母序列，可为空） */
+    private static function insertPaperRow(int $examId, string $stuId, int $paperId, int $quizId, string $quizClass, string $optionOrder = ''): void
     {
         Database::query(
-            'INSERT INTO `stupaper` (exam_id, stu_id, paper_id, quiz_id, quiz_class, stu_key, quiz_status)
-             VALUES (?, ?, ?, ?, ?, \'\', 0)',
-            [$examId, $stuId, $paperId, $quizId, $quizClass]
+            'INSERT INTO `stupaper` (exam_id, stu_id, paper_id, quiz_id, quiz_class, stu_key, quiz_status, option_order)
+             VALUES (?, ?, ?, ?, ?, \'\', 0, ?)',
+            [$examId, $stuId, $paperId, $quizId, $quizClass, $optionOrder]
         );
+    }
+
+    /** 选项键缓存（按 quiz_id），避免同一场考试多考生重复查库 */
+    private static array $optionKeyCache = [];
+
+    /** 读取某题的选项键序列 [A,B,...]（带请求内缓存） */
+    private static function optionKeys(int $quizId): array
+    {
+        if (!isset(self::$optionKeyCache[$quizId])) {
+            $row = Database::fetch('SELECT quiz_option FROM `quizlib` WHERE id = ?', [$quizId]);
+            $list = Quiz::parseOptions((string) ($row['quiz_option'] ?? ''));
+            self::$optionKeyCache[$quizId] = array_map(static fn ($o) => (string) $o['key'], $list);
+        }
+        return self::$optionKeyCache[$quizId];
+    }
+
+    /**
+     * 计算选项乱序序列（仅单选/多选，且仅当启用防作弊时）。
+     * 返回字母序列（如 "CABD"），前端据此重排选项展示顺序；
+     * 由于答案键仍是原始字母，判分不受影响。
+     */
+    private static function shuffledOrder(string $quizClass, int $quizId): string
+    {
+        if (!Setting::bool('enable_cheat_guard')) {
+            return '';
+        }
+        if (!in_array($quizClass, ['radio2', 'checkbox'], true)) {
+            return ''; // 判断题/填空/问答不参与乱序
+        }
+        $keys = self::optionKeys($quizId);
+        if (count($keys) < 2) {
+            return '';
+        }
+        $k = $keys;
+        shuffle($k);
+        return implode('', $k);
     }
 
     /**

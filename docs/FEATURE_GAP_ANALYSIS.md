@@ -35,9 +35,9 @@
 
 | # | 功能 | 同类是否标配 | 本项目现状 | 差距说明 |
 |---|---|---|---|---|
-| B1 | **防作弊基础能力**（切屏检测/水印/异常记录/选项乱序/多端互踢） | 核心卖点 | 零防作弊（仅会话互斥） | 远程考试公信力弱，难以承接正式考核 |
+| B1 | **防作弊基础能力**（切屏检测/水印/异常记录/选项乱序/多端互踢） | 核心卖点 | 零防作弊（仅会话互斥） | 远程考试公信力弱，难以承接正式考核 | **✅ 已完成（2026-09-19）** |
 | B2 | **系统操作审计日志** | 标配 | 仅有 metrics，无关键操作留痕 | 难以追溯「谁改了成绩 / 删了考试 / 导入了数据」 | **✅ 已完成（2026-09-18）** |
-| B3 | **移动端适配** | 标配（PC+手机+平板） | 桌面优先 | 移动答题体验未验证，限制随堂/居家场景 |
+| B3 | **移动端适配** | 标配（PC+手机+平板） | 桌面优先 | 移动答题体验未验证，限制随堂/居家场景 | **✅ 已完成（2026-09-19，即交付清单里的 B4）** |
 | B4 | **成绩公示与隐私分级** | 常见 | 成绩可查但缺「按班级/个人粒度控制可见性」 | 兼顾公开性与隐私的精细控制不足 |
 
 ### C 档：增值 / 可选（视产品定位决定是否做）
@@ -66,10 +66,10 @@
 - **A2 成绩分析**：✅ 已完成（2026-09-19）。新增只读服务 `ScoreAnalysis`（均分/中位数/标准差/及格率/优秀率、分数段分布、按题型·难度·科目·知识点正确率、薄弱题 TOP、班级横向对比），教师端与管理端共用视图 `views/analysis.js`（含两端 NAV 入口与路由）。成本：中。
 - **A3 组卷多样化**：✅ 已完成（2026-09-19）。`examinfo.paper_mode`（random/manual/by_kp）+ `exam_manual_quiz` / `exam_kp_plan` 两表；`ExamEngine::generatePaper` 按模式分发；教师端组卷弹窗「组卷方式」三选一（手动选题器 / 知识点规划器）；题库检索与知识点清单接口双端开放。成本：中高（涉及组卷算法与前端）。
 - **A4 主观题批改**：✅ 已完成（2026-09-19）。问答题此前连「出卷」都不支持（组卷矩阵只有四种客观题），本轮先补齐组卷维度（`examinfo.longtext_*`，`Exam::TYPE_PREFIXES` 纳入 `longtext`），再做教师端批阅闭环（待批总览 → 答题卡含参考答案 → 逐题给分/评语 → `ExamEngine::recomputeScore` 重算总分），并支持撤销批阅。成本：中。
-- **A5 批量导入**：新增 `QuizController#import`，解析 Excel（引 PhpSpreadsheet 或轻量 CSV），与现有学生导入对称。成本：低中。
-- **B1 防作弊**：前端切屏/失焦监听 + 考试水印 + 服务端异常行为记录 + 选项乱序（组卷时打乱）。成本：中（需前端+后端协同，且不能破坏现有随机卷机制）。
-- **B2 审计日志**：新增 `admin_log` 表 + 中间件/钩子记录关键写操作。成本：低中。
-- **B3 移动端**：CSS 响应式增强 + 触控适配。成本：中（取决于当前响应式程度）。
+- **A5 批量导入**：✅ 已完成（2026-09-19）。`QuizController#import` 走 CSV/TXT 通道（不引第三方依赖，与项目「零依赖」取向一致；`.xlsx` 可用 Excel 另存为 CSV 再导入）。列顺序 `科目,题型,题干,选项,答案,难度,录题人,知识点`；科目按名或 ID 归一、题型接受中文名或代码、判断题兼容 对/错·√/×·T/F、多选答案自动去重排序、难度接受 易/中/难 或 Y/Z/N；逐行校验逐行写入，单行失败只记错不中断。同时补齐 `quiz_kp` 写入口（此前只读不写，导致「按知识点组卷」无题可选）。成本：低中。
+- **B1 防作弊**：✅ 已完成（2026-09-19）。`enable_cheat_guard` 总开关（默认关闭）；开启后：① 组卷时按考生随机打乱选择题选项并落 `stupaper.option_order`（判分按选项字母，与显示顺序无关，改序不影响成绩）；② 考生端水印（姓名+准考证号+时间平铺）；③ `visibilitychange`/`blur` 上报到 `cheat_event` 表并累加 `stuscore.cheat_count`；④ 同账号二次登录签发新 `exam_token`，旧会话取题/存答案被 40902 挤下线。监考端（管理+教师）新增「异常考生」统计卡、「异常次数」列与「异常记录」面板。成本：中。
+- **B2 审计日志**：✅ 已完成（2026-09-18），见下方实施记录。成本：低中。
+- **B3 移动端**：✅ 已完成（2026-09-19）。统一断点标尺（1280/1024/900/768/480/360）；`@media (pointer: coarse)` 把按钮/表单/选项/导航抬到 44px 触控下限；表格横向滚动 + 惯性 + 去除触屏粘滞悬停；考生端新增固定底部标签栏（我的考试/在线练习/错题本/我的成绩/我的，5 项一步直达，侧栏抽屉保留次要入口）；适配 iPhone 安全区（`viewport-fit=cover` + `env(safe-area-inset-bottom)`）。成本：中。
 - **C1/C2/C5**：成本低，可独立小步实施。
 - **C3/C4**：成本高、可能偏离定位，建议暂缓。
 
@@ -216,3 +216,90 @@
 - 批阅只对**正式考试**开放；模拟考试是考生自助练习，无教师批阅语义，后端显式 404 排除。
 - 未做「按关键词自动给分」：主观题分值语义因题而异，自动给分误判风险高于收益，当前仅提供人工批阅 + 参考答案对照。
 
+
+### ✅ B1 考试防作弊（2026-09-19 完成）
+
+**一个总开关控制全部能力**：`Setting::SCHEMA['enable_cheat_guard']`（`security` 组，`bool`，默认 **0=关闭**，`public:true` 随 `/api/public/settings` 下发）。默认关闭是刻意的 —— 切屏检测对网络卡顿、弹窗提醒等正常行为也会计一次异常，应由考务方按场次性质自行决定是否启用。
+
+**四道防线**
+
+| 能力 | 实现要点 |
+|---|---|
+| 选项乱序 | `ExamEngine::shuffledOrder()` 在**组卷时**为每张卷子生成一条字母序列写入 `stupaper.option_order`（如 `CABD`）。考生端按序列重排渲染。**判分按选项字母（key）而非显示位置**，因此乱序不改变任何人的对错 |
+| 切屏/失焦检测 | 考生端监听 `visibilitychange`（`document.hidden`）与 `window.blur`，经 `POST /api/exam/cheat` 上报 |
+| 考试水印 | 考生姓名 + 准考证号 + 时间平铺成 `aria-hidden` 覆盖层，`pointer-events:none` 不拦点击，截图即带身份信息 |
+| 多端互踢 | 登录时签发 `exam_token`（`random_bytes(16)`）落 `stuscore`，取题/存答案/状态轮询时比对会话 token，不一致即清会话并返回 **40902** |
+
+**旁路写入（与审计日志同构）**：`app/Services/CheatGuard.php` 的所有写库包在 `try/catch` 内，失败只 `error_log`，绝不打断答题主流程；异常累计（`stuscore.cheat_count`）与明细（`cheat_event` 表）分开存 —— 列表页只需计数、详情页才要明细。
+
+**监考可视化**：管理端与教师端监考页各新增一张「异常考生」统计卡、一列「异常次数」（`cheat_count`）、一个「异常记录」面板（倒序事件流 + 类型中文映射，无异常时不占版面）。
+
+**改动清单**
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 数据 | `db/add_cheat_guard.sql`（新增） | `stupaper.option_order`；`stuscore.cheat_count` / `exam_token`；新建 `cheat_event` 表。配幂等 apply 脚本 `temp/apply_cheat_guard_ddl.php`，已执行 |
+| 服务 | `app/Services/CheatGuard.php`（新增） | `report()` / `events()` / `countByExam()` |
+| 引擎 | `app/Services/ExamEngine.php` | `optionKeys()` + `shuffledOrder()`（请求内缓存选项字母）；`insertPaperRow()` 增写 `option_order` |
+| 控制器 | `app/Controllers/ExamController.php` | 登录签发 token；`paper()`/`savePaper()`/`status()` 三处多端校验；`reportCheat()`；`logout()` 清 token |
+| 设置 | `app/Services/Setting.php` | `enable_cheat_guard` 一行 |
+| 路由 | `config/routes.php` | `POST /api/exam/cheat`；`GET /api/{admin,teacher}/monitor/cheat-events` |
+| 前端 | `views/exam-runner.js`、`views/student/exam.js`、`views/admin/monitor.js`、`views/teacher/index.js`、`core/app-settings.js`、`api/index.js`、`css/portal.css` | 选项重排、水印、上报监听、异常卡/列/面板、FALLBACK 补默认值 |
+
+**验证**：`cheat_guard_test.php` **34 PASS / 0 FAIL**（开关关闭时不下发 token/不上报、开启后选项乱序且答案为字母集合、切屏与失焦上报落库并计数、水印、同账号二次登录 → 旧会话取题 40902 且会话被清、监考端两处 events 接口、非本人考试 404）；`b1b3b4_frontend_test.php` 覆盖前端接线契约；真实浏览器巡检新增 D1/D3 探针。
+
+---
+
+### ✅ A5 题库批量导入（交付清单编号 B3，2026-09-19 完成）
+
+**不引第三方依赖**：走 CSV/TXT 通道（`str_getcsv` 逐行解析），与项目「零依赖」取向一致；`.xlsx` 由 Excel/WPS 另存为 CSV 后导入即可。前端提供「下载 CSV 模板」（含 UTF-8 BOM，Excel 打开不乱码）。
+
+**列顺序**：`科目, 题型, 题干, 选项, 答案, 难度, 录题人, 知识点`
+
+| 列 | 容错设计 |
+|---|---|
+| 科目 | 科目名**或**科目 ID（新增 `Subject::resolveId()`，与 `Grade::resolveId()` 同构），查不到报该行失败 |
+| 题型 | 中文名（判断题/单选题/多选题/填空题/问答题）**或**代码（radio1/radio2/checkbox/text/longtext） |
+| 选项 | 选择题用 `\|` 或 `;`/`；` 分隔；**非选择题一律清空该列**（填空/问答不存选项） |
+| 答案 | 判断题兼容 对/错、正确/错误、√/×、T/F；多选 `CA` 自动去重排序为 `AC`；填空/问答保留原文 |
+| 难度 | 易/中/难 或 Y/Z/N；留空回落「中」 |
+| 录题人 | 留空回落当前登录账号 |
+| 知识点 | 写入 `quizlib.quiz_kp` —— **补齐 A3 遗留**：此前只有读路径没有写路径，`quiz_kp` 全库为空，「按知识点组卷」实际无题可选 |
+
+**容错策略**：逐行校验、逐行写入，单行失败只记「第 N 行：原因」不中断整批；全行失败才整体 400 并携带 `errors[]` 明细。空行跳过。
+
+**首行表头判定（本轮修出的真实缺陷）**：原判据是「首行含 `科目|题型|题干` 字样」，但这会把**科目名恰好含「科目」二字的数据行**（如「科目一」）当成表头整行丢弃，用户只看到「导入 0 条」且毫无线索。已改为两条同时成立才算表头：① 第 2 列不是任何可识别的题型（真实数据行这里必然是合法题型）② 行内至少命中 2 个表头特征词。测试用首行科目名 `__TEST_IMP__科目` 做了定点回归。
+
+**权限点**：新增 `quiz.import`（与 `student.import` 同构），授予 `testAdmin` 与 `quizAdder`；`quizOperator`（题库运维）刻意不给 —— 该角色只做清理不做录入，保持「能清不能灌」的既有分工。前端「批量导入」按钮同时按 `can('quiz.import')` 显隐。
+
+**改动清单**
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 模型 | `app/Models/Subject.php` | 新增 `idNameMap()` + `resolveId()`；`app/Models/Quiz.php` `fillable` 补 `quiz_kp` |
+| 控制器 | `app/Controllers/Admin/QuizController.php` | 新增 `import()` 与 `readImportContent()` / `resolveType()` / `resolveDiff()` / `normalizeImportOptions()` / `normalizeImportKey()` / `looksLikeHeader()`；`buildRow()` 写入 `quiz_kp`；`save()`/`update()` 校验规则补 `quiz_kp` |
+| 路由 | `config/routes.php` | `POST /api/admin/quizzes/import`（静态路由，优先于 `/{id}`） |
+| 中间件 | `app/Middlewares/SessionAuthMiddleware.php` | `WRITE_POINTS` 登记 `quiz.import` |
+| 权限 | `config/config.php` | `testAdmin` / `quizAdder` 授予 `quiz.import` |
+| 前端 | `views/admin/quiz.js`、`api/index.js` | 「批量导入」弹窗（格式说明 + 示例 + 上传文件/粘贴文本双 Tab + 模板下载 + 失败明细回显）；题库列表与详情新增「知识点」；单题编辑器新增「知识点」输入 |
+
+**验证**：`quiz_import_test.php` **66 PASS / 0 FAIL**（未登录 401 / 无权限 403 / 空内容 400 / 全失败 400 带 errors / 表头跳过 / 空行跳过 / 中文题型与代码题型 / 科目名与科目 ID / 选项分隔符归一 / 判断题口语答案 / 多选去重排序 / 难度中文与代码与默认 / 录题人回落 / 知识点列 / 部分失败仍 200 且成功行落库 / 单题新增与修改写知识点 / 审计 quiz.import）；真实浏览器 D2 探针（列表有知识点列、按钮能开弹窗、格式说明与模板下载齐备、无 JS 错误）。
+
+---
+
+### ✅ B3 移动端适配（交付清单编号 B4，2026-09-19 完成）
+
+**已有基础**（本轮之前就在）：视口 `width=device-width, initial-scale=1, viewport-fit=cover`；侧栏 ≤900px 抽屉化；考试页 ≤768px 固定底栏 + 答题卡上滑抽屉 + 安全区适配。
+
+**本轮补齐**
+
+| 方向 | 内容 |
+|---|---|
+| 断点标尺 | 在 `mobile.css` 顶部明确 1280 / 1024 / 900 / 768 / 480 / 360 六个标尺值并声明「新增规则一律取标尺值」，同时说明 640/560 为既有历史值予以保留（避免为统一而引入回归） |
+| 触控目标 | 新增 `@media (pointer: coarse)` 分支：按钮 `min-height:44px`（`min-height` 会盖过组件的固定 `height`，无需逐个改尺寸）、纯图标按钮补 `min-width:44px`、表单控件 44px、勾选框整行可点且本体 16→20px、导航项 / 下拉项 / 分段控件 44px、答题选项 48px。**仅作用于粗指针设备，桌面鼠标界面尺寸完全不变** |
+| 表格 | 触屏下 `.table-wrap` 横向滚动 + `-webkit-overflow-scrolling:touch` + `overscroll-behavior` 收口（横向不外溢到整页、纵向不误触发下拉刷新）；表头 `nowrap` 防止列被压成竖排文字 |
+| 粘滞悬停 | `@media (hover: none)` 关闭表格行 `:hover` 高亮 —— 触屏上鼠标悬停态会「粘住」，导致最后点过的那行一直高亮 |
+| 考生端底部标签栏 | `createShell` 新增可选 `mobileTabs` 配置；`shell.js` 渲染 `.mobile-tabbar`，桌面端 `display:none`、≤768px 显示，`setActive()` 与侧栏共用同一 key 同步高亮。考生端启用五项：我的考试 / 在线练习 / 错题本 / 我的成绩 / 我的。内容区自动加底部内边距为固定栏让位，并适配 iPhone 安全区 |
+| 管理/教师端 | **不启用**底部标签栏 —— 导航项多且二级入口密集，底部栏塞不下，「汉堡 + 抽屉」更合适。新增能力是可选配置而非全局改造 |
+
+**验证**：`b1b3b4_frontend_test.php`（96 断言，含 6 个端口的视口标签、`mobile.css` 加载顺序在所有样式之后、CSS 大括号配平、断点标尺与触控规则存在）；真实浏览器巡检 `browser_sweep_v6.mjs` 新增 **D1 探针**：在 390×844 移动视口断言标签栏渲染 / 可见 / 恰好 5 项 / 触控高度 ≥44px，并断言**桌面视口下不显示**。

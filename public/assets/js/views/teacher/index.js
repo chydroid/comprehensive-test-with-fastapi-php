@@ -13,7 +13,7 @@ import {
 import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
 import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
-import { fmtDateTime, fmtScore, fmtNumber } from '../../core/format.js';
+import { fmtDateTime, fmtScore, fmtNumber, fmtRelative } from '../../core/format.js';
 import { loadAppSettings, appSettingInt, entryWindowText } from '../../core/app-settings.js';
 
 const EXAM_STATUS = {
@@ -334,6 +334,7 @@ export function TeacherMonitorView({ router, query }) {
   const controlSlot = el('div');
   const toolbarSlot = el('div');
   const tableSlot = el('div', { style: { position: 'relative', minHeight: '220px' } });
+  const eventsSlot = el('div');
 
   const state = { examId: Number(query?.exam_id || 0), exams: [], list: [], summary: {}, exam: null, timer: null };
 
@@ -344,7 +345,7 @@ export function TeacherMonitorView({ router, query }) {
         button('刷新', { variant: 'secondary', size: 'sm', iconName: 'refresh-cw', onClick: () => init() }),
       ]),
     ]),
-    pickerSlot, statsSlot, controlSlot, toolbarSlot, tableSlot,
+    pickerSlot, statsSlot, controlSlot, toolbarSlot, tableSlot, eventsSlot,
   );
 
   // 并发保护：轮询 tick 与「锁定/交卷/结束考试」后的手动刷新可能同时触发，
@@ -394,6 +395,7 @@ export function TeacherMonitorView({ router, query }) {
     renderControl();
     renderToolbar();
     renderTable();
+    renderEvents();
   }
 
   /* ---------- 考场控制：开放入场 / 出题 / 开考 ---------- */
@@ -561,11 +563,14 @@ export function TeacherMonitorView({ router, query }) {
 
   function renderStats() {
     const s = state.summary || {};
+    // B1 防作弊：异常考生数（cheat_count > 0）
+    const exceptions = state.list.filter((r) => Number(r.cheat_count ?? 0) > 0).length;
     mount(statsSlot, [
       statCard({ label: '应考人数', value: fmtNumber(s.total ?? state.list.length), iconName: 'users' }),
       statCard({ label: '答题中', value: fmtNumber(s.online ?? 0), iconName: 'activity', tone: 'success' }),
       statCard({ label: '已交卷', value: fmtNumber(s.over ?? 0), iconName: 'check-circle', tone: 'brand' }),
       statCard({ label: '已锁定', value: fmtNumber(s.locked ?? 0), iconName: 'lock', tone: 'warning' }),
+      statCard({ label: '异常考生', value: fmtNumber(exceptions), iconName: 'alert-triangle', tone: 'danger' }),
     ]);
   }
 
@@ -615,6 +620,12 @@ export function TeacherMonitorView({ router, query }) {
         { key: 'class_id', title: '班级', render: (r) => el('span.muted', { text: r.class_id || '—' }) },
         { key: 'stu_status', title: '状态', render: (r) => stuStatusBadge(r.stu_status) },
         { key: 'stu_score', title: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
+        // B1 防作弊：异常次数（切屏/失焦等）
+        { key: 'cheat_count', title: '异常次数', align: 'center', render: (r) => {
+          const n = Number(r.cheat_count ?? 0);
+          if (n <= 0) return el('span.c-tertiary', { text: '0' });
+          return badge(String(n), { tone: 'danger', dot: true });
+        } },
         { key: '_acts', title: '操作', align: 'right', render: (r) => {
           // 已交卷考生不再提供锁定/解锁/交卷：后端 updateStatus 会拒绝从 over 迁出，
           // 而接口仍回「已锁定」，形成「提示成功、实际没变」的假反馈。
@@ -631,6 +642,34 @@ export function TeacherMonitorView({ router, query }) {
       emptyText: '本场考试暂无考生',
     });
     mount(tableSlot, t);
+  }
+
+  // B1 防作弊：异常行为记录面板（切屏 / 失焦 / 多端登录）
+  function cheatTypeLabel(t) {
+    return ({ tab_hidden: '切屏', blur: '失焦', other_device: '多端登录' })[t] || String(t || '异常');
+  }
+
+  async function renderEvents() {
+    clear(eventsSlot);
+    if (!state.examId) return;
+    try {
+      const data = await teacherApi.cheatEvents({ exam_id: state.examId, limit: 200 }).catch(() => null);
+      const list = (data && (data.list || data.events)) || [];
+      if (!list.length) return;
+      const rows = list.slice(0, 50).map((e) => el('div.flex.items-center.gap-3.fs-sm', {
+        style: { padding: 'var(--sp-2) 0', borderBottom: '1px solid var(--border-subtle)' },
+      }, [
+        badge(cheatTypeLabel(e.event_type), { tone: 'danger', dot: true }),
+        el('span.mono', { text: String(e.stu_id || '—') }),
+        el('span.fw-500', { text: e.detail || '' }),
+        el('span.c-tertiary.ml-auto', { text: e.created_at ? fmtRelative(e.created_at) : '' }),
+      ]));
+      eventsSlot.append(card({
+        iconName: 'alert-triangle', tone: 'danger',
+        title: `异常记录（${list.length} 条）`,
+        body: el('div.stack.divider', {}, rows),
+      }));
+    } catch (_) { /* 静默 */ }
   }
 
   /**

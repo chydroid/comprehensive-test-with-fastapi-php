@@ -12,6 +12,7 @@ import { icon } from '../core/icons.js';
 import { notify, button, openModal, confirmDialog } from '../ui/components.js';
 import { withLoading } from '../core/bootstrap.js';
 import { fmtScore, fmtDuration } from '../core/format.js';
+import { appSettingBool } from '../core/app-settings.js';
 
 /** 题型 → 展示元信息 */
 export const QTYPE = {
@@ -163,6 +164,12 @@ export function createExamRunner(cfg) {
   // 每次重绘前先移除上一张，保证题干下始终只有一张配图。
   let picNode = null;
 
+  // B1 防作弊：切屏 / 失焦监听与浮水印（仅正式考试 + 启用防作弊时挂载）。
+  // 三者都在视图销毁时清理，避免离开答题页后继续上报或残留 DOM。
+  let watermarkNode = null;
+  let visibilityHandler = null;
+  let blurHandler = null;
+
   function renderQuestion() {
     const q = state.question;
     if (!q) return;
@@ -204,9 +211,18 @@ export function createExamRunner(cfg) {
       ? opts
       : [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }];
 
+    // B1 选项乱序：按本卷该题的展示顺序重排选项；答案键仍是原始字母，不影响判分
+    const order = (q.option_order || '').trim();
+    let selectableList = selectable;
+    if (order) {
+      const byKey = new Map(selectable.map((o) => [o.key, o]));
+      const reordered = order.split('').map((k) => byKey.get(k)).filter(Boolean);
+      if (reordered.length === selectable.length) selectableList = reordered;
+    }
+
     const current = cur == null ? splitAnswer(q.stu_key) : splitAnswer(cur);
 
-    for (const o of selectable) {
+    for (const o of selectableList) {
       const on = current.includes(o.key);
       const item = el('div', {
         class: `option-item${on ? ' is-selected' : ''}`,
@@ -372,6 +388,54 @@ export function createExamRunner(cfg) {
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
   }
 
+  /**
+   * B1 防作弊：在正式考试且启用防作弊时，挂载
+   *  - 浮水印（平铺考生标识，pointer-events:none，降低截屏泄题动机）；
+   *  - 切屏 / 失焦监听（上报异常行为）。
+   * 仅当调用方提供 cfg.reportCheat 回调时挂载监听（其余模式无上报入口）。
+   */
+  function setupCheatGuard() {
+    if (cfg.mode !== 'exam' || !appSettingBool('enable_cheat_guard') || typeof cfg.reportCheat !== 'function') {
+      return;
+    }
+    if (cfg.cheatLabel) {
+      watermarkNode = createWatermark(cfg.cheatLabel);
+      root.append(watermarkNode);
+    }
+    visibilityHandler = () => {
+      if (document.hidden) reportCheat('tab_hidden', '切换标签页 / 窗口最小化');
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
+    blurHandler = () => reportCheat('blur', '答题窗口失去焦点');
+    window.addEventListener('blur', blurHandler);
+  }
+
+  function teardownCheatGuard() {
+    if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
+    if (blurHandler) window.removeEventListener('blur', blurHandler);
+    if (watermarkNode) watermarkNode.remove();
+    visibilityHandler = null;
+    blurHandler = null;
+    watermarkNode = null;
+  }
+
+  // 上报异常行为：旁路、fire-and-forget，绝不阻塞答题或抛错
+  function reportCheat(type, detail) {
+    try {
+      const p = cfg.reportCheat(type, detail);
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (_) { /* 忽略上报失败 */ }
+  }
+
+  function createWatermark(label) {
+    const wm = el('div.exam-watermark', { 'aria-hidden': 'true' });
+    const total = 54;
+    for (let i = 0; i < total; i++) {
+      wm.append(el('span.exam-watermark-item', { text: label }));
+    }
+    return wm;
+  }
+
   function startTimer() {
     if (!cfg.examEnd) return;
     const end = new Date(String(cfg.examEnd).replace(/-/g, '/')).getTime();
@@ -491,7 +555,10 @@ export function createExamRunner(cfg) {
 
   return {
     node: root,
-    dispose: stopTimer,
+    dispose: () => {
+      stopTimer();
+      teardownCheatGuard();
+    },
     async start() {
       const res = await withLoading(root, () => cfg.loadPaper(1), { text: '正在加载试卷…' });
       if (!res.ok) {
@@ -509,6 +576,7 @@ export function createExamRunner(cfg) {
       state.nav = res.result.navigation || state.nav;
       renderAll();
       startTimer();
+      setupCheatGuard();
     },
     /** 供外部（练习逐题模式）刷新当前题 */
     getState: () => state,

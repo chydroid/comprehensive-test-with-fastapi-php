@@ -278,3 +278,61 @@
   .app-shell.is-collapsed .nav-item { justify-content: flex-start; }
   .app-shell.is-collapsed .nav-item::after { display: none; }
 }
+
+/* ==========================================================================
+   移动端底部标签栏（可选，仅当 createShell 传入 mobileTabs 时渲染）
+   --------------------------------------------------------------------------
+   桌面端永不显示：主导航常驻左侧栏，再挂一条底栏是冗余。
+   ≤768px 时显示，承担「我的考试 / 练习 / 错题本 …」等主路径的一步直达，
+   侧栏抽屉保留其余次要入口（如修改密码、个人资料）。
+   ========================================================================== */
+.mobile-tabbar { display: none; }
+
+@media (max-width: 768px) {
+  .app-shell.has-mobile-tabs .mobile-tabbar {
+    display: flex;
+    align-items: stretch;
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: var(--z-sticky);
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-subtle);
+    padding: var(--sp-1) var(--sp-1) calc(var(--sp-1) + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -6px 18px -10px rgba(16, 24, 40, .28);
+  }
+
+  /* 触控目标 ≥48px（iOS HIG 建议 44pt 起，这里取整到 48） */
+  .mobile-tabbar-item {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: var(--sp-1) 2px;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    font-size: var(--fs-xs);
+    line-height: 1.1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .mobile-tabbar-item:active { background: var(--bg-hover); }
+  .mobile-tabbar-item.is-active { color: var(--brand-600); }
+  .mobile-tabbar-item .tab-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 为固定底栏让位，避免最后一屏内容被永久遮挡 */
+  .app-shell.has-mobile-tabs .app-content {
+    padding-bottom: calc(var(--sp-4) + 60px + env(safe-area-inset-bottom, 0px));
+  }
+}

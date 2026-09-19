@@ -166,3 +166,71 @@
 @media (max-width: 380px) {
   .login-panel { padding: var(--sp-5); }
 }
+
+/* ==========================================================================
+   5. 断点标尺（新增响应式规则请优先取下列值，避免出现 559/719 这类孤值）
+   --------------------------------------------------------------------------
+   1280px  desktop-l          宽屏桌面，多列栅格
+   1024px  tablet-l           平板横屏：考试页两列 → 单列（.exam-body / .grid-3）
+    900px  sidebar-fold       侧栏抽屉化（shell.css）
+    768px  tablet-portrait    底部标签栏启用、考试底栏固定、内容内边距收紧
+    480px  phone              隐藏次要信息（考试进度、按钮文字）
+    360px  phone-small        极小屏兜底
+   另有 640px（.user-meta / form-grid 单列）与 560px（表格换行）为既有历史值，
+   保持不变以免回归；新规则一律使用上表数值。
+   ========================================================================== */
+
+/* ==========================================================================
+   6. 触控目标 —— 手机 / 平板（pointer: coarse）
+   --------------------------------------------------------------------------
+   桌面端鼠标可精准点击，38px 甚至 26px 的按钮都没问题；手指不行。
+   iOS HIG 建议最小 44×44pt、Material 建议 48×48dp，这里统一抬到 44px 下限。
+   仅作用于粗指针设备：桌面鼠标用户界面尺寸完全不变。
+   ========================================================================== */
+@media (pointer: coarse) {
+  /* 按钮：min-height 会盖过组件的固定 height，无需逐个改 height */
+  .btn { min-height: 44px; }
+  /* 行内紧凑按钮（表格操作、弹窗次要动作）同样抬到可点面积 */
+  .btn-sm, .btn-xs { min-height: 44px; }
+  /* 纯图标按钮还需保证宽度，否则仍是个 26px 的窄条 */
+  .btn-icon, .btn-icon.btn-sm, .btn-icon.btn-xs { min-width: 44px; }
+
+  /* 表单控件：点击目标与键盘弹出高度都更友好 */
+  .input, .select { min-height: 44px; }
+  .input-sm { min-height: 40px; }
+
+  /* 勾选框本体仍是 16px 视觉尺寸，但整行 label 变成可点区 */
+  .checkbox, .radio { min-height: 44px; }
+  .checkbox input, .radio input { width: 20px; height: 20px; }
+
+  /* 侧栏导航与下拉菜单项 */
+  .nav-item { min-height: 44px; }
+  .dropdown-item { min-height: 44px; }
+  .segmented button, .segmented label, .segmented .seg-item { min-height: 40px; }
+
+  /* 切换/开关类控件 */
+  .switch, .toggle { min-height: 44px; }
+
+  /* 考试答题选项：整行即点击区，避免手指落在两行之间误选相邻项 */
+  .option-item { min-height: 48px; }
+  /* 答题卡格子：窄屏由 minmax(44px,1fr) 决定，这里兜住最小可点面积 */
+  .sheet-cell { min-height: 44px; }
+}
+
+/* 触控设备上的表格：允许横向滚动并保留惯性，避免列被压成竖排文字 */
+@media (pointer: coarse) {
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    /* 手指从表格上划过时不要误触发页面的下拉刷新 */
+    overscroll-behavior-y: contain;
+  }
+  .table thead th { white-space: nowrap; }
+}
+
+/* 鼠标悬停在高亮在触屏上会「粘住」：仅在支持 hover 的设备启用行悬停高亮 */
+@media (hover: none) {
+  .table tbody tr:hover { background: transparent; }
+  .table tbody tr.is-selected { background: var(--brand-50); }
+}

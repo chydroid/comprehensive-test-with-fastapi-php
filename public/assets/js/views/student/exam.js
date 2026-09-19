@@ -118,7 +118,7 @@ export function ExamTakeView({ router, query }) {
     // 刷新答题页后模块内的 csrfToken 会重置为空（不像登录那样由登录响应注入），
     // 而本接口每次都随响应带回令牌——不注入的话保存 / 交卷会被 419 拦截。
     if (data.csrf_token) setCsrfToken(data.csrf_token);
-    if (data.phase === 'answering') { startRunner(); return; }
+    if (data.phase === 'answering') { startRunner(data.stu_name); return; }
     if (data.phase === 'submitted' || data.phase === 'closed') { renderClosed(data); return; }
     renderWaiting(data.exam);
   }
@@ -148,7 +148,7 @@ export function ExamTakeView({ router, query }) {
         // 因此退场逻辑必须由本视图自己承担。
         if (!r || !r.phase) { stopPoll(); router.navigate('/'); return; }
         if (r.csrf_token) setCsrfToken(r.csrf_token);
-        if (r.phase === 'answering') { stopPoll(); startRunner(); }
+        if (r.phase === 'answering') { stopPoll(); startRunner(r.stu_name); }
         else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }
       } finally {
         polling = false;
@@ -166,7 +166,7 @@ export function ExamTakeView({ router, query }) {
     ]))));
   }
 
-  function startRunner() {
+  function startRunner(stuName) {
     if (started) return;
     started = true;
     stopPoll();
@@ -175,6 +175,9 @@ export function ExamTakeView({ router, query }) {
       mode: 'exam',
       title: '正式考试',
       exitUrl: '/student',
+      // B1 防作弊：考生标识浮水印 + 切屏/失焦上报
+      cheatLabel: stuName ? `考生 ${stuName}` : '考生',
+      reportCheat: (type, detail) => examApi.reportCheat({ type, detail }),
       loadPaper: async (paperId) => examApi.paper({ paper_id: paperId }),
       saveAnswer: async (paperId, answer) => examApi.save({ paper_id: paperId, stu_key: answer }),
       submit: async () => examApi.submit({}),

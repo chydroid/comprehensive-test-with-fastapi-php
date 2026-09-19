@@ -91,6 +91,7 @@ class QuizController extends BaseController
             'quiz_pic_name' => 'maxlen:255',
             'quiz_writer'   => 'maxlen:50',
             'quiz_time'     => 'maxlen:10',
+            'quiz_kp'       => 'maxlen:120',
         ]);
 
         $subjId = (int) $in['subj_id'];
@@ -130,6 +131,7 @@ class QuizController extends BaseController
             'quiz_pic_name' => 'maxlen:255',
             'quiz_writer'   => 'maxlen:50',
             'quiz_time'     => 'maxlen:10',
+            'quiz_kp'       => 'maxlen:120',
         ]);
 
         $subjId = (int) $in['subj_id'];
@@ -174,6 +176,126 @@ class QuizController extends BaseController
         $deleted = $this->model->deleteMany($ids);
         $this->audit('quiz.batch-delete', 'quiz:batch', ['ids' => $ids, 'deleted' => $deleted]);
         return $this->ok(['deleted' => $deleted], "批量删除成功，共删除 {$deleted} 条试题");
+    }
+
+    /**
+     * POST /api/admin/quizzes/import —— 题库批量导入（CSV / TXT）
+     *
+     * 输入：CSV 文本（body: content）或上传文件（multipart: file）
+     * 列顺序：科目, 题型, 题干, 选项, 答案, 难度, 录题人, 知识点
+     *   - 科目：科目名或科目 ID（Subject::resolveId 归一）
+     *   - 题型：中文名（判断题/单选题/多选题/填空题/问答题）或代码（radio1/radio2/checkbox/text/longtext）
+     *   - 选项：仅选择题需要，用 | 分隔（如 `对|错` 或 `A.甲|B.乙|C.丙`）；非选择题忽略该列
+     *   - 答案：选择题为字母（多选可 `AC`/`CA`，自动去重排序）；判断题兼容 对/错、√/×、T/F；填空/问答保留原文
+     *   - 难度：易/中/难 或 Y/Z/N（留空默认「中」）
+     *   - 录题人：留空回落为当前登录账号
+     *   - 知识点：可选，供「按知识点组卷」与学情分析使用（A3 维度，列宽 120）
+     *
+     * 逐行校验、逐行写入：单行失败只记错误不中断整批（与考生批量导入一致）。
+     */
+    public function import(): Response
+    {
+        $sess = $this->authAdmin();
+        $content = $this->readImportContent();
+        if (trim($content) === '') {
+            throw new HttpException(400, '导入内容为空', 40000);
+        }
+
+        // 去 BOM + 统一换行
+        $content = str_replace("\xEF\xBB\xBF", '', $content);
+        $lines = preg_split('/\r\n|\r|\n/', $content) ?: [];
+
+        $subject = new Subject();
+        $defaultWriter = mb_substr((string) ($sess['username'] ?? ''), 0, 50);
+        $today = date('Y-m-d');
+
+        $imported = 0;
+        $errors = [];
+        $rowNo = 0;
+
+        foreach ($lines as $line) {
+            $rowNo++;
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+
+            $parts = str_contains($line, ',') ? str_getcsv($line) : explode("\t", $line);
+
+            // 跳过表头（仅首行，且必须「题型列不是合法题型」+ 命中多个表头特征词）
+            if ($rowNo === 1 && self::looksLikeHeader($parts)) {
+                continue;
+            }
+
+            $subjRaw = trim((string) ($parts[0] ?? ''));
+            $typeRaw = trim((string) ($parts[1] ?? ''));
+            $title   = trim((string) ($parts[2] ?? ''));
+            if ($subjRaw === '' || $typeRaw === '' || $title === '') {
+                $errors[] = "第 {$rowNo} 行：缺少科目、题型或题干";
+                continue;
+            }
+
+            $subjId = Subject::resolveId($subjRaw);
+            if ($subjId <= 0 || $subject->find($subjId) === null) {
+                $errors[] = "第 {$rowNo} 行：科目「{$subjRaw}」不存在";
+                continue;
+            }
+
+            $type = self::resolveType($typeRaw);
+            if ($type === '') {
+                $errors[] = "第 {$rowNo} 行：无法识别的题型「{$typeRaw}」";
+                continue;
+            }
+
+            $isOptionType = in_array($type, self::OPTION_TYPES, true);
+            $option = self::normalizeImportOptions($type, (string) ($parts[3] ?? ''));
+            if ($isOptionType && $option === '') {
+                $errors[] = "第 {$rowNo} 行：选择题缺少选项";
+                continue;
+            }
+
+            $key = $this->normalizeKey($type, self::normalizeImportKey($type, (string) ($parts[4] ?? '')));
+            if ($isOptionType && $key === '') {
+                $errors[] = "第 {$rowNo} 行：选择题缺少答案";
+                continue;
+            }
+
+            try {
+                $this->model->create([
+                    'subj_id'       => $subjId,
+                    'quiz_title'    => $title,
+                    'quiz_class'    => $type,
+                    'quiz_option'   => $option,
+                    'quiz_key'      => $key,
+                    'quiz_diff'     => self::resolveDiff((string) ($parts[5] ?? '')),
+                    'quiz_pic_name' => '',
+                    'quiz_writer'   => self::pickWriter($parts[6] ?? null, $defaultWriter),
+                    'quiz_time'     => $today,
+                    'quiz_kp'       => mb_substr(trim((string) ($parts[7] ?? '')), 0, 120),
+                    'quiz_hits'     => 0,
+                    'quiz_key_ok'   => 0,
+                ]);
+                $imported++;
+            } catch (\Throwable $e) {
+                $errors[] = "第 {$rowNo} 行导入失败";
+            }
+        }
+
+        if ($imported === 0) {
+            throw new HttpException(
+                400,
+                '导入失败：' . implode('；', array_slice($errors, 0, 5)),
+                40001,
+                ['errors' => $errors]
+            );
+        }
+
+        $this->audit('quiz.import', 'quiz:batch', ['imported' => $imported, 'failed' => count($errors)]);
+        return $this->ok([
+            'imported' => $imported,
+            'failed'   => count($errors),
+            'errors'   => array_slice($errors, 0, 50),
+        ], "成功导入 {$imported} 道试题" . (count($errors) > 0 ? '，' . count($errors) . ' 条失败' : ''));
     }
 
     /** GET /api/admin/quizzes/clean/preview?subj_id=N —— 重复题预览（不删除） */
@@ -263,16 +385,125 @@ class QuizController extends BaseController
             'quiz_key'      => $this->normalizeKey($type, (string) ($in['quiz_key'] ?? '')),
             'quiz_diff'     => (string) $in['quiz_diff'],
             'quiz_pic_name' => trim((string) ($in['quiz_pic_name'] ?? '')),
+            // 知识点：A3 组卷/学情分析的分组维度，列宽 VARCHAR(120)
+            'quiz_kp'       => mb_substr(trim((string) ($in['quiz_kp'] ?? '')), 0, 120),
         ];
     }
 
     /** 保存前归一化答案：大写 + 多选题按字母排序（预防脏数据进入题库） */
     private function normalizeKey(string $type, string $key): string
-    {        $key = trim($key);
+    {
+        $key = trim($key);
         if ($key === '') {
             return '';
         }
         return Quiz::normalizeAnswer($type, $key);
+    }
+
+    /* ---------------- 批量导入辅助 ---------------- */
+
+    /** 读取导入内容：优先 multipart 文件，其次 body 里的 content 字段 */
+    private function readImportContent(): string
+    {
+        $file = $this->request->file('file');
+        if (is_array($file) && isset($file['tmp_name']) && ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+            $ext = strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
+            if (!in_array($ext, ['csv', 'txt'], true)) {
+                throw new HttpException(400, '只支持 CSV 或 TXT 格式文件', 40000);
+            }
+            $content = @file_get_contents((string) $file['tmp_name']);
+            return $content === false ? '' : $content;
+        }
+
+        return (string) $this->request->input('content', '');
+    }
+
+    /** 题型：中文名或代码 → 代码；无法识别返回 '' */
+    private static function resolveType(string $raw): string
+    {
+        $raw = trim($raw);
+        if (in_array($raw, Quiz::TYPES, true)) {
+            return $raw;
+        }
+        $map = array_flip(Quiz::TYPE_LABELS);
+        return (string) ($map[$raw] ?? '');
+    }
+
+    /**
+     * 首行是否为表头。
+     *
+     * 只判断「行内出现 科目/题型 字样」会把真实数据行误判成表头并整行丢弃
+     * （例如科目名叫「科目一」时，首行数据会被静默吞掉，用户只看到「导入 0 条」）。
+     * 因此改为两条同时成立才算表头：
+     *   ① 第 2 列（题型列）不是任何可识别的题型 —— 真实数据行这里必然是合法题型；
+     *   ② 行内至少命中 2 个表头特征词。
+     */
+    private static function looksLikeHeader(array $parts): bool
+    {
+        if (self::resolveType((string) ($parts[1] ?? '')) !== '') {
+            return false;
+        }
+        $line = mb_strtolower(implode(',', array_map(static fn ($p): string => (string) $p, $parts)));
+        $hits = 0;
+        foreach (['科目', '题型', '题干', '选项', '答案', '难度', 'subj', 'type', 'title', 'question', 'option', 'answer'] as $kw) {
+            if (str_contains($line, $kw)) {
+                $hits++;
+                if ($hits >= 2) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 难度：易/中/难 或 Y/Z/N → 代码；无法识别回落 Z（中） */
+    private static function resolveDiff(string $raw): string
+    {
+        $raw = trim($raw);
+        $up = strtoupper($raw);
+        if (in_array($up, Quiz::DIFFS, true)) {
+            return $up;
+        }
+        $map = ['易' => 'Y', '中' => 'Z', '难' => 'N', '简单' => 'Y', '普通' => 'Z', '困难' => 'N'];
+        return $map[$raw] ?? 'Z';
+    }
+
+    /** 选项归一：选择题统一为 `|` 分隔；非选择题一律清空（填空/问答不存选项） */
+    private static function normalizeImportOptions(string $type, string $raw): string
+    {
+        if (!in_array($type, self::OPTION_TYPES, true)) {
+            return '';
+        }
+        $raw = trim($raw);
+        if ($raw === '') {
+            return '';
+        }
+        // 兼容换行 / 半角分号 / 全角分号 分隔的选项，统一为旧库主用法 `|`
+        $parts = preg_split('/\s*[\r\n;；]+\s*/u', $raw) ?: [];
+        $parts = array_values(array_filter(array_map('trim', $parts), static fn (string $s): bool => $s !== ''));
+        return implode('|', $parts);
+    }
+
+    /**
+     * 答案归一（导入入口专用）：兼容判断题的 对/错、√/×、T/F 等口语写法。
+     * 填空/问答题保留原文（不做字母映射）。
+     */
+    private static function normalizeImportKey(string $type, string $raw): string
+    {
+        $raw = trim($raw);
+        if ($raw === '' || !in_array($type, self::OPTION_TYPES, true)) {
+            return $raw;
+        }
+        $map = [
+            '对' => 'A', '正确' => 'A', '是' => 'A', '√' => 'A', '✓' => 'A',
+            '错' => 'B', '错误' => 'B', '否' => 'B', '×' => 'B', '✗' => 'B',
+        ];
+        if (isset($map[$raw])) {
+            return $map[$raw];
+        }
+        $up = strtoupper($raw);
+        $upper = ['T' => 'A', 'TRUE' => 'A', 'F' => 'B', 'FALSE' => 'B'];
+        return $upper[$up] ?? $raw;
     }
 
     /** 录题人：表单值优先，留空回落到传入的默认值（通常是当前登录账号） */

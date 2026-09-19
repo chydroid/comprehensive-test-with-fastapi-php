@@ -37,4 +37,38 @@ class Subject extends Model
         );
         return (int) ($row['c'] ?? 0) > 0;
     }
+
+    private static ?array $idNameMap = null;
+
+    /** 科目 ID => 名称（请求内缓存，避免批量导入逐行查库） */
+    public static function idNameMap(): array
+    {
+        if (self::$idNameMap === null) {
+            self::$idNameMap = [];
+            foreach (\Core\Database::fetchAll('SELECT id, subj_name FROM `subject`') as $r) {
+                self::$idNameMap[(string) $r['id']] = (string) $r['subj_name'];
+            }
+        }
+        return self::$idNameMap;
+    }
+
+    /**
+     * 科目「名称或 ID」归一为科目 ID；认不出返回 0。
+     *
+     * 批量导入题库时，CSV 里第 1 列通常是科目名（人写的），而库内一律按 ID 关联。
+     * 写入口必须过这一层，否则会往 quizlib.subj_id 塞名字，导致按科目筛选/组卷全部对不上号。
+     */
+    public static function resolveId(mixed $value): int
+    {
+        $token = trim((string) (is_array($value) ? implode(',', $value) : $value));
+        if ($token === '') {
+            return 0;
+        }
+        $map = self::idNameMap();
+        if (ctype_digit($token)) {
+            return isset($map[$token]) ? (int) $token : 0;
+        }
+        $id = array_search($token, $map, true);
+        return $id === false ? 0 : (int) $id;
+    }
 }

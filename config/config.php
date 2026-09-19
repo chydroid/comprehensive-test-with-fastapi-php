@@ -133,6 +133,8 @@ return [
             'monitor.view', 'monitor.control',
             'score.view', 'score.backup', 'score.export',
             'quiz.view',
+            // 批量导入题库：与 student.import 同构，独立于单题增删（testAdmin 本就不管录题）
+            'quiz.import',
             // 与 student.* 对齐：既能查看也需要维护授课教师
             'teacher.view', 'teacher.add', 'teacher.edit', 'teacher.delete',
             'news.view',
@@ -149,6 +151,8 @@ return [
         'quizAdder' => [
             'dashboard.view',
             'quiz.view', 'quiz.add', 'quiz.edit', 'quiz.delete',
+            // 录题员的核心工作方式就是从表格灌题，导入权限必须给
+            'quiz.import',
             'subject.view',
             'admin.access',
         ],

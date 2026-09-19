@@ -29,6 +29,8 @@ const FALLBACK = {
   password_min_length: 6,
   waiting_poll_seconds: 4,
   monitor_refresh_seconds: 10,
+  // B1 防作弊：切屏/离窗记录、选项乱序、多端互踢的总开关（后端 Setting::SCHEMA 同名项）。
+  enable_cheat_guard: 0,
 };
 
 let cache = null;

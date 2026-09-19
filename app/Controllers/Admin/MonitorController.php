@@ -6,6 +6,7 @@ namespace App\Controllers\Admin;
 
 use App\Controllers\BaseController;
 use App\Models\Exam;
+use App\Services\CheatGuard;
 use App\Services\InvigilationService;
 use Core\HttpException;
 use Core\Response;
@@ -136,11 +137,21 @@ class MonitorController extends BaseController
         return $this->ok($result, "考试已结束，共判分 {$result['graded']} 人");
     }
 
+    /** GET /api/admin/monitor/cheat-events?exam_id=&stu_id= —— 本场异常行为记录 */
+    public function cheatEvents(): Response
+    {
+        $examId = $this->examId();
+        $stuId = trim((string) $this->request->query('stu_id', ''));
+        return $this->ok(['events' => CheatGuard::events($examId, $stuId === '' ? null : $stuId)]);
+    }
+
     /* ------------------------------------------------------------------ */
 
     private function examId(): int
     {
-        $examId = (int) $this->request->input('exam_id', $this->request->input('examId', 0));
+        // 兼容 query（GET 列表 / 前端 { query } 传参）与 body（POST 操作）两种来源
+        $all = $this->request->all();
+        $examId = (int) ($all['exam_id'] ?? $all['examId'] ?? 0);
         if ($examId <= 0) {
             throw new HttpException(400, '缺少 exam_id 参数', 40000);
         }

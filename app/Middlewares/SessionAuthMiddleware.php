@@ -142,6 +142,9 @@ class SessionAuthMiddleware implements Middleware
         'POST /api/admin/quizzes/batch-delete'  => 'quiz.delete',
         'POST /api/admin/quizzes/clean'         => 'quiz.clean',
         'POST /api/admin/quizzes/advanced-clean'=> 'quiz.clean',
+        // 批量导入是独立权限点（与 student.import 同构），便于「只让录题员从表格灌题」
+        // 这类分工，而不必连带开放单题增删。不登记时 POST 会被推导成 quiz.add。
+        'POST /api/admin/quizzes/import'        => 'quiz.import',
         'GET /api/admin/quizzes/clean/preview'  => 'quiz.clean',
         'POST /api/admin/exams/{id}/start'      => 'exam.start',
         'POST /api/admin/exams/{id}/generate'   => 'exam.generate',

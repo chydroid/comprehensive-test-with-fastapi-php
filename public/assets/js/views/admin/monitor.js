@@ -45,8 +45,9 @@ export async function MonitorView({ router, query }) {
   const controlSlot = el('div');
   const toolbarSlot = el('div');
   const tableSlot = el('div', { style: { position: 'relative', minHeight: '200px' } });
+  const eventsSlot = el('div');
 
-  root.append(headSlot, examPickerSlot, statsSlot, controlSlot, toolbarSlot, tableSlot);
+  root.append(headSlot, examPickerSlot, statsSlot, controlSlot, toolbarSlot, tableSlot, eventsSlot);
 
   let examId = Number(query?.exam_id) || 0;
   let activeExams = [];
@@ -86,6 +87,7 @@ export async function MonitorView({ router, query }) {
     renderStats();
     renderControl();
     renderTable();
+    renderEvents();
     setupAutoRefresh();
   }
 
@@ -144,11 +146,14 @@ export async function MonitorView({ router, query }) {
   function renderStats() {
     clear(statsSlot);
     const s = frameSummary || currentExam?.status_summary || summarize(roster);
+    // B1 防作弊：异常行为累计（切屏/失焦等），来自 stuscore.cheat_count
+    const exceptions = roster.filter((r) => Number(r.cheat_count ?? 0) > 0).length;
     statsSlot.append(
       statItem('考生总数', s.total ?? roster.length, 'users', ''),
       statItem('在线作答', s.online ?? 0, 'activity', 'success'),
       statItem('已锁定', s.locked ?? 0, 'lock', 'danger'),
       statItem('已交卷', s.over ?? 0, 'check-circle', 'info'),
+      statItem('异常考生', exceptions, 'alert-triangle', 'danger'),
     );
   }
 
@@ -308,6 +313,34 @@ export async function MonitorView({ router, query }) {
     });
   }
 
+  // B1 防作弊：异常行为记录面板（切屏 / 失焦 / 多端登录），按最近事件展示
+  function cheatTypeLabel(t) {
+    return ({ tab_hidden: '切屏', blur: '失焦', other_device: '多端登录' })[t] || String(t || '异常');
+  }
+
+  async function renderEvents() {
+    clear(eventsSlot);
+    if (!examId) return;
+    try {
+      const data = await adminApi.cheatEvents({ exam_id: examId, limit: 200 }).catch(() => null);
+      const list = (data && (data.list || data.events)) || [];
+      if (!list.length) return; // 无异常则不占版面
+      const rows = list.slice(0, 50).map((e) => el('div.flex.items-center.gap-3.fs-sm', {
+        style: { padding: 'var(--sp-2) 0', borderBottom: '1px solid var(--border-subtle)' },
+      }, [
+        badge(cheatTypeLabel(e.event_type), { tone: 'danger', dot: true }),
+        el('span.mono', { text: String(e.stu_id || '—') }),
+        el('span.fw-500', { text: e.detail || '' }),
+        el('span.c-tertiary.ml-auto', { text: e.created_at ? fmtRelative(e.created_at) : '' }),
+      ]));
+      eventsSlot.append(card({
+        iconName: 'alert-triangle', tone: 'danger',
+        title: `异常记录（${list.length} 条）`,
+        body: el('div.stack.divider', {}, rows),
+      }));
+    } catch (_) { /* 静默 */ }
+  }
+
   function renderTable() {
     clear(toolbarSlot);
     const bulk = !examId;
@@ -360,6 +393,13 @@ export async function MonitorView({ router, query }) {
           render: (r) => {
             if (r.stu_status !== 'over') return el('span.c-tertiary', { text: '—' });
             return el('span.mono.fw-600', { text: fmtScore(r.stu_score) });
+          } },
+        // B1 防作弊：切屏/失焦等异常行为次数，来自 stuscore.cheat_count
+        { key: 'cheat_count', title: '异常次数', width: '96px', align: 'center',
+          render: (r) => {
+            const n = Number(r.cheat_count ?? 0);
+            if (n <= 0) return el('span.c-tertiary', { text: '0' });
+            return badge(String(n), { tone: 'danger', dot: true });
           } },
         // 行内操作必须作为「列」渲染：table() 并不支持 rowActions 参数，
         // 此前传进去被静默忽略 —— 锁定/解锁/收卷按钮从不出现，doOne() 成为死代码。

@@ -8,6 +8,7 @@ use App\Models\Exam;
 use App\Models\Quiz;
 use App\Models\StuScore;
 use App\Services\AuthSession;
+use App\Services\CheatGuard;
 use App\Services\ExamEngine;
 use App\Services\Password;
 use App\Services\Setting;
@@ -129,15 +130,24 @@ class ExamController extends BaseController
             $scores->updateStatus($examId, (string) $in['stu_id'], 'online');
         }
 
+        // 多端互踢：生成并写入本次登录的设备令牌（仅启用防作弊时）。
+        // 之后任一接口若发现「会话令牌 ≠ 数据库令牌」，即判定本设备已被新登录挤下线。
+        $examToken = '';
+        if (Setting::bool('enable_cheat_guard')) {
+            $examToken = bin2hex(random_bytes(16));
+            $scores->setToken($examId, (string) $in['stu_id'], $examToken);
+        }
+
         // 考场登录是从「匿名」提升为「可读写本场试卷」的权限提升，
         // 必须与 AuthSession::login 一致地换发会话 ID，防会话固定（CWE-384）：
         // 否则攻击者预置一个已知 session id 即可在考生登录后复用该 id 读取试题。
         sess_regenerate();
         sess_set(self::SESS_EXAM, [
-            'exam_id'  => $examId,
-            'stu_id'   => (string) $in['stu_id'],
-            'stu_name' => (string) $student['stu_name'],
-            'login_at' => time(),
+            'exam_id'    => $examId,
+            'stu_id'     => (string) $in['stu_id'],
+            'stu_name'   => (string) $student['stu_name'],
+            'login_at'   => time(),
+            'exam_token' => $examToken,
         ]);
 
         // 独立考场入口（/exam）不经过个人中心登录，会话里还没有安全令牌。
@@ -159,6 +169,7 @@ class ExamController extends BaseController
             'stu_name' => $student['stu_name'],
             'phase'    => $phase,
             'warnings' => [],
+            'cheat_guard' => Setting::bool('enable_cheat_guard') ? 1 : 0,
         ], '进入考场成功');
     }
 
@@ -200,6 +211,21 @@ class ExamController extends BaseController
 
         $examId = (int) $sess['exam_id'];
         $stuId = (string) $sess['stu_id'];
+
+        // 多端互踢：本设备令牌与数据库不一致 → 已被新登录挤下线，清空会话回到登录页
+        if ($this->deviceKicked($examId, $stuId)) {
+            sess_forget(self::SESS_EXAM);
+            return $this->ok([
+                'phase'             => null,
+                'paper_ready'       => false,
+                'score_visible'     => Setting::bool('exam_show_score_immediately', true),
+                'allow_view_answer' => Setting::bool('exam_allow_view_answer', true),
+                'exam'              => null,
+                'stu_name'          => '',
+                'csrf_token'        => AuthSession::csrfToken(),
+                'server_ts'         => time(),
+            ]);
+        }
 
         Exam::autoStartIfDue($examId);
 
@@ -245,14 +271,40 @@ class ExamController extends BaseController
             // 使保存答案 / 交卷可正常通过 CSRF 校验（否则恒 419）。
             'csrf_token' => AuthSession::csrfToken(),
             'server_ts'  => time(),
+            'cheat_guard' => Setting::bool('enable_cheat_guard') ? 1 : 0,
         ]);
     }
 
     /** POST /api/exam/logout */
     public function logout(): Response
     {
+        $sess = $this->examSessionOrNull();
+        if ($sess !== null) {
+            // 退出考场时清空设备令牌，避免残留令牌干扰后续重新入场
+            (new StuScore())->clearToken((int) $sess['exam_id'], (string) $sess['stu_id']);
+        }
         sess_forget(self::SESS_EXAM);
         return $this->ok(null, '已退出考场');
+    }
+
+    /**
+     * POST /api/exam/cheat —— 上报一次异常行为（切屏 / 失焦）。
+     * 仅在启用防作弊时记录；未启用或越权调用一律静默成功，不泄露开关状态。
+     */
+    public function reportCheat(): Response
+    {
+        if (!Setting::bool('enable_cheat_guard')) {
+            return $this->ok(null);
+        }
+        $sess = $this->examSession();
+        $examId = (int) $sess['exam_id'];
+        $stuId = (string) $sess['stu_id'];
+        $in = $this->validate([
+            'type'   => 'required|maxlen:32',
+            'detail' => 'maxlen:500',
+        ]);
+        CheatGuard::report($examId, $stuId, (string) $in['type'], (string) ($in['detail'] ?? ''));
+        return $this->ok(null, '已记录');
     }
 
     /**
@@ -264,6 +316,12 @@ class ExamController extends BaseController
         $sess = $this->examSession();
         $examId = (int) $sess['exam_id'];
         $stuId = (string) $sess['stu_id'];
+
+        // 多端互踢：本设备令牌与数据库不一致 → 已被新登录挤下线
+        if ($this->deviceKicked($examId, $stuId)) {
+            sess_forget(self::SESS_EXAM);
+            throw new HttpException(409, '您已在其他设备登录，本次会话已结束', 40902);
+        }
 
         $score = (new StuScore())->findOne($examId, $stuId);
         if ($score === null) {
@@ -302,7 +360,7 @@ class ExamController extends BaseController
         }
 
         $row = Database::fetch(
-            'SELECT sp.paper_id, sp.quiz_class, sp.stu_key, sp.quiz_status,
+            'SELECT sp.paper_id, sp.quiz_class, sp.stu_key, sp.quiz_status, sp.option_order,
                     q.quiz_title, q.quiz_option, q.quiz_pic_name, q.id AS quiz_id
              FROM `stupaper` sp
              INNER JOIN `quizlib` q ON q.id = sp.quiz_id
@@ -317,6 +375,8 @@ class ExamController extends BaseController
         $question['paper_id'] = (int) $row['paper_id'];
         $question['stu_key']  = (string) ($row['stu_key'] ?? '');
         $question['answered'] = (int) $row['quiz_status'] !== 0;
+        // 选项乱序：前端据此重排选项展示顺序（答案键仍是原始字母，不影响判分）
+        $question['option_order'] = (string) ($row['option_order'] ?? '');
 
         return $this->ok([
             'question'   => $question,
@@ -333,6 +393,12 @@ class ExamController extends BaseController
         $sess = $this->examSession();
         $examId = (int) $sess['exam_id'];
         $stuId = (string) $sess['stu_id'];
+
+        // 多端互踢：本设备令牌与数据库不一致 → 已被新登录挤下线
+        if ($this->deviceKicked($examId, $stuId)) {
+            sess_forget(self::SESS_EXAM);
+            throw new HttpException(409, '您已在其他设备登录，本次会话已结束', 40902);
+        }
 
         $score = (new StuScore())->findOne($examId, $stuId);
         if ($score === null) {
@@ -532,6 +598,23 @@ class ExamController extends BaseController
     {
         $s = sess_get(self::SESS_EXAM);
         return is_array($s) && isset($s['exam_id'], $s['stu_id']) ? $s : null;
+    }
+
+    /**
+     * 多端互踢判定：启用防作弊且「会话令牌 ≠ 数据库令牌」时返回 true。
+     * 该情形说明当前会话已被同一账号的新登录挤下线。
+     */
+    private function deviceKicked(int $examId, string $stuId): bool
+    {
+        if (!Setting::bool('enable_cheat_guard')) {
+            return false;
+        }
+        $token = (string) (sess_get(self::SESS_EXAM)['exam_token'] ?? '');
+        if ($token === '') {
+            return false;
+        }
+        $stored = (string) ((new StuScore())->tokenOf($examId, $stuId) ?? '');
+        return $stored !== '' && $stored !== $token;
     }
 
     private function examEnd(int $examId): ?string
