@@ -15,6 +15,8 @@ export const siteApi = {
   categories:() => http.get('/public/categories'),
   news:     (params) => http.get('/public/news', { query: params }),
   newsItem: (id) => http.get(`/public/news/${id}`),
+  // C1 电子证书公开核验：只需证书编号，姓名在服务端脱敏
+  verifyCertificate: (certNo) => http.get('/public/certificates/verify', { query: { cert_no: certNo } }),
   health:   () => http.get('/health'),
 };
 
@@ -31,6 +33,11 @@ export const studentApi = {
   updatePassword: (body) => http.put('/student/password', body),
   scores:   (params) => http.get('/student/scores', { query: params }),
   exams:    () => http.get('/student/exams'),
+  // B4 成绩公示：本场成绩榜（后端按逐场 score_visibility 决定可见范围）
+  scoreBoard: (params) => http.get('/student/score-board', { query: params }),
+  // C1 电子证书：我的证书（会顺带惰性签发新达标场次）
+  certificates: () => http.get('/student/certificates'),
+  certificate:  (examId) => http.get(`/student/certificates/${examId}`),
   wrongBookList:     (params) => http.get('/student/wrong-book', { query: params }),
   wrongBookPractice: (params) => http.get('/student/wrong-book/practice', { query: params }),
   wrongBookCheck:    (body) => http.post('/student/wrong-book/check', body),
@@ -108,6 +115,9 @@ export const teacherApi = {
   exportScores: (params) => download('/teacher/scores/export', { query: params }),
   // B1 防作弊：监考端查看本场异常行为记录
   cheatEvents: (params) => http.get('/teacher/monitor/cheat-events', { query: params }),
+  // C2 补考：候选名单（未通过/缺考/已通过）与生成补考场次
+  retakeCandidates: (id) => http.get(`/teacher/exams/${id}/retake-candidates`),
+  createRetake:     (id, body) => http.post(`/teacher/exams/${id}/retake`, body),
 };
 
 /* ============================ 管理后台 ============================ */
@@ -162,6 +172,9 @@ export const adminApi = {
   examQuizCount:(id, params) => http.get(`/admin/exams/${id}/quiz-count`, { query: params }),
   // A2 成绩与学情分析（按考试）
   examAnalysis: (id, params) => http.get(`/admin/exams/${id}/analysis`, { query: params }),
+  // C2 补考：候选名单（未通过/缺考/已通过）与生成补考场次
+  retakeCandidates: (id) => http.get(`/admin/exams/${id}/retake-candidates`),
+  createRetake:     (id, body) => http.post(`/admin/exams/${id}/retake`, body),
   // A3 组卷多样化：手动选题检索 / 知识点清单
   quizSearch:   (params) => http.get('/admin/quiz-search', { query: params }),
   quizKps:      (params) => http.get('/admin/quiz-kps', { query: params }),

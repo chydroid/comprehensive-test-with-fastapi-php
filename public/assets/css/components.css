@@ -754,3 +754,80 @@
 @media (max-width: 560px) {
   .dl-row { grid-template-columns: 1fr; gap: var(--sp-1); }
 }
+
+/* ============================ 16. 补考名单（C2） ============================ */
+.retake-list {
+  display: grid;
+  gap: var(--sp-1);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--sp-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+.retake-row {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.retake-row:hover { background: var(--bg-hover); }
+.retake-row input[type="checkbox"] { flex: none; }
+
+/* ============================ 17. 成绩榜（B4） ============================ */
+.score-board {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.board-row {
+  display: grid;
+  grid-template-columns: 44px 1fr auto auto;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+}
+.board-row + .board-row { border-top: 1px solid var(--border-subtle); }
+.board-row.is-me { background: var(--brand-50, var(--bg-hover)); font-weight: 600; }
+.board-rank {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.board-row.is-me .board-rank { color: var(--brand-600); }
+
+/* ============================ 18. 电子证书（C1） ============================ */
+.cert-card {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-xs);
+}
+.cert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px dashed var(--border-subtle);
+}
+.cert-title { font-size: var(--fs-lg); font-weight: 700; }
+.cert-sub { font-size: var(--fs-sm); color: var(--text-secondary); }
+.cert-no { font-family: var(--font-mono); word-break: break-all; }
+.cert-seal {
+  width: 68px; height: 68px;
+  display: grid; place-items: center;
+  border: 2px solid var(--brand-600);
+  border-radius: 50%;
+  color: var(--brand-600);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  transform: rotate(-12deg);
+}

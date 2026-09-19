@@ -491,6 +491,40 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
 
   renderMode();
 
+  /* ---------- B4 成绩公示 + C1 电子证书 ---------- */
+  // 公示粒度默认 private（＝既有行为，考完只看到自己的分数），需要「张榜」时逐场开启。
+  // 证书达标分用绝对分（0 = 本场不发证），与后端 Certificate::thresholdOf 同口径。
+  const VIS_ITEMS = [
+    { key: 'private', label: '仅本人' },
+    { key: 'class',   label: '本班同学' },
+    { key: 'public',  label: '全体考生' },
+  ];
+  const VIS_HINTS = {
+    private: '默认。考生只能看到自己的分数，看不到同场其他人的成绩。',
+    class:   '本班考生可以看到本场全班同学的成绩与名次（不含其他班级）。',
+    public:  '本场所有已交卷考生可以看到彼此的成绩与名次，适合需要张榜公示的考试。',
+  };
+  let scoreVisibility = VIS_ITEMS.some((m) => m.key === row.score_visibility)
+    ? String(row.score_visibility)
+    : 'private';
+  const visSlot = el('div');
+  const visHint = el('div.fs-xs.c-tertiary');
+  function renderVis() {
+    clear(visSlot);
+    visSlot.append(segmented(VIS_ITEMS, scoreVisibility, (k) => { scoreVisibility = k; renderVis(); }));
+    visHint.textContent = VIS_HINTS[scoreVisibility] || '';
+  }
+  renderVis();
+
+  const thresholdInput = input({
+    type: 'number',
+    value: String(row.cert_threshold ?? 0),
+    min: '0',
+    step: '1',
+  });
+  thresholdInput.style.maxWidth = '160px';
+  const isRetakeExam = Number(row.retake_of ?? 0) > 0;
+
   const form = el('div.stack', {}, [
     el('div.form-grid', {}, [
       el('div.span-2', {}, [field('考试名称', nameInput, { required: true })]),
@@ -516,6 +550,21 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
         kpPane,
       ]),
     }),
+    card({
+      title: '成绩公示与电子证书',
+      iconName: 'shield',
+      body: el('div.stack', {}, [
+        field('成绩公示范围', visSlot),
+        visHint,
+        field('证书达标分', thresholdInput, {
+          hint: '0（默认）= 本场不发放证书。填写绝对分数（如 80）：考试结束且考生得分不低于该分数时，'
+            + '系统会在考生打开「我的证书」时自动签发一张带唯一编号的电子证书。',
+        }),
+        isRetakeExam
+          ? el('div.fs-xs.c-tertiary', { text: '本场为补考场次，公示范围与达标分默认继承源考试，可按需调整。' })
+          : null,
+      ].filter(Boolean)),
+    }),
   ]);
 
   const errSlot = el('div');
@@ -539,6 +588,8 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
       exam_tea: teacherInput.value.trim(),
       stu_class: classCtrl.values().join(','),
       paper_mode: paperMode,
+      score_visibility: scoreVisibility,
+      cert_threshold: Math.max(0, Number(thresholdInput.value) || 0),
       ...collectMatrix(),
     };
 

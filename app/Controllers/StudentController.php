@@ -11,6 +11,7 @@ use App\Models\StuScoreBak;
 use App\Models\Student;
 use App\Services\AuthSession;
 use App\Services\Password;
+use App\Services\ScoreBoard;
 use Core\Database;
 use Core\HttpException;
 use Core\Response;
@@ -107,7 +108,13 @@ class StudentController extends BaseController
         return $this->ok(['csrf_token' => AuthSession::csrfToken()], '密码修改成功');
     }
 
-    /** GET /api/student/scores —— 我的成绩（含统计与备份库历史） */
+    /**
+     * GET /api/student/scores —— 我的成绩（含统计与备份库历史）
+     *
+     * 每行附带本场的 score_visibility 与 retake_of：前端据此决定是否显示
+     * 「成绩榜」入口、以及是否给该行打「补考」标记 —— 都是已 join 出来的列，
+     * 不额外查库。
+     */
     public function scores(): Response
     {
         $sess = $this->authStudent();
@@ -115,7 +122,8 @@ class StudentController extends BaseController
 
         $live = Database::fetchAll(
             "SELECT sc.id, sc.exam_id, sc.stu_score, sc.stu_status,
-                    e.exam_name, e.exam_start, e.exam_end, s.subj_name
+                    e.exam_name, e.exam_start, e.exam_end, e.exam_score,
+                    e.score_visibility, e.retake_of, e.cert_threshold, s.subj_name
              FROM `stuscore` sc
              LEFT JOIN `examinfo` e ON e.id = sc.exam_id
              LEFT JOIN `subject` s ON s.id = e.subj_id
@@ -123,6 +131,24 @@ class StudentController extends BaseController
              ORDER BY sc.exam_id DESC",
             [$stuId]
         );
+
+        // 证书关联：一次查完，避免逐行查 certificate（N+1）
+        $certs = [];
+        foreach (Database::fetchAll(
+            'SELECT exam_id, cert_no FROM `certificate` WHERE stu_id = ?',
+            [$stuId]
+        ) as $c) {
+            $certs[(int) $c['exam_id']] = (string) $c['cert_no'];
+        }
+        foreach ($live as &$row) {
+            $row['cert_no'] = $certs[(int) $row['exam_id']] ?? '';
+            $row['can_view_board'] = in_array(
+                (string) ($row['score_visibility'] ?? Exam::VIS_PRIVATE),
+                [Exam::VIS_CLASS, Exam::VIS_PUBLIC],
+                true
+            );
+        }
+        unset($row);
 
         $stats = Database::fetch(
             "SELECT COUNT(*) AS total,
@@ -141,8 +167,27 @@ class StudentController extends BaseController
                 'avg_score'  => $stats['avg_score'] !== null ? round((float) $stats['avg_score'], 1) : 0,
                 'best_score' => (int) ($stats['best_score'] ?? 0),
             ],
+            'certificates' => count($certs),
             'history' => (new StuScoreBak())->where(['stu_id' => $stuId], 'id DESC'),
         ]);
+    }
+
+    /**
+     * GET /api/student/score-board?exam_id=N —— 本场成绩榜（文档 B4 成绩公示）
+     *
+     * 可见范围由**逐场配置**的 score_visibility 决定，判定只在 ScoreBoard 里做一次：
+     *   private 仅本人 / class 本班同学 / public 全体考生。
+     * 前端不得自行过滤 —— 否则「前端隐藏」会变成唯一防线。
+     */
+    public function scoreBoard(): Response
+    {
+        $sess = $this->authStudent();
+        $examId = (int) $this->request->query('exam_id', 0);
+        return $this->ok(ScoreBoard::forExam(
+            $examId,
+            (string) $sess['id'],
+            (string) ($sess['class_id'] ?? '')
+        ));
     }
 
     /**

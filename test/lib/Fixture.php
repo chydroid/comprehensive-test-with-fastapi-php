@@ -186,11 +186,17 @@ final class Fixture
                 \Core\Database::query('DELETE FROM `stupaper`  WHERE exam_id = ?', [$id]);
                 \Core\Database::query('DELETE FROM `stuscore`  WHERE exam_id = ?', [$id]);
                 \Core\Database::query('DELETE FROM `stuscorebak` WHERE exam_id = ?', [$id]);
+                // 补考名单与电子证书同样按 exam_id 关联，不清理会在库里越积越多，
+                // 并让「按名单开考 / 是否已发证」的断言在后续测试中互相干扰。
+                \Core\Database::query('DELETE FROM `exam_retake_stu` WHERE exam_id = ?', [$id]);
+                \Core\Database::query('DELETE FROM `certificate` WHERE exam_id = ?', [$id]);
                 \Core\Database::query('DELETE FROM `examinfo` WHERE id = ?', [$id]);
             }
             foreach ([self::STU_A, self::STU_B, self::STU_1, self::STU_2, self::STU_3] as $id) {
                 \Core\Database::query('DELETE FROM `stupaper` WHERE stu_id = ?', [$id]);
                 \Core\Database::query('DELETE FROM `stuscore` WHERE stu_id = ?', [$id]);
+                \Core\Database::query('DELETE FROM `exam_retake_stu` WHERE stu_id = ?', [$id]);
+                \Core\Database::query('DELETE FROM `certificate` WHERE stu_id = ?', [$id]);
                 \Core\Database::query('DELETE FROM `stuinfo`  WHERE id = ?', [$id]);
             }
         } catch (\Throwable $e) {

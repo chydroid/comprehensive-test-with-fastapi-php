@@ -195,6 +195,7 @@ function renderNav({ router, active = 'home' }) {
         link('#/portal', '首页', 'home'),
         link('#/hero', '成绩榜', 'hero'),
         link('#/exercise', '在线练习', 'exercise'),
+        link('#/verify', '证书核验', 'verify'),
         // 「注册登陆」跨端跳转到考生端：已登录由考生端直接进入个人中心，未登录显示注册/登录页
         el('a', { href: '/student', text: '注册登陆', class: active === 'auth' ? 'is-active' : null }),
         el('a', { href: '/exam', text: '进入考场', class: active === 'exam' ? 'is-active' : null }),

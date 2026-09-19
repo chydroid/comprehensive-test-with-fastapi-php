@@ -13,6 +13,7 @@ import {
 import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
 import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
+import { openRetakeDialog, retakeBadge } from '../retake.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtRelative } from '../../core/format.js';
 import { loadAppSettings, appSettingInt, entryWindowText } from '../../core/app-settings.js';
 
@@ -99,7 +100,10 @@ export function TeacherExamsView({ router }) {
     const t = table({
       columns: [
         { key: 'exam_name', title: '考试名称', render: (r) => el('div', {}, [
-          el('strong', { text: r.exam_name }),
+          el('div.flex.items-center.gap-2', {}, [
+            el('strong', { text: r.exam_name }),
+            retakeBadge(r),
+          ].filter(Boolean)),
           el('div.muted.small', { text: r.subj_name || '' }),
         ]) },
         { key: 'exam_status', title: '状态', render: (r) => examStatusBadge(r.exam_status) },
@@ -135,6 +139,17 @@ export function TeacherExamsView({ router }) {
               ? button('开考', { variant: 'primary', size: 'xs', iconName: 'play', onClick: () => startExam(r) })
               : null,
             button('考生', { variant: 'ghost', size: 'xs', iconName: 'users', onClick: () => openExamStudents(r) }),
+            // C2 补考：只有已结束（判过分）的场次才有「谁没通过」可言
+            st.startsWith('over')
+              ? button('补考', {
+                  variant: 'ghost', size: 'xs', iconName: 'refresh-cw',
+                  onClick: () => openRetakeDialog({
+                    exam: r,
+                    api: teacherApi,
+                    onDone: () => load(),
+                  }),
+                })
+              : null,
             notTesting
               ? button('编辑', {
                   variant: 'ghost', size: 'xs', iconName: 'edit',

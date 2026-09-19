@@ -7,7 +7,7 @@ import { el, clear, mount } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import {
   button, card, statCard, table, badge, field, input, select,
-  emptyStated, descList, notify,
+  emptyStated, descList, notify, openModal, alertBox, loadingOverlay,
 } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { studentApi } from '../../api/index.js';
@@ -53,11 +53,28 @@ export function StudentScoresView() {
     const rows = [...list, ...history].map((r) => ({ ...r, _bak: !list.includes(r) }));
     const t = table({
       columns: [
-        { key: 'exam_name', title: '考试名称', render: (r) => el('span', { text: r.exam_name || `考试 #${r.exam_id}` }) },
+        { key: 'exam_name', title: '考试名称', render: (r) => el('div.flex.items-center.gap-2', {}, [
+          el('span', { text: r.exam_name || `考试 #${r.exam_id}` }),
+          Number(r.retake_of ?? 0) > 0 ? badge('补考', { tone: 'info' }) : null,
+          r.cert_no ? badge('已发证', { tone: 'success', title: `证书编号 ${r.cert_no}` }) : null,
+        ].filter(Boolean)) },
         { key: 'subj_name', title: '科目', render: (r) => el('span.muted', { text: r.subj_name || '—' }) },
         { key: 'exam_start', title: '考试时间', render: (r) => el('span.muted', { text: r.exam_start ? fmtDateTime(r.exam_start) : '—' }) },
         { key: 'stu_status', title: '状态', render: (r) => studentStatusBadge(r.stu_status) },
         { key: 'stu_score', title: '得分', align: 'right', render: (r) => el('strong', { text: fmtScore(r.stu_score) }) },
+        {
+          key: 'op',
+          title: '操作',
+          align: 'center',
+          // 成绩榜入口只在「本场对本班/全体公示」且考试已结束时才有意义；
+          // can_view_board 由服务端按 score_visibility 计算后下发，前端不重算。
+          render: (r) => (r.can_view_board && String(r.stu_status || '').startsWith('over')
+            ? button('成绩榜', {
+                variant: 'ghost', size: 'sm', iconName: 'chart',
+                onClick: () => openScoreBoard(r),
+              })
+            : el('span.c-tertiary.fs-xs', { text: '—' })),
+        },
       ],
       rows,
       emptyText: '还没有考试成绩',
@@ -66,6 +83,74 @@ export function StudentScoresView() {
   })();
 
   return root;
+}
+
+/* ============================ 成绩榜（B4 成绩公示） ============================ */
+/**
+ * 本场成绩榜：可见范围（仅本人 / 本班 / 全体）完全由服务端判定，
+ * 本视图只负责渲染 it 决定的 rows / me，不做任何二次过滤 —— 否则
+ * 「前端隐藏」会变成唯一防线，改一个 DOM 就能看到别人的分数。
+ */
+async function openScoreBoard(row) {
+  const examId = Number(row.exam_id ?? 0);
+  const body = el('div.stack', {}, [loadingOverlay('加载成绩榜…')]);
+  openModal({
+    title: `成绩榜 · ${row.exam_name || `考试 #${examId}`}`,
+    body,
+    size: 'lg',
+  });
+
+  const res = await withLoading(body, () => studentApi.scoreBoard({ exam_id: examId }), { silent: true });
+  if (!res.ok) {
+    clear(body);
+    body.append(alertBox(res.error?.message || '无法加载成绩榜', { type: 'danger' }));
+    return;
+  }
+  const d = res.result || {};
+  clear(body);
+
+  if (!d.allowed) {
+    body.append(alertBox(d.reason || '本场成绩暂不对外公示', { type: 'info', title: '暂不可查看' }));
+    return;
+  }
+
+  const me = d.me || {};
+  body.append(el('div.fs-sm.c-secondary', {
+    text: `公示范围：${d.scope_label || '—'}　·　及格分：${fmtScore(d.pass_score)} / 满分 ${fmtScore(d.total_score)} 分`,
+  }));
+
+  /* 我的成绩卡：无论粒度如何，「我」这一行永远可见 */
+  body.append(el('div.card', {}, el('div.card-body.stack', {}, [
+    el('div.flex.items-center.gap-3', {}, [
+      el('span.fs-sm.c-secondary', { text: '我的成绩' }),
+      el('span', { style: { flex: '1' } }),
+      badge(me.passed ? '已通过' : '未通过', { tone: me.passed ? 'success' : 'warning', dot: true }),
+    ]),
+    el('div.grid-stats', {}, [
+      statCard({ label: '名次', value: `第 ${Number(me.rank ?? 0)} 名`, iconName: 'trending-up' }),
+      statCard({ label: '得分', value: `${fmtScore(me.score)} 分`, iconName: 'award', tone: 'brand' }),
+      statCard({ label: '得分率', value: `${fmtScore(me.percent)}%`, iconName: 'bar-chart-2' }),
+      statCard({ label: '及格分', value: `${fmtScore(d.pass_score)} 分`, iconName: 'flag', tone: 'warning' }),
+    ]),
+  ])));
+
+  const rows = d.rows || [];
+  if (!rows.length) {
+    body.append(el('div.fs-sm.c-tertiary', {
+      text: '本场成绩仅本人可见，不展示其他考生的排名。',
+    }));
+    return;
+  }
+
+  body.append(el('div.score-board', {}, rows.map((r) => el('div.board-row', { class: r.is_me ? 'board-row is-me' : 'board-row' }, [
+    el('div.board-rank', { text: String(r.rank ?? '—') }),
+    el('div', {}, [
+      el('div.fw-500', { text: r.name || r.stu_id }),
+      r.is_me ? el('div.fs-xs.c-tertiary', { text: '我' }) : null,
+    ].filter(Boolean)),
+    el('div.mono.fw-600', { text: `${fmtScore(r.score)} 分` }),
+    badge(r.passed ? '通过' : '未通过', { tone: r.passed ? 'success' : '', dot: false }),
+  ]))));
 }
 
 /* ============================ 待考考试 ============================ */

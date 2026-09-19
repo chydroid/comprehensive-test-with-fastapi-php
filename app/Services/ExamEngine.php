@@ -278,18 +278,16 @@ final class ExamEngine
      */
     public static function generateForClass(int $examId, array $exam): array
     {
-        $classIds = array_values(array_filter(
-            array_map('trim', explode(',', (string) ($exam['stu_class'] ?? ''))),
-            static fn (string $v): bool => $v !== ''
-        ));
-
-        $students = $classIds === [] ? [] : (new \App\Models\Student())->byClassIds($classIds);
+        // 名单来源唯一出处：Exam::studentIdsForExam()。
+        // 普通场次按参考班级展开；补考场次只取 exam_retake_stu 名单 ——
+        // 此前这里直接按班级出题，补考会给全班每人一份卷子。
+        $stuIds = Exam::studentIdsForExam($exam);
 
         $generated = 0;
         $skipped = 0;
         $warnings = [];
-        foreach ($students as $stu) {
-            $r = self::generatePaper($examId, (string) $stu['id']);
+        foreach ($stuIds as $stuId) {
+            $r = self::generatePaper($examId, (string) $stuId);
             if ($r['generated']) {
                 $generated++;
             } else {
@@ -316,7 +314,7 @@ final class ExamEngine
         }
 
         return [
-            'students'  => count($students),
+            'students'  => count($stuIds),
             'generated' => $generated,
             'skipped'   => $skipped,
             'warnings'  => array_values($warnings),

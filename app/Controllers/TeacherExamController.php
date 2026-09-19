@@ -13,6 +13,7 @@ use App\Models\Student;
 use App\Models\Subject;
 use App\Models\Teacher;
 use App\Services\ExamEngine;
+use App\Services\ExamRetake;
 use App\Services\ScoreAnalysis;
 use Core\Database;
 use Core\HttpException;
@@ -253,6 +254,63 @@ class TeacherExamController extends BaseController
     }
 
     /**
+     * GET /api/teacher/exams/{id}/retake-candidates —— 补考候选名单（C2）
+     */
+    public function retakeCandidates(): Response
+    {
+        $id = $this->idParam();
+        $this->assertOwnExam($id);
+        $percent = $this->request->query('pass_percent');
+        return $this->ok(ExamRetake::candidates($id, $percent !== null ? (int) $percent : null));
+    }
+
+    /**
+     * POST /api/teacher/exams/{id}/retake —— 生成补考场次（C2）
+     *
+     * 与教师新建考试同一约束：补考场次强制归属本人（忽略前端传入的 exam_tea），
+     * 否则教师可以借补考入口把考试挂到他人名下（BUG-241 同型缺陷）。
+     */
+    public function retake(): Response
+    {
+        $id = $this->idParam();
+        $this->assertOwnExam($id);
+        $sess = $this->authTeacher();
+
+        $in = $this->validate([
+            'exam_start'   => 'required|maxlen:32',
+            'exam_end'     => 'required|maxlen:32',
+            'pass_percent' => 'integer|min:1|max:100',
+            'allow_passed' => 'integer',
+        ]);
+        // 通用 validate() 拒绝数组值（"必须是标量值"），名单只能手工取
+        $stuIds = $this->request->input('stu_ids', []);
+        if (is_string($stuIds)) {
+            $decoded = json_decode($stuIds, true);
+            $stuIds = is_array($decoded) ? $decoded : explode(',', $stuIds);
+        }
+        if (!is_array($stuIds) || $stuIds === []) {
+            throw new HttpException(400, '请至少选择一名参加补考的考生', 40000);
+        }
+
+        $result = ExamRetake::create($id, $stuIds, [
+            'exam_start'   => (string) $in['exam_start'],
+            'exam_end'     => (string) $in['exam_end'],
+            'exam_tea'     => (string) ($sess['tea_name'] ?? ''),
+            'pass_percent' => isset($in['pass_percent']) ? (int) $in['pass_percent'] : null,
+            'allow_passed' => !empty($in['allow_passed']),
+        ]);
+
+        $this->audit('exam.retake', 'exam:' . $result['exam_id'], [
+            'source_exam' => $id,
+            'exam_name'   => $result['exam_name'],
+            'roster'      => $result['roster'],
+            'actor'       => 'teacher',
+        ]);
+
+        return $this->ok($result, "已生成补考「{$result['exam_name']}」，共 {$result['roster']} 名考生");
+    }
+
+    /**
      * POST /api/teacher/exams/{id}/generate —— 出题：为参考班级全部考生生成随机试卷
      */
     public function generatePapers(): Response
@@ -262,8 +320,14 @@ class TeacherExamController extends BaseController
         if (!in_array((string) $exam['exam_status'], [Exam::STATUS_EXAM, Exam::STATUS_PAPER], true)) {
             throw new HttpException(409, '只能为未开考的考试出题', 40901);
         }
-        if (trim((string) ($exam['stu_class'] ?? '')) === '') {
-            throw new HttpException(400, '该考试未设置参考班级，无法出题', 40000);
+        // 名单来源与 ExamEngine 同口径：普通场次按参考班级展开，补考场次按名单。
+        // 此前只检查 stu_class，补考（按名单开考）会被「未设置参考班级」误挡。
+        if (Exam::studentIdsForExam($exam) === []) {
+            throw new HttpException(
+                400,
+                Exam::isRetake($exam) ? '该补考场次没有考生名单，无法出题' : '该考试未设置参考班级，无法出题',
+                40000
+            );
         }
 
         $result = ExamEngine::generateForClass($id, $exam);
@@ -306,6 +370,8 @@ class TeacherExamController extends BaseController
             Database::query('DELETE FROM `stuscore` WHERE exam_id = ?', [$id]);
             // 备份行同样按 exam_id 关联，一并清理，避免孤儿数据
             Database::query('DELETE FROM `stuscorebak` WHERE exam_id = ?', [$id]);
+            // 补考名单同样以 exam_id 关联；不清理会留下指向已删考试的孤儿行
+            Database::query('DELETE FROM `exam_retake_stu` WHERE exam_id = ?', [$id]);
             Database::commit();
         } catch (\Throwable $e) {
             if (Database::inTransaction()) {
@@ -442,7 +508,8 @@ class TeacherExamController extends BaseController
         $id = $this->idParam();
         $this->assertOwnExam($id);
 
-        $passLine      = (int) $this->request->query('pass_line', 60);
+        // 及格线默认取后台「考试规则 → 及格线」，与补考名单筛选同口径（可按请求参数覆盖）
+        $passLine      = (int) $this->request->query('pass_line', Exam::passPercent());
         $excellentLine = (int) $this->request->query('excellent_line', 85);
         $weakLimit     = (int) $this->request->query('weak_limit', 10);
 
@@ -565,6 +632,13 @@ class TeacherExamController extends BaseController
             $data['_kp_plan'] = $this->parseKpPlan($ip('kp_plan', []));
         }
 
+        // 成绩公示粒度（文档 B4）：非法值一律回落 private —— 宁可少公开，不可误公开
+        $vis = trim((string) $ip('score_visibility', Exam::VIS_PRIVATE));
+        $data['score_visibility'] = in_array($vis, Exam::SCORE_VISIBILITIES, true) ? $vis : Exam::VIS_PRIVATE;
+
+        // 电子证书达标分（C1）：0 = 本场不发放证书
+        $data['cert_threshold'] = max(0, (int) $ip('cert_threshold', 0));
+
         $data['exam_score'] = Exam::computedTotalScore($data);
         return $data;
     }
@@ -663,6 +737,17 @@ class TeacherExamController extends BaseController
                     ), 40004);
                 }
             }
+        }
+
+        // 证书达标分不得高于满分，否则本场永远发不出证书（静默失效，最难排查）。
+        // by_kp 模式在首次出题前 exam_score 还是 0，那种情况无从判定，跳过。
+        $total = (int) ($data['exam_score'] ?? 0);
+        if ((int) ($data['cert_threshold'] ?? 0) > 0 && $total > 0 && (int) $data['cert_threshold'] > $total) {
+            throw new HttpException(400, sprintf(
+                '证书达标分（%d）不能高于本场满分（%d）',
+                (int) $data['cert_threshold'],
+                $total
+            ), 40006);
         }
     }
 

@@ -15,6 +15,7 @@ import { adminApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { entryWindowText, loadAppSettings } from '../../core/app-settings.js';
 import { fmtDateTime, fmtScore, fmtNumber, normalizeTime, defaultExamWindow } from '../../core/format.js';
+import { openRetakeDialog, retakeBadge } from '../retake.js';
 import { QUIZ_TYPE_LABELS } from './quiz.js';
 
 /** 组卷参与的种类（与后端 TYPE_PREFIXES 对应） */
@@ -99,7 +100,10 @@ export async function ExamView({ router, can }) {
         render: (r) => el('span.mono.fs-sm.c-tertiary', { text: String(r.id) }) },
       { key: 'exam_name', title: '考试名称', sortable: true,
         render: (r) => el('div', {}, [
-          el('div.fw-500', { text: r.exam_name }),
+          el('div.fw-500.flex.items-center.gap-2', {}, [
+            el('span', { text: r.exam_name }),
+            retakeBadge(r),
+          ].filter(Boolean)),
           el('div.fs-xs.c-tertiary.flex.items-center.gap-2', {}, [
             el('span', { text: r.subj_name || '—' }),
             r.category_name ? el('span', { text: '·' }) : null,
@@ -164,6 +168,11 @@ export async function ExamView({ router, can }) {
       }
       btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'monitor', title: '监考',
         onClick: () => router.navigate(`/monitor?exam_id=${row.id}`) }));
+      // C2 补考：只有已结束（已判分）的场次才有「谁没通过」可言
+      if (st.startsWith('over')) {
+        btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'refresh-cw', title: '生成补考',
+          onClick: () => openRetakeDialog({ exam: row, api: adminApi, onDone: () => list.load() }) }));
+      }
       if (notTesting) {
         btns.push(button('', { variant: 'ghost', size: 'sm', iconName: 'trash', title: '删除',
           onClick: () => doDelete(row) }));
@@ -282,6 +291,39 @@ export async function ExamView({ router, can }) {
 
     const stockSlot = el('div');
 
+    /* ---------- B4 成绩公示 + C1 电子证书 ---------- */
+    // 默认 private ＝ 既有行为（考完只看得到自己的分数）；需要张榜时逐场开启。
+    // 证书达标分为绝对分，0 表示本场不发放（与后端 Certificate::thresholdOf 同口径）。
+    const VIS_ITEMS = [
+      { key: 'private', label: '仅本人' },
+      { key: 'class',   label: '本班同学' },
+      { key: 'public',  label: '全体考生' },
+    ];
+    const VIS_HINTS = {
+      private: '默认。考生只能看到自己的分数，看不到同场其他人的成绩。',
+      class:   '本班考生可以看到本场全班同学的成绩与名次（不含其他班级）。',
+      public:  '本场所有已交卷考生可以看到彼此的成绩与名次，适合需要张榜公示的考试。',
+    };
+    let scoreVisibility = VIS_ITEMS.some((m) => m.key === row.score_visibility)
+      ? String(row.score_visibility)
+      : 'private';
+    const visSlot = el('div');
+    const visHint = el('div.fs-xs.c-tertiary');
+    function renderVis() {
+      clear(visSlot);
+      visSlot.append(segmented(VIS_ITEMS, scoreVisibility, (k) => { scoreVisibility = k; renderVis(); }));
+      visHint.textContent = VIS_HINTS[scoreVisibility] || '';
+    }
+    renderVis();
+
+    const thresholdInput = input({
+      type: 'number',
+      value: String(row.cert_threshold ?? 0),
+      min: '0',
+      step: '1',
+    });
+    thresholdInput.style.maxWidth = '160px';
+
     const form = el('div.stack', {}, [
       el('div.form-grid', {}, [
         el('div.span-2', {}, [field('考试名称', nameInput, { required: true })]),
@@ -307,6 +349,18 @@ export async function ExamView({ router, can }) {
           el('div.table-wrap', {}, [matrixTable]),
           totalSlot,
           stockSlot,
+        ]),
+      }),
+      card({
+        title: '成绩公示与电子证书',
+        iconName: 'shield',
+        body: el('div.stack', {}, [
+          field('成绩公示范围', visSlot),
+          visHint,
+          field('证书达标分', thresholdInput, {
+            hint: '0（默认）= 本场不发放证书。填写绝对分数（如 80）：考试结束且考生得分不低于该分数时，'
+              + '系统会在考生打开「我的证书」时自动签发一张带唯一编号的电子证书。',
+          }),
         ]),
       }),
     ]);
@@ -407,6 +461,8 @@ export async function ExamView({ router, can }) {
         exam_end_time: normalizeTime(endInput.value),
         exam_tea: teacherInput.value.trim(),
         stu_class: classCtrl.values().join(','),
+        score_visibility: scoreVisibility,
+        cert_threshold: Math.max(0, Number(thresholdInput.value) || 0),
         ...collectMatrix(),
       };
 

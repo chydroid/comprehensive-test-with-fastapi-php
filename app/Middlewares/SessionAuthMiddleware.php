@@ -148,6 +148,10 @@ class SessionAuthMiddleware implements Middleware
         'GET /api/admin/quizzes/clean/preview'  => 'quiz.clean',
         'POST /api/admin/exams/{id}/start'      => 'exam.start',
         'POST /api/admin/exams/{id}/generate'   => 'exam.generate',
+        // 生成补考 = 新建一场正式考试（retake_of 指向源场次），权限语义是 exam.add。
+        // 不显式登记时推导结果恰好也是 exam.add，但登记后语义自明，
+        // 也避免日后把补考挪到别的模块时悄悄提权。
+        'POST /api/admin/exams/{id}/retake'     => 'exam.add',
         // 「开放入场」只写 exam_pwd（生成考场口令，状态仍为未开考），是一次考试信息更新，
         // 而非新增考试。不显式登记时会被 writePoint() 推导成 exam.add，语义错位。
         'POST /api/admin/exams/{id}/open'       => 'exam.edit',

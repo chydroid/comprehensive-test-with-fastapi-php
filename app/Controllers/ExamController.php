@@ -89,9 +89,10 @@ class ExamController extends BaseController
         $inRoom = $score !== null && in_array($stuStatus, ['online', 'locked'], true);
 
         if (!$inRoom) {
-            // 班级归属校验（首次入场）。已在本场考试内（online/locked）的考生走续考，
-            // 不再校验，避免历史数据把在考考生挡在门外。
-            if (!Exam::isStudentEligible($exam, (string) ($student['class_id'] ?? ''))) {
+            // 归属校验（首次入场）。普通场次比班级，补考场次比名单（见 isStudentEligible）。
+            // 已在本场考试内（online/locked）的考生走续考，不再校验，
+            // 避免历史数据把在考考生挡在门外。
+            if (!Exam::isStudentEligible($exam, (string) ($student['class_id'] ?? ''), (string) $in['stu_id'])) {
                 throw new HttpException(403, '你不在本场考试的参考范围内，请联系监考教师', 40307);
             }
             // 首次入场：需已开放入场 + 口令正确 + 处于入场窗口

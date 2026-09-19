@@ -24,7 +24,146 @@ class Exam extends Model
         'checkbox_easy_sum', 'checkbox_mid_sum', 'checkbox_hard_sum', 'checkbox_val',
         'text_easy_sum', 'text_mid_sum', 'text_hard_sum', 'text_val',
         'exam_status', 'exam_pwd', 'exam_score',
+        // 成绩公示粒度 / 电子证书达标分 / 补考场次来源
+        'score_visibility', 'cert_threshold', 'retake_of',
     ];
+
+    /* ==================================================================
+     * 成绩公示与隐私分级（文档 B4）
+     *
+     * 公示粒度是**逐场考试**的选择，不是全局开关 —— 同一套系统里，公开选拔
+     * 类考试希望张榜（public），课堂小测则往往只让本人知道（private）。
+     * 因此它是 examinfo 的一列，考务方按场次性质自行决定，默认 private
+     * （与「学生此前只能看到自己的成绩」这一现状完全一致，存量行为零变化）。
+     * ================================================================== */
+
+    /** 仅本人可见（默认） */
+    public const VIS_PRIVATE = 'private';
+    /** 本班同学之间可见 */
+    public const VIS_CLASS   = 'class';
+    /** 全体考生可见 */
+    public const VIS_PUBLIC  = 'public';
+
+    public const SCORE_VISIBILITIES = [self::VIS_PRIVATE, self::VIS_CLASS, self::VIS_PUBLIC];
+
+    public const SCORE_VISIBILITY_LABELS = [
+        self::VIS_PRIVATE => '仅本人可见',
+        self::VIS_CLASS   => '本班同学可见',
+        self::VIS_PUBLIC  => '全体考生可见',
+    ];
+
+    /** 公示粒度（非法值一律回落 private，宁可少公开不可误公开） */
+    public static function visibilityOf(array $exam): string
+    {
+        $v = (string) ($exam['score_visibility'] ?? self::VIS_PRIVATE);
+        return in_array($v, self::SCORE_VISIBILITIES, true) ? $v : self::VIS_PRIVATE;
+    }
+
+    /* ==================================================================
+     * 及格线：全局「得分率百分比」，逐场可被请求参数覆盖
+     *
+     * 用百分比而不是绝对分，是因为各场考试的满分由组卷参数算出、差异很大
+     * （50 分卷与 200 分卷的「60 分」含义完全不同）。百分比语义跨场一致，
+     * 「未通过」「及格率」才有可比性。ScoreAnalysis 用的是同一口径。
+     * ================================================================== */
+
+    /** 及格线（得分率百分比，默认 60，后台可配） */
+    public static function passPercent(): int
+    {
+        return max(0, min(100, Setting::int('exam_pass_percent', 60)));
+    }
+
+    /** 某场考试的及格分（绝对分，向上取整） */
+    public static function passScoreOf(array $exam, ?int $percent = null): int
+    {
+        $total = (int) ($exam['exam_score'] ?? 0);
+        $pct = $percent ?? self::passPercent();
+        $pct = max(0, min(100, $pct));
+        return (int) ceil($total * $pct / 100);
+    }
+
+    /** 得分是否达到及格线（满分未知时无从判定，一律视为通过，避免误报未通过） */
+    public static function isPassed(array $exam, int $score, ?int $percent = null): bool
+    {
+        $total = (int) ($exam['exam_score'] ?? 0);
+        if ($total <= 0) {
+            return true;
+        }
+        return $score >= self::passScoreOf($exam, $percent);
+    }
+
+    /* ==================================================================
+     * 补考 / 重考（C2）
+     *
+     * 补考场次是**一场全新的正式考试**：复制源考试的组卷配置与时间窗口，
+     * 标记 retake_of 指向源考试，并用独立的名单表限定参考对象。
+     *
+     * 为什么不复用源考试、也不新建一张「补考关系表」：
+     *   - 复用源考试必然要改其成绩/名单，会污染原始考核记录，不可追溯；
+     *   - 新建考试则天然复用「开放入场 → 出题 → 开考 → 判分 → 结束」整条
+     *     既有生命周期，无需为补考另写一套流程。
+     * 唯一需要额外处理的，是**名单来源**与**课堂准入**：补考不按班级开考，
+     * 只认名单（见 studentIdsForExam / isStudentEligible）。
+     * ================================================================== */
+
+    /** 本场是否为补考场次 */
+    public static function isRetake(array $exam): bool
+    {
+        return (int) ($exam['retake_of'] ?? 0) > 0;
+    }
+
+    /** 补考场次的考生名单（准考证号列表） */
+    public static function retakeRoster(int $examId): array
+    {
+        if ($examId <= 0) {
+            return [];
+        }
+        $rows = \Core\Database::fetchAll(
+            'SELECT stu_id FROM `exam_retake_stu` WHERE exam_id = ? ORDER BY id',
+            [$examId]
+        );
+        return array_values(array_filter(
+            array_map(static fn (array $r): string => trim((string) $r['stu_id']), $rows),
+            static fn (string $v): bool => $v !== ''
+        ));
+    }
+
+    /** 指定考生是否在补考名单内 */
+    public static function inRetakeRoster(int $examId, string $stuId): bool
+    {
+        $stuId = trim($stuId);
+        if ($examId <= 0 || $stuId === '') {
+            return false;
+        }
+        $row = \Core\Database::fetch(
+            'SELECT COUNT(*) AS c FROM `exam_retake_stu` WHERE exam_id = ? AND stu_id = ?',
+            [$examId, $stuId]
+        );
+        return (int) ($row['c'] ?? 0) > 0;
+    }
+
+    /**
+     * 本场考试「应出题」的考生（准考证号列表）—— 组卷名单的唯一出处。
+     *
+     * 补考场次走名单表，普通场次走参考班级。此前 ExamEngine::generateForClass
+     * 只按班级出题，补考若不改这里就会给全班出卷（名单外考生也会拿到卷子）。
+     */
+    public static function studentIdsForExam(array $exam): array
+    {
+        $examId = (int) ($exam['id'] ?? 0);
+        if (self::isRetake($exam)) {
+            return self::retakeRoster($examId);
+        }
+        $classIds = array_values(array_filter(
+            array_map('trim', explode(',', (string) ($exam['stu_class'] ?? ''))),
+            static fn (string $v): bool => $v !== ''
+        ));
+        if ($classIds === []) {
+            return [];
+        }
+        $rows = (new \App\Models\Student())->byClassIds($classIds);
+        return array_values(array_map(static fn (array $r): string => (string) $r['id'], $rows));
+    }
 
     /** 组卷模式（A3 组卷多样化） */
     public const PAPER_MODES = ['random', 'manual', 'by_kp'];
@@ -649,18 +788,27 @@ class Exam extends Model
     }
 
     /**
-     * 考生班级是否属于本场考试的参考班级。
+     * 考生是否有资格参加本场考试。
      *
-     * 与 pendingForStudent() 的 `FIND_IN_SET(class_id, exam.stu_class)` 同口径。
-     * 考场入口此前**完全不校验**班级归属，任意已注册考生（注册接口是公开的）
+     * 普通场次按班级判定（与 pendingForStudent() 的 `FIND_IN_SET` 同口径）；
+     * **补考场次只认名单** —— 补考本身的场景就是「同一班级里只有部分人没通过」，
+     * 若继续按班级放行，全班都能进场、都能写入成绩，补考就退化成了重考。
+     *
+     * 考场入口此前**完全不校验**归属，任意已注册考生（注册接口是公开的）
      * 只要猜中 4–10 位纯数字口令，就能进入他人班级的考试：createScore() 会为其
      * 写入名单、污染监考名单与成绩单，同时回传该场考试信息。
      *
      * 若考试未配置参考班级、或考生本人未填写班级，则无从判定，返回 true 不做限制，
      * 以免历史数据把考生整体挡在考场之外。
+     *
+     * @param string $stuId 准考证号。补考场次必须提供；未提供时补考场次一律拒绝
+     *                      （宁可挡住，也绝不放行名单外考生）。
      */
-    public static function isStudentEligible(array $exam, string $classId): bool
+    public static function isStudentEligible(array $exam, string $classId, string $stuId = ''): bool
     {
+        if (self::isRetake($exam)) {
+            return $stuId !== '' && self::inRetakeRoster((int) ($exam['id'] ?? 0), $stuId);
+        }
         $scope = trim((string) ($exam['stu_class'] ?? ''));
         $classId = trim($classId);
         if ($scope === '' || $classId === '') {
@@ -671,31 +819,46 @@ class Exam extends Model
     }
 
     /**
-     * 已登录考生的待考考试（按班级匹配 + 交卷状态）。
+     * 已登录考生的待考考试（班级匹配 **或** 补考名单命中 + 交卷状态）。
      *
      * 已过 exam_end 的考场不再计入「待考」：考试窗口已关闭，考生进去也只会
      * 看到「不可入场」，留着它只是让列表里躺着一条永远点不动的死条目。
      * 管理端 / 教师端的考试列表**不受**此过滤影响，教师仍需看到并清理它。
+     *
+     * 补考场次不在参考班级内（它是按名单开放的），因此必须额外放行名单命中项，
+     * 否则被准考的学生根本看不到自己的补考入口。
      */
     public static function pendingForStudent(string $stuId, string $classId): array
     {        $stuId = trim($stuId);
         $classId = trim($classId);
-        if ($stuId === '' || $classId === '') {
+        if ($stuId === '') {
             return [];
         }
+        // 补考只认名单，不看班级；普通场次仍必须匹配班级。
+        // 没有班级的考生也不应被整体挡住（他仍可能被列入某场补考名单）。
+        $scopeSql = $classId === ''
+            ? '0'
+            : 'FIND_IN_SET(?, e.stu_class) > 0';
+        // 占位符出现顺序：sc.stu_id → exam_class → stu_class → 名单存在性子查询
+        $args = [$stuId, self::MOCK_CLASS];
+        if ($classId !== '') {
+            $args[] = $classId;
+        }
+        $args[] = $stuId;
         return \Core\Database::fetchAll(
             "SELECT e.id, e.exam_name, e.exam_class, e.exam_start, e.exam_end, e.exam_status,
-                    e.exam_score, s.subj_name, c.category_name, sc.stu_status, sc.stu_score
+                    e.exam_score, e.retake_of, s.subj_name, c.category_name, sc.stu_status, sc.stu_score
              FROM `examinfo` e
              INNER JOIN `subject` s ON s.id = e.subj_id
              LEFT JOIN `exam_category` c ON c.id = e.exam_category_id
              LEFT JOIN `stuscore` sc ON sc.exam_id = e.id AND sc.stu_id = ?
              WHERE e.exam_status IN ('exam', 'paper', 'testing')
                AND COALESCE(e.exam_class, '') <> ?
-               AND FIND_IN_SET(?, e.stu_class) > 0
+               AND ({$scopeSql}
+                    OR EXISTS (SELECT 1 FROM `exam_retake_stu` r WHERE r.exam_id = e.id AND r.stu_id = ?))
                AND " . self::SQL_NOT_EXPIRED . "
              ORDER BY e.exam_start ASC, e.id DESC",
-            [self::MOCK_CLASS, $stuId, $classId]
+            $args
         );
     }
 

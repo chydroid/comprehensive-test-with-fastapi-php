@@ -39,8 +39,10 @@ use App\Controllers\ExerciseController;
 use App\Controllers\ExerciseExamController;
 use App\Controllers\HomeController;
 use App\Controllers\NewsController as PublicNewsController;
+use App\Controllers\PublicCertificateController;
 use App\Controllers\ScoreController as PublicScoreController;
 use App\Controllers\StudentAuthController;
+use App\Controllers\StudentCertificateController;
 use App\Controllers\StudentController as StudentCenterController;
 use App\Controllers\StudentWrongBookController;
 use App\Controllers\TeacherAuthController;
@@ -83,6 +85,8 @@ return [
     ['GET', '/api/public/hero',      [PublicScoreController::class, 'hero']],
     ['GET', '/api/public/subjects',  [HomeController::class, 'subjects']],
     ['GET', '/api/public/categories', [HomeController::class, 'categories']],
+    // 证书核验：无需登录（用人单位/考务方凭编号核验），姓名已脱敏
+    ['GET', '/api/public/certificates/verify', [PublicCertificateController::class, 'verify']],
 
     /* ==================== 考生注册 / 登录 ==================== */
     ['POST', '/api/student/register',      [StudentAuthController::class, 'register']],
@@ -98,6 +102,15 @@ return [
     ['PUT',  '/api/student/password',      [StudentCenterController::class, 'savePwd']],
     ['GET',  '/api/student/scores',        [StudentCenterController::class, 'scores']],
     ['GET',  '/api/student/exams',         [StudentCenterController::class, 'exams']],
+
+    /* ==================== 成绩公示（文档 B4） ==================== */
+    // 可见范围由逐场 score_visibility（private/class/public）决定，判定只在 ScoreBoard 一处
+    ['GET',  '/api/student/score-board',   [StudentCenterController::class, 'scoreBoard']],
+
+    /* ==================== 电子证书（C1） ==================== */
+    // 静态段在前：/certificates 不能被 /certificates/{examId} 抢先匹配
+    ['GET',  '/api/student/certificates',          [StudentCertificateController::class, 'index']],
+    ['GET',  '/api/student/certificates/{examId}', [StudentCertificateController::class, 'show']],
 
     /* ==================== 考生错题本（A1） ==================== */
     ['GET',  '/api/student/wrong-book',           [StudentWrongBookController::class, 'index']],
@@ -159,6 +172,9 @@ return [
     ['POST', '/api/teacher/exams/{id}/start', [TeacherExamController::class, 'start']],
     ['POST', '/api/teacher/exams/{id}/open', [TeacherExamController::class, 'open']],
     ['POST', '/api/teacher/exams/{id}/generate', [TeacherExamController::class, 'generatePapers']],
+    // 补考（C2）：候选名单 + 生成补考场次
+    ['GET',  '/api/teacher/exams/{id}/retake-candidates', [TeacherExamController::class, 'retakeCandidates']],
+    ['POST', '/api/teacher/exams/{id}/retake', [TeacherExamController::class, 'retake']],
     ['DELETE', '/api/teacher/exams/{id}',  [TeacherExamController::class, 'delete']],
     ['GET',  '/api/teacher/exams/{id}/students', [TeacherExamController::class, 'students']],
     ['GET',  '/api/teacher/exams/{id}/quiz-count', [TeacherExamController::class, 'checkQuizCount']],
@@ -228,6 +244,9 @@ return [
     ['POST',   '/api/admin/exams/{id}/start', [ExamController::class, 'start']],
     ['POST',   '/api/admin/exams/{id}/open', [ExamController::class, 'open']],
     ['POST',   '/api/admin/exams/{id}/generate', [ExamController::class, 'generatePapers']],
+    // 补考（C2）：候选名单 + 生成补考场次
+    ['GET',    '/api/admin/exams/{id}/retake-candidates', [ExamController::class, 'retakeCandidates']],
+    ['POST',   '/api/admin/exams/{id}/retake', [ExamController::class, 'retake']],
     // A2 成绩与学情分析（按考试维度）
     ['GET',    '/api/admin/exams/{id}/analysis', [ExamController::class, 'analysis']],
     // A3 组卷多样化：手动选题题库检索、知识点清单
