@@ -170,19 +170,26 @@ final class ExamEngine
         );
     }
 
+    /**
+     * 每题分值映射 [quiz_class => val]，由 examinfo 的 <type>_val 列驱动。
+     * 收敛在一处，日后新增题型只改 Exam::TYPE_PREFIXES 即可，
+     * 不会再出现「某处漏改导致该题型恒 0 分」的静默错分。
+     */
+    private static function valueMap(array $exam): array
+    {
+        $map = [];
+        foreach (Exam::TYPE_PREFIXES as $t) {
+            $map[$t] = (int) ($exam["{$t}_val"] ?? 0);
+        }
+        return $map;
+    }
+
     /** 计算某考生某场试卷的实际分值（按卷面题型 × examinfo 每题分值） */
     private static function scoreOfPaper(int $examId, string $stuId): int
     {
         static $valCache = [];
         if (!isset($valCache[$examId])) {
-            $exam = (new Exam())->find($examId);
-            $valCache[$examId] = [
-                'radio1'   => (int) ($exam['radio1_val'] ?? 0),
-                'radio2'   => (int) ($exam['radio2_val'] ?? 0),
-                'checkbox' => (int) ($exam['checkbox_val'] ?? 0),
-                'text'     => (int) ($exam['text_val'] ?? 0),
-                'longtext' => 0,
-            ];
+            $valCache[$examId] = self::valueMap((new Exam())->find($examId) ?? []);
         }
         $valMap = $valCache[$examId];
         $rows = Database::fetchAll(
@@ -357,13 +364,8 @@ final class ExamEngine
         if ($exam === null) {
             return 0;
         }
-        $valMap = [
-            'radio1'   => (int) ($exam['radio1_val'] ?? 0),
-            'radio2'   => (int) ($exam['radio2_val'] ?? 0),
-            'checkbox' => (int) ($exam['checkbox_val'] ?? 0),
-            'text'     => (int) ($exam['text_val'] ?? 0),
-            'longtext' => 0,
-        ];
+        // 每题分值随题型自动扩展（A4 起含 longtext 问答题）
+        $valMap = self::valueMap($exam);
 
         $rows = Database::fetchAll(
             'SELECT sp.paper_id, sp.quiz_id, sp.quiz_class, sp.stu_key, q.quiz_key
@@ -442,6 +444,89 @@ final class ExamEngine
     }
 
     /**
+     * 只读：某考生当前的分值明细（客观题自动判分 + 主观题已批阅得分）。
+     * 不改库，供教师端展示「客观题 X 分 + 主观题 Y 分（还有 N 题待批）」。
+     *
+     * @return array{score:int, objective:int, subjective:int, pending:int, full:int}
+     */
+    public static function scoreBreakdown(int $examId, string $stuId): array
+    {
+        $exam = (new Exam())->find($examId);
+        if ($exam === null) {
+            return ['score' => 0, 'objective' => 0, 'subjective' => 0, 'pending' => 0, 'full' => 0];
+        }
+        $valMap = self::valueMap($exam);
+
+        $rows = Database::fetchAll(
+            'SELECT sp.quiz_class, sp.stu_key, sp.quiz_score, q.quiz_key
+             FROM `stupaper` sp
+             INNER JOIN `quizlib` q ON q.id = sp.quiz_id
+             WHERE sp.exam_id = ? AND sp.stu_id = ?
+             ORDER BY sp.paper_id ASC',
+            [$examId, $stuId]
+        );
+
+        $objective = 0;
+        $subjective = 0;
+        $pending = 0;
+        foreach ($rows as $r) {
+            $type = (string) $r['quiz_class'];
+            if (in_array($type, Exam::SUBJECTIVE_TYPES, true)) {
+                if ($r['quiz_score'] === null) {
+                    $pending++;          // 尚未批阅：不计分，也不当作答错（不拉低正确率口径）
+                    continue;
+                }
+                $subjective += (int) $r['quiz_score'];
+                continue;
+            }
+            $answer = (string) ($r['stu_key'] ?? '');
+            $correct = (string) ($r['quiz_key'] ?? '');
+            if ($answer === '' || $correct === '') {
+                continue;
+            }
+            if (Quiz::isCorrect($type, $correct, $answer)) {
+                $objective += $valMap[$type] ?? 0;
+            }
+        }
+
+        $full = (int) ($exam['exam_score'] ?? 0);
+        $score = $objective + $subjective;
+        // 封顶：批阅不会让总分超过卷面满分（教师误给高分时兜底）
+        if ($full > 0 && $score > $full) {
+            $score = $full;
+        }
+
+        return [
+            'score'      => $score,
+            'objective'  => $objective,
+            'subjective' => $subjective,
+            'pending'    => $pending,
+            'full'       => $full,
+        ];
+    }
+
+    /**
+     * 重算并写回某考生的总分：客观题（自动判分）+ 主观题（人工批阅得分）。
+     *
+     * 与 autoGrade 的关键差异 —— 这里**刻意不加幂等门禁**：
+     * autoGrade 在交卷那一刻只跑一次（重复交卷靠 LEFT(stu_status,4)!='over' 挡住），
+     * 而人工批阅必然发生在交卷之后，此时成绩已是 over。若沿用同一门禁，
+     * 批阅给分将永远写不进去。因此本方法每次调用都按「当前卷面应得总分」重写，
+     * 天然幂等（同样的批阅结果调用多次得到同一个分数）。
+     *
+     * @return array{score:int, objective:int, subjective:int, pending:int, full:int}
+     */
+    public static function recomputeScore(int $examId, string $stuId): array
+    {
+        $b = self::scoreBreakdown($examId, $stuId);
+        Database::query(
+            'UPDATE `stuscore` SET stu_score = ? WHERE exam_id = ? AND stu_id = ?',
+            [$b['score'], $examId, $stuId]
+        );
+        return $b;
+    }
+
+    /**
      * 答卷列表 + 题目详情（含正确答案），供「查看答案」与教师批阅使用。
      * 注意：**此方法会返回 quiz_key**，仅可用于交卷后或管理端。
      */
@@ -449,6 +534,7 @@ final class ExamEngine
     {
         $rows = Database::fetchAll(
             'SELECT sp.paper_id, sp.quiz_id, sp.quiz_class, sp.stu_key, sp.quiz_status,
+                    sp.quiz_score, sp.quiz_comment, sp.grader_name, sp.graded_at,
                     q.quiz_title, q.quiz_option, q.quiz_key, q.quiz_pic_name, q.quiz_diff
              FROM `stupaper` sp
              INNER JOIN `quizlib` q ON q.id = sp.quiz_id
@@ -462,6 +548,12 @@ final class ExamEngine
             $r['quiz_type_label'] = Quiz::TYPE_LABELS[$type] ?? '未知';
             $r['quiz_diff_label'] = Quiz::DIFF_LABELS[$r['quiz_diff']] ?? '';
             $r['quiz_option_list'] = Quiz::parseOptions((string) ($r['quiz_option'] ?? ''));
+            $r['is_subjective'] = in_array($type, Exam::SUBJECTIVE_TYPES, true);
+            // 主观题无「对错」，只有「已批阅/未批阅」；quiz_score 为 NULL 即尚未批阅
+            $r['graded'] = $r['quiz_score'] !== null;
+            if ($r['is_subjective']) {
+                $r['quiz_score'] = $r['quiz_score'] === null ? null : (int) $r['quiz_score'];
+            }
             $r['is_correct'] = $type === 'longtext'
                 ? null
                 : Quiz::isCorrect($type, (string) ($r['quiz_key'] ?? ''), (string) ($r['stu_key'] ?? ''));

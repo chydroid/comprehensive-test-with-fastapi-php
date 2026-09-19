@@ -28,7 +28,7 @@
 | A1 | **持久化错题本** | 几乎标配（exam-ai / exam-system / Examify / 优考试） | 仅模拟考试 session 内临时回顾；练习模式不留痕、正式考试错题不可归集重练 | 缺少「跨模式归集 + 错题重练」的个人错题本，练习价值大打折扣 | **✅ 已完成（2026-09-19）** |
 | A2 | **班级 / 知识点维度成绩分析报表** | 标配（及格率/优秀率/得分率/错题率/正确率可视化） | 管理端仅有「平均分/得分率」stat 卡片 | 缺班级横向对比、知识点薄弱项定位、分数分布图，无法支撑精准教学 | **✅ 已完成（2026-09-19）** |
 | A3 | **组卷多样化（手动固定 + 按知识点/难度比例）** | 标配 | 仅有随机抽题（`ORDER BY RAND()`） | 教师无法精确指定题目或按章节配比，无法出单元测试/章节测验 | **✅ 已完成（2026-09-19）** |
-| A4 | **主观题批改闭环** | 标配（关键词自动给分 + 人工复核） | 问答题(longtext)直接记 0 分、无人工批阅入口；填空靠精确匹配 | 问答题形同虚设，考试公平性/实用性受损 |
+| A4 | **主观题批改闭环** | 标配（关键词自动给分 + 人工复核） | 问答题(longtext)直接记 0 分、无人工批阅入口；填空靠精确匹配 | 问答题形同虚设，考试公平性/实用性受损 | **✅ 已完成（2026-09-19）** |
 | A5 | **题库批量导入（Excel/Word）** | 标配 | 仅学生可批量导入；题目只能单条录入 | 题库建设成本极高，教师录题痛苦 |
 
 ### B 档：考试公平性与运营必需
@@ -65,7 +65,7 @@
 - **A1 错题本**：✅ 已完成（2026-09-19）。新增 `wrong_book` 表按 `stu_id + quiz_id` 归集，练习/模拟/正式考试三个判分落点旁路沉淀错题，前端「错题本」页（按科目分组、掌握状态过滤、来源筛选、错题重练）已上线。成本：中。
 - **A2 成绩分析**：✅ 已完成（2026-09-19）。新增只读服务 `ScoreAnalysis`（均分/中位数/标准差/及格率/优秀率、分数段分布、按题型·难度·科目·知识点正确率、薄弱题 TOP、班级横向对比），教师端与管理端共用视图 `views/analysis.js`（含两端 NAV 入口与路由）。成本：中。
 - **A3 组卷多样化**：✅ 已完成（2026-09-19）。`examinfo.paper_mode`（random/manual/by_kp）+ `exam_manual_quiz` / `exam_kp_plan` 两表；`ExamEngine::generatePaper` 按模式分发；教师端组卷弹窗「组卷方式」三选一（手动选题器 / 知识点规划器）；题库检索与知识点清单接口双端开放。成本：中高（涉及组卷算法与前端）。
-- **A4 主观题批改**：新增教师批阅入口（针对 longtext 留空的分数），`ExamEngine` 支持「待批改」状态与二次给分，`score` 页支持按题批阅。成本：中。
+- **A4 主观题批改**：✅ 已完成（2026-09-19）。问答题此前连「出卷」都不支持（组卷矩阵只有四种客观题），本轮先补齐组卷维度（`examinfo.longtext_*`，`Exam::TYPE_PREFIXES` 纳入 `longtext`），再做教师端批阅闭环（待批总览 → 答题卡含参考答案 → 逐题给分/评语 → `ExamEngine::recomputeScore` 重算总分），并支持撤销批阅。成本：中。
 - **A5 批量导入**：新增 `QuizController#import`，解析 Excel（引 PhpSpreadsheet 或轻量 CSV），与现有学生导入对称。成本：低中。
 - **B1 防作弊**：前端切屏/失焦监听 + 考试水印 + 服务端异常行为记录 + 选项乱序（组卷时打乱）。成本：中（需前端+后端协同，且不能破坏现有随机卷机制）。
 - **B2 审计日志**：新增 `admin_log` 表 + 中间件/钩子记录关键写操作。成本：低中。
@@ -174,4 +174,45 @@
 **修复的真实缺陷**：知识点面板的「加载知识点」按钮原位于 `body` 内，而 `load()` 首行 `clear(body)` 会把按钮一并清掉（按钮凭空消失）——已移出 body 之外。
 
 **已知限制**：题库 `quiz_kp` 当前为空，按知识点组卷需先在题库为题目补填知识点；手动选题为「所有考生同一份卷」（如需逐人随机需改用 `random` 或 `by_kp`）。
+
+---
+
+### ✅ A4 主观题批改闭环（2026-09-19 完成）
+
+**关键前提**：问答题此前**根本不支持出卷** —— `Exam::TYPE_PREFIXES` 只有四种客观题，`examinfo` 也没有 longtext 的组卷列。因此 A4 不是「补一个批阅弹窗」，而是补齐整条链路：
+
+```
+组卷维度（examinfo.longtext_* + TYPE_PREFIXES 纳入 longtext）
+  → 考生作答（答题引擎本就支持 longtext，无需改动）
+  → 交卷只判客观题（autoGrade 对 longtext 仍 continue）
+  → 教师逐题给分（SubjectiveGrading）
+  → 重算总分（ExamEngine::recomputeScore）
+```
+
+**三条口径约定**
+1. **未批阅 ≠ 答错**：`quiz_score IS NULL` 的主观题既不计分，也不进任何正确率分母 —— 避免批阅前出现「虚假 0 分」。
+2. **得分落在答卷行**：每题一行的 `stupaper` 直接承载 `quiz_score / quiz_comment / grader_name / graded_at`，不另建汇总表，批阅轨迹天然可追溯。`quiz_status` 语义保持不变（0=未作答 / 非 0=已作答），批阅状态由 `quiz_score IS NULL` 判定。
+3. **双重封顶**：单题得分不超过 `examinfo.longtext_val`；总分由 `recomputeScore` 按 `exam_score` 封顶。
+
+**幂等设计（与 autoGrade 的关键差异）**：`autoGrade` 在交卷时只跑一次（重复交卷靠 `LEFT(stu_status,4) != 'over'` 挡住），而**人工批阅必然发生在成绩已成 `over` 之后**。若 `recomputeScore` 沿用同一门禁，批阅给分将永远写不进去。因此它刻意不带门禁，每次按「当前卷面应得总分」重写 —— 天然幂等。
+
+**改动清单**
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 数据 | `db/add_subjective_grade.sql`（新增） | `examinfo` +4 列（`longtext_{easy,mid,hard}_sum`、`longtext_val`）；`stupaper` +4 列（`quiz_score` / `quiz_comment` / `grader_name` / `graded_at`）。每列独立 ALTER，配幂等 apply 脚本。已执行 |
+| 模型 | `app/Models/Exam.php` | `TYPE_PREFIXES` 纳入 `longtext`（`paperPlan`/`totalQuestions`/`computedTotalScore`/`availableCounts`/`checkStock` 全部自动跟进）；新增 `SUBJECTIVE_TYPES`；`fillable` 补 4 列 |
+| 引擎 | `app/Services/ExamEngine.php` | 新增私有 `valueMap()`（收敛每题分值来源，避免「某处漏改导致该题型恒 0 分」）；新增只读 `scoreBreakdown()` 与写入 `recomputeScore()`；`paperWithAnswers()` 补批阅字段与 `is_subjective`/`graded` |
+| 服务 | `app/Services/SubjectiveGrading.php`（新增） | `overview()`（只统计 `stu_status` 以 `over` 开头者，与 A2 同口径）、`paper()`（含参考答案）、`grade()`（事务内写分 + 重算）、`revoke()`（清空回落） |
+| 控制器 | `app/Controllers/TeacherGradingController.php`（新增） | 4 个接口；归属校验与其它教师端 `{id}` 接口同口径（非本人/模拟考试/不存在一律 **404**） |
+| 路由 | `config/routes.php` | `GET /api/teacher/exams/{id}/subjective`、`GET\|POST .../subjective/{stuId}`、`POST .../subjective/{stuId}/revoke` |
+| 前端 | `public/assets/js/views/teacher/grading.js`（新增）+ `api/index.js` + `apps/teacher.js` + `views/teacher/exam-editor.js` | 教师端「主观题批改」页（考试选择 / 待批统计 / 待批列表 / 逐题批阅弹窗，含参考答案、评分、评语、实时合计、撤销）；组卷矩阵 `PAPER_TYPES` 纳入 `longtext`（矩阵行与题型筛选下拉自动多出「问答题」） |
+
+**验证**：`subjective_grading_test.php` **72 PASS / 0 FAIL**（组卷出问答题 / 交卷不含主观题分 / 明细口径 / 待批总览 / 答题卡含参考答案 / 提交批阅并落库 / 单题封顶 / 非法 paper_id 被忽略 / 空 items 与非法 stuId 400 / 他人考试与模拟考试 404 / 撤销回落）；全量后端回归 **1001 PASS / 0 FAIL / 1 SKIP**（基线 929 + 72，零回归）；`api_route_audit` 前端 160 调用全部有路由；`admin_401_guard` 8/8；`check_frontend` 46 文件 0 错误；`check_icons` 88 图标无无效引用；`a4_smoke.mjs` 11/11（真实浏览器：批改页渲染 + 组卷矩阵五行题型齐全）；`a2a3_smoke.mjs` 17/17（回归）。
+
+**顺带修正**：全流程演练的「逐人随机卷差异」断言原先按**题型全集**取最小可用量，`TYPE_PREFIXES` 纳入 longtext 后，题库未备问答题的科目会被拉到 0 而误判为「随机性无法验证」（表现为该用例被跳过）。已改为只统计**该场考试实际配置的题型**，恢复为真实断言（206 PASS / 0 SKIP）。
+
+**已知限制**
+- 题库现存 **39 道填空题的 `quiz_key` 为空**，这些题作答后永远判错（判分对空标准答案按设计跳过，不误判为对）。属既有数据质量问题，建议在「题库批量导入」或题库管理中补齐。
+- 批阅只对**正式考试**开放；模拟考试是考生自助练习，无教师批阅语义，后端显式 404 排除。
+- 未做「按关键词自动给分」：主观题分值语义因题而异，自动给分误判风险高于收益，当前仅提供人工批阅 + 参考答案对照。
 

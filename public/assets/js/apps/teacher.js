@@ -15,6 +15,7 @@ import {
   TeacherExamsView, TeacherMonitorView, TeacherScoresView,
 } from '../views/teacher/index.js';
 import { createAnalysisView } from '../views/analysis.js';
+import { TeacherGradingView } from '../views/teacher/grading.js';
 
 const APP_NAME = '教师工作台';
 
@@ -29,6 +30,7 @@ const TeacherAnalysisView = createAnalysisView({
 const NAV = [
   { key: 'exams',   label: '考试管理', icon: 'clipboard', group: 'exam' },
   { key: 'monitor', label: '监考中心', icon: 'eye',       group: 'exam' },
+  { key: 'grading', label: '主观题批改', icon: 'edit-3',  group: 'exam' },
   { key: 'scores',  label: '成绩查询', icon: 'award',     group: 'exam' },
   { key: 'analysis', label: '成绩分析', icon: 'bar-chart-2', group: 'exam' },
 ];
@@ -38,6 +40,7 @@ const GROUPS = [{ key: 'exam', label: '考务' }];
 const VIEWS = {
   exams: TeacherExamsView,
   monitor: TeacherMonitorView,
+  grading: TeacherGradingView,
   scores: TeacherScoresView,
   analysis: TeacherAnalysisView,
 };

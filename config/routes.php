@@ -45,6 +45,7 @@ use App\Controllers\StudentController as StudentCenterController;
 use App\Controllers\StudentWrongBookController;
 use App\Controllers\TeacherAuthController;
 use App\Controllers\TeacherExamController;
+use App\Controllers\TeacherGradingController;
 use App\Controllers\TeacherMonitorController;
 use Core\Request;
 use Core\Response;
@@ -159,6 +160,11 @@ return [
     ['GET',  '/api/teacher/exams/{id}/quiz-count', [TeacherExamController::class, 'checkQuizCount']],
     // A2 成绩与学情分析（按考试维度）
     ['GET',  '/api/teacher/exams/{id}/analysis', [TeacherExamController::class, 'analysis']],
+    // A4 主观题批改：待批总览 / 答题卡 / 提交批阅 / 撤销批阅
+    ['GET',  '/api/teacher/exams/{id}/subjective', [TeacherGradingController::class, 'index']],
+    ['GET',  '/api/teacher/exams/{id}/subjective/{stuId}', [TeacherGradingController::class, 'show']],
+    ['POST', '/api/teacher/exams/{id}/subjective/{stuId}', [TeacherGradingController::class, 'grade']],
+    ['POST', '/api/teacher/exams/{id}/subjective/{stuId}/revoke', [TeacherGradingController::class, 'revoke']],
     // A3 组卷多样化：手动选题题库检索、知识点清单
     ['GET',  '/api/teacher/quiz-search',   [TeacherExamController::class, 'quizSearch']],
     ['GET',  '/api/teacher/quiz-kps',      [TeacherExamController::class, 'quizKps']],

@@ -34,8 +34,15 @@ class Exam extends Model
         'by_kp'  => '按知识点比例',
     ];
 
-    /** 四种题型的组卷字段前缀 */
-    public const TYPE_PREFIXES = ['radio1', 'radio2', 'checkbox', 'text'];
+    /**
+     * 题型的组卷字段前缀。
+     * longtext（问答题）自 A4 起纳入组卷矩阵：它能被抽出、能被作答，
+     * 但因无自动判分，交卷时不计分，全部留待教师人工批阅（见 SubjectiveGrading）。
+     */
+    public const TYPE_PREFIXES = ['radio1', 'radio2', 'checkbox', 'text', 'longtext'];
+
+    /** 无自动判分、需要人工批阅的题型 */
+    public const SUBJECTIVE_TYPES = ['longtext'];
 
     /** 旧系统实际状态取值（与库中存量数据一致，勿改） */
     public const STATUS_TESTING  = 'testing';   // 进行中

@@ -15,7 +15,9 @@ import { teacherApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { fmtScore, fmtNumber, normalizeTime, defaultExamWindow } from '../../core/format.js';
 
-const PAPER_TYPES = ['radio1', 'radio2', 'checkbox', 'text'];
+// 组卷矩阵覆盖的题型。longtext（问答题）自 A4 起纳入：
+// 它能被抽出、能被作答，但无自动判分，交卷后须由教师人工批阅（见「主观题批改」页）。
+const PAPER_TYPES = ['radio1', 'radio2', 'checkbox', 'text', 'longtext'];
 const DIFFS = ['easy', 'mid', 'hard'];
 const DIFF_LABELS = { easy: '易', mid: '中', hard: '难' };
 /** 难度字段名 → 题库 quiz_diff 代码（与 Exam::checkStock 一致） */

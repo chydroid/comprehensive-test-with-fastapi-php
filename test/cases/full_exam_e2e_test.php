@@ -455,11 +455,20 @@ $t->guard('逐人随机卷：三名考生题号结构一致但题目集不全相
         $sets[] = implode(',', array_map(static fn ($r) => (int) $r['quiz_id'], $rows));
     }
 
-    // 随机性只在题库容量足够时才有意义；不足时诚实标注而不是伪造通过
+    // 随机性只在题库容量足够时才有意义；不足时诚实标注而不是伪造通过。
+    // 只统计「本场考试实际抽题的题型」：Exam::TYPE_PREFIXES 是系统支持的题型全集
+    // （A4 起含 longtext），而题库未必每个科目都备了所有题型，按全集取最小值
+    // 会让「本场根本没配的题型」把 pool 拉到 0，从而误判为随机性无法验证。
     $avail = Exam::availableCounts($subjId);
     $pool = PHP_INT_MAX;
-    foreach (Exam::TYPE_PREFIXES as $ty) {
-        $pool = min($pool, (int) ($avail[$ty][$diffCode] ?? 0));
+    foreach (Exam::paperPlan((new Exam())->find($examId) ?? []) as $p) {
+        if ($p['easy'] + $p['mid'] + $p['hard'] <= 0) {
+            continue;
+        }
+        $pool = min($pool, (int) ($avail[$p['type']][$diffCode] ?? 0));
+    }
+    if ($pool === PHP_INT_MAX) {
+        $pool = 0;
     }
     if ($pool < 3) {
         $t->skip('逐人随机卷差异', "该难度每种题型可用题量仅 {$pool} 道，不足以区分随机性");

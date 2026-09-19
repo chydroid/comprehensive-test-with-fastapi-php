@@ -96,6 +96,12 @@ export const teacherApi = {
   quizSearch:   (params) => http.get('/teacher/quiz-search', { query: params }),
   quizKps:      (params) => http.get('/teacher/quiz-kps', { query: params }),
 
+  // A4 主观题批改：待批总览 / 考生答题卡 / 提交批阅 / 撤销批阅
+  subjectiveList:   (id, params) => http.get(`/teacher/exams/${id}/subjective`, { query: params }),
+  subjectivePaper:  (id, stuId) => http.get(`/teacher/exams/${id}/subjective/${stuId}`),
+  subjectiveGrade:  (id, stuId, body) => http.post(`/teacher/exams/${id}/subjective/${stuId}`, body),
+  subjectiveRevoke: (id, stuId) => http.post(`/teacher/exams/${id}/subjective/${stuId}/revoke`),
+
   scores:    (params) => http.get('/teacher/scores', { query: params }),
   exportScores: (params) => download('/teacher/scores/export', { query: params }),
 };
