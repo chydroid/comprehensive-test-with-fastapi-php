@@ -116,6 +116,9 @@ export const teacherApi = {
   subjectivePaper:  (id, stuId) => http.get(`/teacher/exams/${id}/subjective/${stuId}`),
   subjectiveGrade:  (id, stuId, body) => http.post(`/teacher/exams/${id}/subjective/${stuId}`, body),
   subjectiveRevoke: (id, stuId) => http.post(`/teacher/exams/${id}/subjective/${stuId}/revoke`),
+  // C4 AI 智能组卷：生成建议 / 采用选中题
+  composeSuggest: (id, body) => http.post(`/teacher/exams/${id}/compose`, body),
+  composeApply:   (id, body) => http.post(`/teacher/exams/${id}/apply-composition`, body),
   // C5 考后问卷：教师端配置与统计
   surveyShow: (id) => http.get(`/teacher/exams/${id}/survey`),
   surveySave: (id, body) => http.put(`/teacher/exams/${id}/survey`, body),

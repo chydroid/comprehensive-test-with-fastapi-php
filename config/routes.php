@@ -195,6 +195,9 @@ return [
     // C4 AI 阅卷建议：只产出建议分，写入仍走 grade()
     ['POST', '/api/teacher/exams/{id}/subjective/{stuId}/suggest', [TeacherGradingController::class, 'suggest']],
     ['POST', '/api/teacher/exams/{id}/subjective/{stuId}/revoke', [TeacherGradingController::class, 'revoke']],
+    // C4 AI 智能组卷：compose 只读建议；apply-composition 采用选中题落库为 manual 组卷
+    ['POST', '/api/teacher/exams/{id}/compose', [TeacherExamController::class, 'compose']],
+    ['POST', '/api/teacher/exams/{id}/apply-composition', [TeacherExamController::class, 'applyComposition']],
     // C5 考后问卷：教师端配置与统计
     ['GET',  '/api/teacher/exams/{id}/survey', [TeacherSurveyController::class, 'show']],
     ['PUT',  '/api/teacher/exams/{id}/survey', [TeacherSurveyController::class, 'save']],

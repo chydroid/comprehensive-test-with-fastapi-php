@@ -12,6 +12,7 @@ use App\Models\SchoolClass;
 use App\Models\Student;
 use App\Models\Subject;
 use App\Models\Teacher;
+use App\Services\ExamComposer;
 use App\Services\ExamEngine;
 use App\Services\ExamRetake;
 use App\Services\ScoreAnalysis;
@@ -514,6 +515,59 @@ class TeacherExamController extends BaseController
         $weakLimit     = (int) $this->request->query('weak_limit', 10);
 
         return $this->ok(ScoreAnalysis::analyze($id, $passLine, $excellentLine, $weakLimit));
+    }
+
+    /**
+     * POST /api/teacher/exams/{id}/compose —— C4 AI 智能组卷（只读建议）。
+     *
+     * 用 POST 而非 GET：本接口可能触发外部模型调用（有费用、有副作用配额），
+     * 用 GET 会被浏览器预取、爬虫、缓存中间件无意间重复触发。
+     *
+     * 只产出建议题目列表，不改考试、不写库 —— 真正成卷要走 applyComposition()。
+     */
+    public function compose(): Response
+    {
+        $exam = $this->assertOwnExam($this->idParam());
+
+        $spec = [
+            'count' => (int) $this->request->input('count', 10),
+            'easy'  => (int) $this->request->input('easy', 3),
+            'mid'   => (int) $this->request->input('mid', 4),
+            'hard'  => (int) $this->request->input('hard', 3),
+            'kps'   => (array) $this->request->input('kps', []),
+            'types' => (array) $this->request->input('types', []),
+        ];
+
+        $result = ExamComposer::suggest((int) $exam['id'], $spec);
+
+        return $this->ok($result);
+    }
+
+    /**
+     * POST /api/teacher/exams/{id}/apply-composition —— C4 采用 AI 组卷建议。
+     *
+     * 教师勾选建议题目后调用：选中题落库（远程新题先入库）、设为 manual 组卷、
+     * 回填满分。考试已开始（testing/over）则拒绝（409）。
+     */
+    public function applyComposition(): Response
+    {
+        $exam = $this->assertOwnExam($this->idParam());
+
+        $raw = $this->request->input('questions', []);
+        if (!is_array($raw)) {
+            throw new HttpException(400, '请提交要采用的题目列表', 40000);
+        }
+
+        $result = ExamComposer::apply((int) $exam['id'], $raw);
+
+        $this->audit('exam.compose.apply', 'exam:' . $exam['id'], [
+            'actor'   => 'teacher',
+            'applied' => $result['applied'],
+            'skipped' => $result['skipped'],
+            'new'     => $result['new'],
+        ]);
+
+        return $this->ok($result, '已采用 AI 组卷建议');
     }
 
     /** GET /api/teacher/quiz-search —— 手动选题：题库检索（科目/题型/知识点/关键字） */

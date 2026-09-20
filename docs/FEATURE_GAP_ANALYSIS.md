@@ -47,7 +47,7 @@
 | C1 | **电子证书** | 考后按阈值自动发放/下载成绩证书 | 教学考核场景加分，成本低 | **✅ 已完成（2026-09-19）** |
 | C2 | **补考 / 重考机制** | 针对未通过者开放二次考核入口 | 教学闭环有用，中等成本 | **✅ 已完成（2026-09-19）** |
 | C3 | **培训学习模块（课件/学习计划/课程库）** | 偏 LMS，含视频/音频/附件 | 可能超出「理论考核」定位，慎重 | **✅ 已完成轻量版（2026-09-20）**：只做资料库上传/登记/浏览/下载，**不做**课程与学习进度 |
-| C4 | **AI 组卷 / AI 阅卷** | 引入大模型辅助命题与主观题评分 | 成本高、依赖外部 API，远期 | **✅ 阅卷已完成（2026-09-20）**：可插拔 provider + 本地启发式兜底，只给建议分；**AI 组卷未做** |
+| C4 | **AI 组卷 / AI 阅卷** | 引入大模型辅助命题与主观题评分 | 成本高、依赖外部 API，远期 | **✅ 已全部完成（2026-09-20）**：阅卷=可插拔 provider + 本地启发式兜底，只给建议分；组卷=可插拔 provider（本地抽样默认 + OpenAI 兼容远程模型，失败自动降级），只读建议 + 人确认才落库，复用 manual 组卷链路 |
 | C5 | **考后问卷 / 留言互动** | 收集考试难度反馈、师生答疑 | 轻量，可选 | **✅ 已完成（2026-09-20）**：评分/单选/简答三题型 + 回收统计 |
 
 ---
@@ -444,6 +444,34 @@
 
 **验证**：`ai_grading_test.php` **55 PASS / 0 FAIL**（schema 含 string/secret 类型、密钥不下发到公开接口、
 suggest 只取未批且受 `max_items` 限制、远程失败逐题降级、抄袭标题识别、换措辞仍得分、满分封顶、权限守卫）。
+
+### ✅ C4 AI 智能组卷（可插拔 provider，复用 manual 落库链路）
+
+**核心决策：与阅卷同一哲学——AI 只「建议」，人确认才落库；本地抽样永远可用。**
+
+| provider | 触发条件 | 说明 |
+|---|---|---|
+| `LlmComposer` | 已启用且配置了 endpoint/model/key | OpenAI 兼容 `/chat/completions`，按科目/难度分布/知识点/题型生成题目（含选项与答案），远程新题 `id=null, new=true` |
+| `LocalComposer` | 远程不可用 / 整次失败降级 | 纯本地：按难度分布 + 可选知识点 + 可选题型从 `quizlib` 精确抽样（易 N1/中 N2/难 N3），题不够标 `truncated`，绝不编造 |
+
+- `ComposerFactory::compose()` 先试远程，**整次失败**（JSON 解析不出可用题 / 连接失败）才降级回本地，
+  降级返回 `degraded:true` + `degrade_reason`，前端明确提示「已降级为本地抽样」；
+- `suggest()` 是**只读**的：只产出建议题目列表，不改考试、不写库；真正成卷走 `apply()`，
+  教师勾选后调用——选中题落库（`exam_manual_quiz` + `paper_mode='manual'` + 回填满分），
+  远程新题先入库（`quiz_writer='AI组卷'`）再引用，自然沉淀进题库；
+- `provider` 必须反映**实际使用的引擎**而不是「配置上本该用的引擎」：远程降级为本地后，
+  `suggest` 返回 `provider=local`，否则前端会把降级误显示为「远程模型成功」（初版踩过的坑）；
+- 护栏：`apply()` 仅在 `exam_status` 为 `exam`/`paper`/空时允许；一旦 `testing`/`over`（已开考）即拒绝 409，
+  避免与已生成的 `stupaper` 串题；教师端非本人考试一律 404（防枚举）。
+
+**新增文件**：`app/Services/Composition/{ComposerProvider,LocalComposer,LlmComposer,ComposerFactory,ComposerFailureException}.php`
++ `app/Services/ExamComposer.php`；控制器 `TeacherExamController::compose/applyComposition`；路由两条
+（`POST /api/teacher/exams/{id}/compose`、`POST /api/teacher/exams/{id}/apply-composition`）；
+前端 `views/teacher/composer.js`（建议弹窗：参数 + 题目勾选 + 采用）+ `exam-editor.js` 组卷卡片加「AI 智能组卷」横幅。
+
+**验证**：`ai_compose_test.php` **28 断言全 PASS**（compose 只读不改 `paper_mode`、本地抽样 provider=local 且题来自本题库、
+模型不可用降级本地 `degraded=true` 仍有题、apply 采用现题+新题落 manual 且满分正确、空列表 400、已开考 409、非本人 404、考生 401）；
+全量后端回归 **1604 PASS / 0 FAIL / 1 SKIP**（零回归）；`check_frontend` 54 文件 0 错误；`api_route_audit` 184 调用无缺失路由；`check_icons` 88 图标无无效引用。
 
 ### ✅ C5 考后问卷（评分 / 单选 / 简答）
 

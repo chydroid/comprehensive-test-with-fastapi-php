@@ -13,6 +13,7 @@ import {
 } from '../../ui/components.js';
 import { teacherApi } from '../../api/index.js';
 import { withLoading } from '../../core/bootstrap.js';
+import { openComposerModal } from './composer.js';
 import { fmtScore, fmtNumber, normalizeTime, defaultExamWindow } from '../../core/format.js';
 
 // 组卷矩阵覆盖的题型。longtext（问答题）自 A4 起纳入：
@@ -491,6 +492,49 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
 
   renderMode();
 
+  /* ---------- C4 AI 智能组卷入口 ---------- */
+  // apply 之后后端已把选中题落为 manual 组卷。重新拉取考试，把 manualIds 同步过来并切到手动选题。
+  function syncAfterCompose() {
+    return teacherApi.exam(row.id).then((fresh) => {
+      if (!fresh) return;
+      row.paper_mode_info = fresh.paper_mode_info || row.paper_mode_info || {};
+      row.paper_mode = fresh.paper_mode || row.paper_mode;
+      const ids = (row.paper_mode_info.manual_ids || []).map((v) => String(v));
+      manualIds.clear();
+      manualMeta.clear();
+      for (const id of ids) { manualIds.add(id); manualMeta.set(id, { title: '', type: '' }); }
+      paperMode = 'manual';
+      manualLoaded = true;
+      renderMode();
+      renderManualPane();
+    }).catch(() => { /* 静默：采用已成功，仅刷新失败不阻断 */ });
+  }
+
+  const aiComposeBtn = button('AI 智能组卷', {
+    variant: 'secondary', iconName: 'sparkles',
+    disabled: !row.id,
+    onClick: () => {
+      if (!row.id) { notify('请先创建并保存考试后，再使用 AI 组卷', { tone: 'warning' }); return; }
+      openComposerModal({
+        examId: row.id,
+        subjId: Number(subjSelect.value) || 0,
+        subjName: subjSelect.options?.[subjSelect.selectedIndex]?.textContent || '',
+        onApplied: () => { void syncAfterCompose(); },
+      });
+    },
+  });
+
+  const aiBanner = card({
+    iconName: 'sparkles',
+    title: 'AI 智能组卷',
+    body: el('div.flex.items-center.gap-3.flex-wrap', {}, [
+      el('div.fs-sm.c-secondary.flex-1', {
+        text: '让 AI 按难度分布与知识点推荐题目，您勾选后再「采用」才会真正成卷（远程模型不可用时自动降级为本地抽样）。',
+      }),
+      aiComposeBtn,
+    ]),
+  });
+
   /* ---------- B4 成绩公示 + C1 电子证书 ---------- */
   // 公示粒度默认 private（＝既有行为，考完只看到自己的分数），需要「张榜」时逐场开启。
   // 证书达标分用绝对分（0 = 本场不发证），与后端 Certificate::thresholdOf 同口径。
@@ -544,6 +588,7 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
       title: '组卷方式',
       iconName: 'layers',
       body: el('div.stack', {}, [
+        aiBanner,
         modeSlot,
         randomPane,
         manualPane,
