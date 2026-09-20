@@ -514,7 +514,7 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     variant: 'secondary', iconName: 'sparkles',
     disabled: !row.id,
     onClick: () => {
-      if (!row.id) { notify('请先创建并保存考试后，再使用 AI 组卷', { tone: 'warning' }); return; }
+      if (!row.id) { notify.warning('请先创建并保存考试后，再使用 AI 组卷'); return; }
       openComposerModal({
         examId: row.id,
         subjId: Number(subjSelect.value) || 0,

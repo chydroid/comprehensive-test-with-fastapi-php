@@ -33,7 +33,7 @@ function diffLabel(code) {
   if (code === 'Y') return '易';
   if (code === 'Z') return '中';
   if (code === 'N') return '难';
-  return DIFF_LABELS[code] || code || '—';
+  return code || '—';
 }
 
 /** 单题摘要（题干 + 选项/要点） */
@@ -141,7 +141,6 @@ export function openComposerModal({ examId, subjId = 0, subjName = '', onApplied
       applyBtn.disabled = true;
       return;
     }
-    const allChecked = list.every((q) => !q.new || true); // 新题也默认勾选，但提示需审核
     const wrap = el('div.stack', { style: { gap: '8px' } });
     list.forEach((q, i) => {
       const type = String(q.type || '');
@@ -174,15 +173,15 @@ export function openComposerModal({ examId, subjId = 0, subjName = '', onApplied
   async function doApply(btn) {
     const chosen = selectedQuestions();
     if (!chosen.length) {
-      notify('请至少勾选一道题目', { tone: 'warning' });
+      notify.warning('请至少勾选一道题目');
       return;
     }
     const res = await teacherApi.composeApply(examId, { questions: chosen }).catch((e) => {
-      notify(e?.message || '采用失败', { tone: 'danger' });
+      notify.error(e?.message || '采用失败');
       return null;
     });
     if (!res) return;
-    notify(`已采用 ${res.applied} 道题（新增 ${res.new} 道，满分 ${res.total_score} 分）`, { tone: 'success' });
+    notify.success(`已采用 ${res.applied} 道题（新增 ${res.new} 道，满分 ${res.total_score} 分）`);
     try { onApplied?.(res); } catch (_) { /* 回调失败不影响已落库结果 */ }
     modal.close();
   }
