@@ -224,7 +224,7 @@ export function AdminView() {
 }
 
 const TONES = [
-  'linear-gradient(135deg,#6366f1,#4338ca)',
+  'linear-gradient(135deg,#13a191,#0a6f64)',
   'linear-gradient(135deg,#06b6d4,#0e7490)',
   'linear-gradient(135deg,#10b981,#047857)',
   'linear-gradient(135deg,#f59e0b,#b45309)',
