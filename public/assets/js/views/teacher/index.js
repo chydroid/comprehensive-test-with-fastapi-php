@@ -12,7 +12,7 @@ import {
 } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
-import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
+import { openExamEditor, deleteExam, openExamStudents, openComposerModal } from './exam-editor.js';
 import { openRetakeDialog, retakeBadge } from '../retake.js';
 import { openSurveyDialog } from '../survey.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtRelative } from '../../core/format.js';
@@ -162,6 +162,17 @@ export function TeacherExamsView({ router }) {
               ? button('编辑', {
                   variant: 'ghost', size: 'xs', iconName: 'edit',
                   onClick: () => openExamEditor({ id: r.id, options: state.options, onSaved: () => load() }),
+                })
+              : null,
+            notTesting
+              ? button('AI 组卷', {
+                  variant: 'ghost', size: 'xs', iconName: 'sparkles',
+                  onClick: () => openComposerModal({
+                    examId: r.id,
+                    subjId: Number(r.subj_id) || 0,
+                    subjName: r.subj_name || '',
+                    onApplied: () => load(),
+                  }),
                 })
               : null,
             notTesting

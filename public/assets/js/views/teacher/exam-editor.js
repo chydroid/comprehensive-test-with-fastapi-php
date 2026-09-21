@@ -493,6 +493,65 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
   renderMode();
 
   /* ---------- C4 AI 智能组卷入口 ---------- */
+  /** 构建保存考试的 payload（新建 / 修改 / AI 组卷自动存卷共用） */
+  function collectPayload() {
+    return {
+      exam_name: nameInput.value.trim(),
+      subj_id: Number(subjSelect.value) || 0,
+      exam_category_id: Number(catSelect.value) || 0,
+      exam_date: dateInput.value,
+      exam_start_time: normalizeTime(startInput.value),
+      exam_end_time: normalizeTime(endInput.value),
+      exam_tea: teacherInput.value.trim(),
+      stu_class: classCtrl.values().join(','),
+      paper_mode: paperMode,
+      score_visibility: scoreVisibility,
+      cert_threshold: Math.max(0, Number(thresholdInput.value) || 0),
+      ...collectMatrix(),
+    };
+  }
+
+  /** 校验考试必填项；按需把 manual_ids / kp_plan 写入 payload。返回错误文案数组（空=通过） */
+  function validateExam(payload) {
+    const errs = [];
+    if (paperMode === 'manual') {
+      payload.manual_ids = [...manualIds].map((v) => Number(v)).filter((n) => n > 0);
+      if (payload.manual_ids.length === 0) errs.push('「手动选题」模式请至少加入一道题目');
+    } else if (paperMode === 'by_kp') {
+      payload.kp_plan = kpPlan
+        .map((r) => ({ kp: r.kp, diff: r.diff.value, cnt: Number(r.ctl.value) || 0 }))
+        .filter((p) => p.cnt > 0);
+      if (payload.kp_plan.length === 0) errs.push('「按知识点」模式请至少为一个知识点配置抽题数量');
+    }
+    if (!payload.exam_name) errs.push('请填写考试名称');
+    if (!payload.subj_id) errs.push('请选择科目');
+    if (!payload.exam_start_time) errs.push('请填写开始时间');
+    return errs;
+  }
+
+  /**
+   * 保存考试（不关闭弹窗）。成功时把后端返回的完整考试行写回 row（含新 id / paper_mode 等），
+   * 供「AI 组卷」在新建态自动存卷后继续、以及 syncAfterCompose 复用。
+   * @returns {Promise<{ok:boolean}>}
+   */
+  async function saveExam(trigger) {
+    const payload = collectPayload();
+    const errs = validateExam(payload);
+    if (errs.length) {
+      errSlot.append(alertBox(errs[0], { type: 'warning' }));
+      return { ok: false };
+    }
+    const res = await withLoading(trigger, () =>
+      isEdit ? teacherApi.updateExam(id, payload) : teacherApi.createExam(payload), { silent: true });
+    if (!res.ok) {
+      errSlot.append(alertBox(res.error?.message || '保存失败', { type: 'danger' }));
+      return { ok: false };
+    }
+    const fresh = res.result;
+    if (fresh && fresh.id) row = fresh;
+    return { ok: true };
+  }
+
   // apply 之后后端已把选中题落为 manual 组卷。重新拉取考试，把 manualIds 同步过来并切到手动选题。
   function syncAfterCompose() {
     return teacherApi.exam(row.id).then((fresh) => {
@@ -512,11 +571,17 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
 
   const aiComposeBtn = button('AI 智能组卷', {
     variant: 'secondary', iconName: 'sparkles',
-    disabled: !row.id,
-    onClick: () => {
-      if (!row.id) { notify.warning('请先创建并保存考试后，再使用 AI 组卷'); return; }
+    onClick: async (e) => {
+      let examId = row.id;
+      // 新建态：考试尚未落库（无 id），先自动保存拿到 id，再打开 AI 组卷弹窗。
+      if (!examId) {
+        const saved = await saveExam(e.currentTarget);
+        if (!saved.ok) return;
+        examId = row.id;
+        if (!examId) { notify.error('保存考试失败，无法组卷'); return; }
+      }
       openComposerModal({
-        examId: row.id,
+        examId,
         subjId: Number(subjSelect.value) || 0,
         subjName: subjSelect.options?.[subjSelect.selectedIndex]?.textContent || '',
         onApplied: () => { void syncAfterCompose(); },
@@ -623,53 +688,11 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
 
   submitBtn.addEventListener('click', async () => {
     clear(errSlot);
-    const payload = {
-      exam_name: nameInput.value.trim(),
-      subj_id: Number(subjSelect.value) || 0,
-      exam_category_id: Number(catSelect.value) || 0,
-      exam_date: dateInput.value,
-      exam_start_time: normalizeTime(startInput.value),
-      exam_end_time: normalizeTime(endInput.value),
-      exam_tea: teacherInput.value.trim(),
-      stu_class: classCtrl.values().join(','),
-      paper_mode: paperMode,
-      score_visibility: scoreVisibility,
-      cert_threshold: Math.max(0, Number(thresholdInput.value) || 0),
-      ...collectMatrix(),
-    };
-
-    // A3：按模式附加明细（手动选题 / 知识点计划）
-    if (paperMode === 'manual') {
-      payload.manual_ids = [...manualIds].map((v) => Number(v)).filter((n) => n > 0);
-      if (payload.manual_ids.length === 0) {
-        errSlot.append(alertBox('「手动选题」模式请至少加入一道题目', { type: 'warning' }));
-        return;
-      }
-    } else if (paperMode === 'by_kp') {
-      payload.kp_plan = kpPlan
-        .map((r) => ({ kp: r.kp, diff: r.diff.value, cnt: Number(r.ctl.value) || 0 }))
-        .filter((p) => p.cnt > 0);
-      if (payload.kp_plan.length === 0) {
-        errSlot.append(alertBox('「按知识点」模式请至少为一个知识点配置抽题数量', { type: 'warning' }));
-        return;
-      }
-    }
-
-    if (!payload.exam_name) { errSlot.append(alertBox('请填写考试名称', { type: 'warning' })); return; }
-    if (!payload.subj_id) { errSlot.append(alertBox('请选择科目', { type: 'warning' })); return; }
-    if (!payload.exam_start_time) { errSlot.append(alertBox('请填写开始时间', { type: 'warning' })); return; }
-
-    const { ok, error } = await withLoading(submitBtn, () => (
-      isEdit ? teacherApi.updateExam(id, payload) : teacherApi.createExam(payload)
-    ), { silent: true });
-
-    if (ok) {
-      notify.success(isEdit ? '考试已更新' : '考试已创建');
-      dlg.close();
-      onSaved?.();
-    } else if (error) {
-      errSlot.append(alertBox(error.message || '保存失败', { type: 'danger' }));
-    }
+    const saved = await saveExam(submitBtn);
+    if (!saved.ok) return;
+    notify.success(isEdit ? '考试已更新' : '考试已创建');
+    dlg.close();
+    onSaved?.();
   });
 }
 
