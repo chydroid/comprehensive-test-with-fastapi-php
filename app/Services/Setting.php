@@ -52,9 +52,9 @@ final class Setting
     public const SCHEMA = [
         /* ---------------- 考试规则 ---------------- */
         'exam_entry_lead_minutes' => [
-            'group' => 'exam', 'type' => 'int', 'default' => 15, 'min' => 0, 'max' => 1440,
+            'group' => 'exam', 'type' => 'int', 'default' => 10, 'min' => 0, 'max' => 1440,
             'label' => '提前入场时间', 'unit' => '分钟', 'public' => true,
-            'hint'  => '开考前多久允许考生凭考场口令进入考场等待。0 表示不限制，随时可入场。',
+            'hint'  => '开考前多久允许考生凭考场口令进入考场等待。默认 10 分钟（考试前 10 分钟可入场）；0 表示不限制，随时可入场。',
         ],
         'exam_entry_late_minutes' => [
             'group' => 'exam', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 1440,

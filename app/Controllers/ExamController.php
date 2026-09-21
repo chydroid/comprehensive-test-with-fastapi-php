@@ -36,7 +36,7 @@ class ExamController extends BaseController
      * 入场规则（与需求一致）：
      *  - 必须已由监考「开放入场」（存在考场口令）；
      *  - 口令正确；
-     *  - 处于入场窗口：开考前 15 分钟内；开考后不再放行；
+     *  - 处于入场窗口：开考前 10 分钟内（由「考试规则」配置）；开考后不再放行；
      *  - 已在本场考试内（online/locked）的考生可随时凭账号密码回到考场（续考）。
      * 入场本身不组卷——组卷由监考「出题」统一完成。
      */
@@ -105,7 +105,7 @@ class ExamController extends BaseController
             $now = time();
             $opens = Exam::entryOpensAt($exam);
             $closes = Exam::entryClosesAt($exam);
-            $lead = Setting::int('exam_entry_lead_minutes', 15);
+            $lead = Setting::int('exam_entry_lead_minutes', 10);
             $late = Setting::int('exam_entry_late_minutes', 0);
             if ($opens !== null && $now < $opens) {
                 $msg = $lead > 0

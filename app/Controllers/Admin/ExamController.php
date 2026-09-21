@@ -282,7 +282,7 @@ class ExamController extends BaseController
     }
 
     /**
-     * POST /api/admin/exams/{id}/generate —— 出题：为参考班级的全部考生预生成随机试卷
+     * POST /api/admin/exams/{id}/generate —— 出题：为已进入考场的考生预生成随机试卷（无考生入场时提示「无需出卷」）
      */
     public function generatePapers(): Response
     {
@@ -306,12 +306,20 @@ class ExamController extends BaseController
 
         $result = ExamEngine::generateForClass($id, $exam);
 
-        if ($result['students'] === 0) {
-            throw new HttpException(400, '该班级下没有考生，请先导入考生信息', 40003);
+        // 考场无人入场：不应强行给全班出卷，提示监考即可（出卷只给已进入考场的考生）。
+        if ($result['entered'] === 0) {
+            return $this->ok([
+                'exam_id'       => $id,
+                'student_total' => 0,
+                'entered'       => 0,
+                'generated'     => 0,
+                'skipped'       => 0,
+                'warnings'      => [],
+            ], '本考场暂无考生入场，无需出卷');
         }
 
         // 审计必须写在 return 之前 —— 此前放在 return 之后是死代码，出题动作从不留痕
-        $this->audit('exam.generate', 'exam:' . $id, ['students' => $result['students'], 'generated' => $result['generated']]);
+        $this->audit('exam.generate', 'exam:' . $id, ['students' => $result['students'], 'entered' => $result['entered'], 'generated' => $result['generated']]);
 
         $warnings = array_map(static fn (array $w): array => [
             'type'       => $w['type'],
@@ -325,10 +333,11 @@ class ExamController extends BaseController
         return $this->ok([
             'exam_id'       => $id,
             'student_total' => $result['students'],
+            'entered'       => $result['entered'],
             'generated'     => $result['generated'],
             'skipped'       => $result['skipped'],
             'warnings'      => array_values($warnings),
-        ], "出题完成：新生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
+        ], "出题完成：为 {$result['entered']} 名已入场考生生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
     }
 
     /* ------------------------------------------------------------------ */

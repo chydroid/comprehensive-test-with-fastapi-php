@@ -167,13 +167,13 @@ $t->guard('BUG-005 已交卷考生不会被「解锁」回退状态', function (
 
 /* ============ BUG-012 判分幂等 ============ */
 $t->guard('BUG-012 重复判分不会覆盖已封存的成绩', function () use ($t, $examId, $stuA) {
-    $exam = (new \App\Models\Exam())->find($examId);
-    ExamEngine::generateForClass($examId, (array) $exam);
-
+    // 出题只给已进入考场的考生：先模拟该考生已入场（online）
     Database::query(
         "UPDATE `stuscore` SET stu_status = 'online' WHERE exam_id = ? AND stu_id = ?",
         [$examId, $stuA]
     );
+    $exam = (new \App\Models\Exam())->find($examId);
+    ExamEngine::generateForClass($examId, (array) $exam);
 
     $first = ExamEngine::autoGrade($examId, $stuA);
     $row1 = Database::fetch(

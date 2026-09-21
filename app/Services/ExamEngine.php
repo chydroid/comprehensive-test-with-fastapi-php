@@ -268,25 +268,31 @@ final class ExamEngine
     }
 
     /**
-     * 出题：为考试参考班级的全部考生批量生成随机试卷，并把考试状态推进为「已排卷」。
+     * 出题：为本场「已进入考场」的考生批量生成随机试卷，并把考试状态推进为「已排卷」。
      * 供监考/管理员「出题」动作调用（管理端与教师端共用一份实现）。
+     *
+     * 只给已进入考场的考生出卷（stu_status ∈ {online, locked}）：
+     *   - 考生入场（凭口令进入）后才被标记为 online，未入场的考生不分配试卷；
+     *   - 若整个考场无人入场（entered = 0），由控制器提示「无考生无须出卷」。
+     * 这样契合入场规则：考试前 10 分钟可入场、开考后不可入场；出题发生在入场窗口
+     * 之后/开考前，此时仍在场外的考生按规则本就不应再入场，也不需要试卷。
      *
      * 状态推进内聚在此处，避免各控制器各写一份而逐渐分叉。
      *
      * @param array $exam examinfo 行（用于取 stu_class 与组卷参数）
-     * @return array{students:int, generated:int, skipped:int, warnings:array<int,array{type:string,diff:string,need:int,have:int}>}
+     * @return array{students:int, entered:int, generated:int, skipped:int, warnings:array<int,array{type:string,diff:string,need:int,have:int}>}
      */
     public static function generateForClass(int $examId, array $exam): array
     {
-        // 名单来源唯一出处：Exam::studentIdsForExam()。
-        // 普通场次按参考班级展开；补考场次只取 exam_retake_stu 名单 ——
-        // 此前这里直接按班级出题，补考会给全班每人一份卷子。
-        $stuIds = Exam::studentIdsForExam($exam);
+        // 只给已进入考场的考生出卷：stu_status ∈ {online, locked}。
+        // 名单来源（班级/补考名单）仅用于「有无参考对象」的防守校验（见控制器），
+        // 真正的出卷范围由本方法按「实际入场状态」决定。
+        $entered = self::enteredStudentIds($examId);
 
         $generated = 0;
         $skipped = 0;
         $warnings = [];
-        foreach ($stuIds as $stuId) {
+        foreach ($entered as $stuId) {
             $r = self::generatePaper($examId, (string) $stuId);
             if ($r['generated']) {
                 $generated++;
@@ -314,11 +320,25 @@ final class ExamEngine
         }
 
         return [
-            'students'  => count($stuIds),
+            'students'  => count($entered),
+            'entered'   => count($entered),
             'generated' => $generated,
             'skipped'   => $skipped,
             'warnings'  => array_values($warnings),
         ];
+    }
+
+    /**
+     * 已进入考场的考生（stu_status ∈ {online, locked}）—— 出题的唯一范围。
+     * @return string[] 准考证号列表
+     */
+    private static function enteredStudentIds(int $examId): array
+    {
+        $rows = Database::fetchAll(
+            "SELECT stu_id FROM `stuscore` WHERE exam_id = ? AND stu_status IN ('online', 'locked')",
+            [$examId]
+        );
+        return array_values(array_map(static fn (array $r): string => (string) $r['stu_id'], $rows));
     }
 
     /**

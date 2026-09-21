@@ -263,7 +263,7 @@ export async function MonitorView({ router, query }) {
   }
 
   async function doGeneratePapers() {
-    const ok = await confirmDialog('将为本场考试每位考生随机生成一套试卷（已生成的不会覆盖）。确定开始出题？', {
+    const ok = await confirmDialog('将为本场考试「已进入考场」的考生生成试卷（未入场考生不出卷；已生成的不会覆盖）。确定开始出题？', {
       title: '开始出题', confirmText: '开始出题', tone: 'warning',
       detail: '出题完成后考试状态变为「已组卷」，等待开考。',
     });
@@ -271,7 +271,11 @@ export async function MonitorView({ router, query }) {
     const { ok: done, error, result } = await withLoading(null, () => adminApi.generatePapers(examId, {}), { silent: true });
     if (!done) { notify.error(error?.message || '出题失败'); return; }
     const r = result || {};
-    notify.success(`出题完成：生成 ${r.generated ?? r.count ?? 0} 份${r.skipped ? `，跳过 ${r.skipped} 份` : ''}`);
+    if ((r.entered ?? 0) === 0) {
+      notify.warning('本考场暂无考生入场，无需出卷');
+    } else {
+      notify.success(`出题完成：生成 ${r.generated ?? r.count ?? 0} 份${r.skipped ? `，跳过 ${r.skipped} 份` : ''}`);
+    }
     if (r.warnings?.length) notify.warning(r.warnings.join('；'));
     reload();
   }

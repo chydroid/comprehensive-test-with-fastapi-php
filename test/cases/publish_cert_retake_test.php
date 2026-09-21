@@ -518,9 +518,19 @@ try {
     $t->guard('C7 出题只给名单内考生', function () use ($t, $retakeId, $paperStuIds, $examRow, $retakeRoster) {
         $retake = $examRow($retakeId);
         $t->assertSame('名单来源 = 补考名单', [Fixture::STU_2, Fixture::STU_3], Exam::studentIdsForExam($retake));
+        // 出题只给已进入考场的考生：模拟两名名单内考生已入场（online）。
+        // 注意：$retakeRoster 返回的是「行数组」(每行含 stu_id)，必须用
+        // Exam::studentIdsForExam() 取扁平的准考证号列表，否则会把数组当参数绑定导致建行失败。
+        foreach (Exam::studentIdsForExam($retake) as $sid) {
+            Database::query(
+                "INSERT INTO `stuscore` (exam_id, stu_id, stu_score, stu_status, stu_pwd)
+                 VALUES (?, ?, 0, 'online', '') ON DUPLICATE KEY UPDATE stu_status = 'online'",
+                [$retakeId, $sid]
+            );
+        }
         // 直接走组卷（等价于管理端「出题」按钮）
         $r = \App\Services\ExamEngine::generateForClass($retakeId, $retake);
-        $t->assertSame('组卷覆盖 2 名考生', 2, (int) ($r['students'] ?? -1));
+        $t->assertSame('组卷覆盖 2 名已入场考生', 2, (int) ($r['entered'] ?? -1));
         $t->assertTrue('确实生成了试卷（题库充足）', (int) ($r['generated'] ?? 0) > 0);
         $papers = $paperStuIds($retakeId);
         $t->assertSame('只生成 2 份试卷', 2, count($papers));
@@ -602,6 +612,14 @@ try {
 
         // 走真实流程：先出题（为名单内两人建成绩行），再让该场结束并出分
         $retakeRow = $examRow($rid);
+        // 出题只给已进入考场的考生：模拟名单内考生已入场（online）
+        foreach (Exam::studentIdsForExam($retakeRow) as $sid) {
+            Database::query(
+                "INSERT INTO `stuscore` (exam_id, stu_id, stu_score, stu_status, stu_pwd)
+                 VALUES (?, ?, 0, 'online', '') ON DUPLICATE KEY UPDATE stu_status = 'online'",
+                [$rid, $sid]
+            );
+        }
         \App\Services\ExamEngine::generateForClass($rid, $retakeRow);
         $setScore($rid, Fixture::STU_2, 18);   // 补考通过
         $setScore($rid, Fixture::STU_3, 6);    // 仍未通过

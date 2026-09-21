@@ -613,14 +613,14 @@ class Exam extends Model
      *       → 监考出题(排卷) → 到点惰性自动开考 或 手动开考 → 考生作答
      *
      * 入场窗口由后台「系统设置 → 考试规则」控制，不再写死：
-     *   exam_entry_lead_minutes  开考前多久开放入场（默认 15 分钟）
+     *   exam_entry_lead_minutes  开考前多久开放入场（默认 10 分钟，考试前 10 分钟可入场）
      *   exam_entry_late_minutes  开考后迟到入场的宽限（默认 0 = 开考后不得入场）
      * ================================================================== */
 
-    /** 入场提前量（秒）：读取后台设置，随配置实时生效（默认 15 分钟见 Setting schema） */
+    /** 入场提前量（秒）：读取后台设置，随配置实时生效（默认 10 分钟见 Setting schema） */
     public static function entryLeadSeconds(): int
     {
-        return max(0, Setting::int('exam_entry_lead_minutes', 15) * 60);
+        return max(0, Setting::int('exam_entry_lead_minutes', 10) * 60);
     }
 
     /** 开考后允许迟到入场的宽限（秒）：0 表示开考后不得入场 */
@@ -777,7 +777,7 @@ class Exam extends Model
         $closes    = self::entryClosesAt($exam);
         $pwdReady  = self::isOpenForEntry($exam);
         $now       = time();
-        $lead      = Setting::int('exam_entry_lead_minutes', 15);
+        $lead      = Setting::int('exam_entry_lead_minutes', 10);
         $late      = Setting::int('exam_entry_late_minutes', 0);
 
         $base = [

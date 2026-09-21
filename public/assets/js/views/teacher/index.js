@@ -275,13 +275,13 @@ export function TeacherExamsView({ router }) {
     load();
   }
 
-  /** 出题：为参考班级每位考生随机生成一套试卷 */
+  /** 出题：只为已进入考场的考生生成试卷 */
   async function generatePapers(r) {
     const ok = await new Promise((resolve) => {
       openModal({
         title: '开始出题',
         size: 'sm',
-        body: el('p', { text: `将为本场考试每位考生随机生成一套试卷（已生成的不会被覆盖）。确定开始出题？` }),
+        body: el('p', { text: `将为本场考试「已进入考场」的考生生成试卷（未入场考生不出卷；已生成的不会被覆盖）。确定开始出题？` }),
         footer: el('div.row.gap-sm', {}, [
           button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
           button('开始出题', { variant: 'primary', onClick: () => resolve(true) }),
@@ -293,7 +293,11 @@ export function TeacherExamsView({ router }) {
     const res = await withLoading(tableSlot, () => teacherApi.generatePapers(r.id, {}));
     if (!res.ok) return;
     const d = res.result || {};
-    notify.success(`出题完成：生成 ${d.generated ?? 0} 份${d.skipped ? `，跳过 ${d.skipped} 份` : ''}`);
+    if ((d.entered ?? 0) === 0) {
+      notify.warning('本考场暂无考生入场，无需出卷');
+    } else {
+      notify.success(`出题完成：生成 ${d.generated ?? 0} 份${d.skipped ? `，跳过 ${d.skipped} 份` : ''}`);
+    }
     if (Array.isArray(d.warnings) && d.warnings.length) {
       notify.warning(d.warnings.map((w) => `${w.label || w.type}${w.diff_label || ''} 需 ${w.need} 题、库存 ${w.have}`).join('；'));
     }

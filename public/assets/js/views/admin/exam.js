@@ -536,7 +536,7 @@ export async function ExamView({ router, can }) {
 
     const classText = classLabel(row.stu_class) || row.exam_class || '全部班级';
     const body = el('div.stack');
-    body.append(alertBox(`将为符合「${classText}」条件的考生逐人生成试卷。生成后考试状态变为「已组卷」。`, { type: 'info' }));
+    body.append(alertBox(`将为「已进入考场」的考生（符合「${classText}」）逐人生成试卷；未入场考生不出卷。生成后考试状态变为「已组卷」。`, { type: 'info' }));
 
     if (detail?.stock) {
       body.append(descList([
@@ -572,10 +572,14 @@ export async function ExamView({ router, can }) {
       clear(resultSlot);
       if (done) {
         const r = result || {};
-        resultSlot.append(alertBox(
-          `生成完成：成功 ${r.generated ?? r.count ?? 0} 份${r.skipped ? `，跳过 ${r.skipped} 份` : ''}`,
-          { type: 'success', title: '试卷生成成功' }
-        ));
+        if ((r.entered ?? 0) === 0) {
+          resultSlot.append(alertBox('本考场暂无考生入场，无需出卷', { type: 'warning', title: '无需出卷' }));
+        } else {
+          resultSlot.append(alertBox(
+            `生成完成：成功 ${r.generated ?? r.count ?? 0} 份${r.skipped ? `，跳过 ${r.skipped} 份` : ''}`,
+            { type: 'success', title: '试卷生成成功' }
+          ));
+        }
         if (r.warnings?.length) resultSlot.append(alertBox(r.warnings.join('；'), { type: 'warning' }));
         list.load();
       } else if (error) {
