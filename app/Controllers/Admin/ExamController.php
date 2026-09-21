@@ -308,6 +308,9 @@ class ExamController extends BaseController
 
         // 考场无人入场：不应强行给全班出卷，提示监考即可（出卷只给已进入考场的考生）。
         if ($result['entered'] === 0) {
+            // 不出卷，但「出题」这一动作代表监考已就绪：必须推进 exam → paper，
+            // 否则此后入场的考生无卷、整场也无法到点自动开考（见 ExamEngine::markReady）。
+            ExamEngine::markReady($id);
             return $this->ok([
                 'exam_id'       => $id,
                 'student_total' => 0,

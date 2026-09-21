@@ -329,6 +329,24 @@ final class ExamEngine
     }
 
     /**
+     * 标记本场「监考已就绪」：即便此刻无人入场，也把 exam → paper。
+     *
+     * 为什么必须推进：惰性开考 autoStartIfDue() 只在 paper 状态推进。出题时若因无人
+     * 入场而不动状态，考试会停在 exam —— 此后入场的考生既拿不到预生成试卷，
+     * 整场也无法到点自动开考，只能永久卡在「未开考」。此时试卷由
+     * ExamController::paper() 的惰性补卷兜底生成。
+     *
+     * @param int $examId
+     */
+    public static function markReady(int $examId): void
+    {
+        Database::query(
+            "UPDATE `examinfo` SET exam_status = 'paper' WHERE id = ? AND exam_status = 'exam'",
+            [$examId]
+        );
+    }
+
+    /**
      * 已进入考场的考生（stu_status ∈ {online, locked}）—— 出题的唯一范围。
      * @return string[] 准考证号列表
      */

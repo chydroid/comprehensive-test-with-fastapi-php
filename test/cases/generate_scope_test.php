@@ -188,6 +188,70 @@ $t->guard('BUG-260 控制器：全部入场时为 3 名考生出卷', function (
     $t->assertSame('三人全部拿到试卷', $fx['students'], $paperStuIds($examId));
 });
 
+/* ============================================================ */
+/* 5) 无人入场出题仍推进为「已排卷」（markReady）              */
+/* ============================================================ */
+$t->guard('BUG-262 无人入场出题后仍推进为已排卷（否则到点无法自动开考）', function () use ($t, $adminLogin) {
+    $lg = $adminLogin();
+    $t->assertSame('管理端登录 -> 200', 200, $lg['status']);
+
+    $fx = Fixture::createExam3(['exam_status' => 'exam']);
+    if ($fx === null) {
+        $t->skip('出题范围', '题库无可用题目');
+        return;
+    }
+    $examId = (int) $fx['exam_id'];
+    $t->assertSame('出题前为未开考', 'exam', (string) ((new Exam())->find($examId)['exam_status'] ?? ''));
+
+    // 无人入场 -> 不出卷，但必须把 exam → paper：
+    // autoStartIfDue() 只在 paper 状态推进，否则此后入场的考生无卷且整场永不自动开考。
+    $res = Http::post("/api/admin/exams/{$examId}/generate", [], ['X-CSRF-Token' => $lg['csrf']]);
+    $t->assertSame('出题接口 -> 200', 200, $res['status']);
+    $t->assertSame('无人入场也推进为已排卷', 'paper', (string) ((new Exam())->find($examId)['exam_status'] ?? ''));
+});
+
+/* ============================================================ */
+/* 6) 出题之后才入场的考生：开考取卷时惰性补卷                */
+/* ============================================================ */
+$t->guard('BUG-263 出题后迟到的考生：开考取卷时按需补生成试卷', function () use ($t, $adminLogin, $markOnline, $paperStuIds) {
+    $fx = Fixture::createExam3([
+        'exam_status' => 'exam',
+        'exam_start'  => date('Y-m-d H:i:s', time() + 300),   // 5 分钟后开考（已在入场窗口内）
+        'exam_end'    => date('Y-m-d H:i:s', time() + 3600),
+    ]);
+    if ($fx === null) {
+        $t->skip('出题范围', '题库无可用题目');
+        return;
+    }
+    $examId = (int) $fx['exam_id'];
+    [$s1, $s2] = $fx['students'];
+
+    // A 先入场 -> 出题（此时只有 A 拿到卷）
+    $markOnline($examId, [$s1]);
+    $lg = $adminLogin();
+    Http::post("/api/admin/exams/{$examId}/generate", [], ['X-CSRF-Token' => $lg['csrf']]);
+    $t->assertSame('出题后只有 A 有卷', [$s1], $paperStuIds($examId));
+
+    // B 在出题之后才入场（迟到入场）—— 本次出题没赶上
+    AuthSession::logout();
+    sess_forget('exam_session');
+    $enter = Http::post('/api/exam/login', [
+        'exam_id'  => $examId,
+        'stu_id'   => $s2,
+        'password' => Fixture::PWD,
+        'exam_pwd' => $fx['exam_pwd'],
+    ]);
+    $t->assertSame('B 入场 -> 200', 200, $enter['status']);
+    $t->assertTrue('B 入场时确无试卷', !in_array($s2, $paperStuIds($examId), true));
+
+    // 时间流逝到开考点：考生取卷应先触发惰性开考，再按需补卷
+    Database::query('UPDATE `examinfo` SET exam_start = ? WHERE id = ?', [date('Y-m-d H:i:s', time() - 10), $examId]);
+    $res = Http::get('/api/exam/paper');
+    $t->assertSame('B 取卷 -> 200（不再 404「试卷尚未生成」）', 200, $res['status']);
+    $t->assertSame('整场已惰性开考', 'testing', (string) ((new Exam())->find($examId)['exam_status'] ?? ''));
+    $t->assertTrue('B 已补到试卷', in_array($s2, $paperStuIds($examId), true));
+});
+
 Fixture::cleanup();
 Database::query('DELETE FROM `admininfo` WHERE username = ?', [EXP_ADMIN]);
 

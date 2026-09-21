@@ -100,6 +100,13 @@ $teacherPrepare = static function (array $overrides) use (&$createdExamIds): ?ar
     $eid = (int) $fx['exam_id'];
     $createdExamIds[] = $eid;
 
+    // 出题只面向已进入考场的考生：先让首位考生入场，否则出题得到 0 份试卷
+    Database::query(
+        "INSERT INTO `stuscore` (exam_id, stu_id, stu_score, stu_status, stu_pwd)
+         VALUES (?, ?, 0, 'online', '') ON DUPLICATE KEY UPDATE stu_status = 'online'",
+        [$eid, (string) $fx['students'][0]]
+    );
+
     Http::post("/api/teacher/exams/{$eid}/generate", [], ['X-CSRF-Token' => $csrf]);
     return ['exam_id' => $eid, 'exam_pwd' => $fx['exam_pwd'], 'csrf' => $csrf, 'students' => $fx['students']];
 };

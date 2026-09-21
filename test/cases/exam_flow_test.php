@@ -7,7 +7,7 @@ declare(strict_types=1);
  *
  * 生命周期（与需求一致）：
  *   开放入场（生成口令，状态仍为未开考）
- *     → 考生在「开考前 15 分钟内」凭口令入场（标记 online，不出题）
+ *     → 考生在「开考前 10 分钟内」凭口令入场（标记 online，不出题）
  *     → 监考出题（为每位考生随机组卷，状态 paper）
  *     → 到点惰性自动开考 或 监考手动开考（状态 testing）
  *     → 考生进入答题
@@ -137,7 +137,7 @@ $t->guard('开考后无法再入场', function () use ($t) {
     $t->assertTrue('提示考试已开始', str_contains($res['raw'], '无法进入考场'));
 });
 
-/* ---------- 6. 未到入场时间（开考前 15 分钟之外）被拒 ---------- */
+/* ---------- 6. 未到入场时间（开考前 10 分钟之外）被拒 ---------- */
 $t->guard('未到入场时间被拒', function () use ($t) {
     $future = Fixture::createExam([
         'exam_status' => 'exam',
@@ -155,16 +155,23 @@ $t->guard('未到入场时间被拒', function () use ($t) {
         'exam_pwd' => $future['exam_pwd'],
     ]);
     $t->assertSame('未到入场时间 -> 403', 403, $res['status']);
-    $t->assertTrue('提示 15 分钟后才可入场', str_contains($res['raw'], '15 分钟'));
+    $t->assertTrue('提示 10 分钟后才可入场', str_contains($res['raw'], '10 分钟'));
 });
 
 /* =================== 阶段二：监考出题 =================== */
 
 /* ---------- 7. 出题：为参考班级每位考生随机组卷 ---------- */
-$t->guard('出题后状态推进且试卷就绪', function () use ($t, $examId) {
+$t->guard('出题后状态推进且试卷就绪', function () use ($t, $examId, $fx) {
+    // 出题只面向「已进入考场」的考生：A 已凭口令入场，B 必须同样入场才会被出卷。
+    \Core\Database::query(
+        "INSERT INTO `stuscore` (exam_id, stu_id, stu_score, stu_status, stu_pwd)
+         VALUES (?, ?, 0, 'online', '') ON DUPLICATE KEY UPDATE stu_status = 'online'",
+        [$examId, $fx['stu_b']]
+    );
+
     $exam = (new Exam())->find($examId);
     $r = ExamEngine::generateForClass($examId, $exam);
-    $t->assertTrue('匹配到参考班级考生', $r['students'] >= 1);
+    $t->assertSame('已入场考生为 2 人', 2, $r['entered']);
     $t->assertSame('新生成 2 份试卷', 2, $r['generated']);
     $t->assertSame('无缺题警告', [], $r['warnings']);
 

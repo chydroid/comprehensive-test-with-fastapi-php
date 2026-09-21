@@ -304,7 +304,7 @@ $t->guard('入场边界：未开放入场 / 未到窗口 / 开考后 / 凭据错
             'password' => Fixture::PWD, 'exam_pwd' => $futureExam['exam_pwd'],
         ]);
         $t->assertSame('未到入场窗口 -> 403', 403, $res['status']);
-        $t->assertTrue('提示开考前 15 分钟才可入场', str_contains($res['raw'], '15 分钟'));
+        $t->assertTrue('提示开考前 10 分钟才可入场', str_contains($res['raw'], '10 分钟'));
     }
 
     // 已开考且该生未入场（默认 exam_entry_late_minutes = 0，开考后不得入场）
@@ -508,13 +508,7 @@ $t->guard('到点惰性自动开考（考生轮询触发）', function () use ($
     }
     $aid = (int) $auto['exam_id'];
 
-    // 教师出题（exam → paper），使试卷就绪
-    AuthSession::logout();
-    Http::post('/api/teacher/login', ['username' => E2E_T1, 'password' => E2E_T_PWD]);
-    Http::post("/api/teacher/exams/{$aid}/generate", [], ['X-CSRF-Token' => $csrf()]);
-    $t->assertSame('开考前为已排卷', 'paper', (string) ((new Exam())->find($aid)['exam_status'] ?? ''));
-
-    // 考生在窗口内入场（等待室）
+    // 新流程：考生先凭口令入场（等待室），教师再出题 —— 出题只面向已进入考场的考生
     AuthSession::logout();
     $enter = Http::post('/api/exam/login', [
         'exam_id' => $aid, 'stu_id' => $auto['students'][0],
@@ -522,6 +516,20 @@ $t->guard('到点惰性自动开考（考生轮询触发）', function () use ($
     ]);
     $t->assertSame('未到点也能入场 -> 200', 200, $enter['status']);
     $t->assertSame('入场后处于等待室', 'waiting', (string) (Http::data($enter)['phase'] ?? ''));
+
+    // 教师出题（exam → paper），使已入场考生的试卷就绪
+    AuthSession::logout();
+    Http::post('/api/teacher/login', ['username' => E2E_T1, 'password' => E2E_T_PWD]);
+    Http::post("/api/teacher/exams/{$aid}/generate", [], ['X-CSRF-Token' => $csrf()]);
+    $t->assertSame('开考前为已排卷', 'paper', (string) ((new Exam())->find($aid)['exam_status'] ?? ''));
+
+    // 教师登录占用了同一会话槽位，考生需重新入场才能继续轮询（已入场者可续考）
+    AuthSession::logout();
+    $re = Http::post('/api/exam/login', [
+        'exam_id' => $aid, 'stu_id' => $auto['students'][0],
+        'password' => Fixture::PWD, 'exam_pwd' => $auto['exam_pwd'],
+    ]);
+    $t->assertSame('考生重新入场 -> 200', 200, $re['status']);
 
     // 把开考时间拨到过去（等价于时间流逝到点），再让考生轮询状态
     Database::query('UPDATE `examinfo` SET exam_start = ? WHERE id = ?', [date('Y-m-d H:i:s', time() - 10), $aid]);

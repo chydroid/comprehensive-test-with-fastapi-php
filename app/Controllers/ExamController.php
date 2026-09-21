@@ -352,6 +352,13 @@ class ExamController extends BaseController
 
         $nav = ExamEngine::navigation($examId, $stuId);
         if ($nav['total'] === 0) {
+            // 惰性补卷：出题只面向「进入考场」的考生，监考点过出题之后才入场的
+            // 考生不会有一份预生成试卷。此处为其按需生成（幂等：已有卷则不重复排），
+            // 避免开考后卡在「试卷尚未生成」而无卷可答。
+            ExamEngine::generatePaper($examId, $stuId);
+            $nav = ExamEngine::navigation($examId, $stuId);
+        }
+        if ($nav['total'] === 0) {
             throw new HttpException(404, '试卷尚未生成，请联系监考教师', 40400);
         }
 

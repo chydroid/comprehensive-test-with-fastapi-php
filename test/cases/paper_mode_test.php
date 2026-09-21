@@ -105,6 +105,19 @@ function createExamViaApi(array $extra, array $headers): array
     ], $extra), $headers);
 }
 
+/**
+ * 模拟考生「已进入考场」（stuscore.stu_status = online）。
+ * 出题只面向已进入考场的考生，未入场者不会被排卷，故断言卷面前必须先入场。
+ */
+function markEntered(int $examId, string $stuId): void
+{
+    Database::query(
+        "INSERT INTO `stuscore` (exam_id, stu_id, stu_score, stu_status, stu_pwd)
+         VALUES (?, ?, 0, 'online', '') ON DUPLICATE KEY UPDATE stu_status = 'online'",
+        [$examId, $stuId]
+    );
+}
+
 /** 取若干道指定科目的题目 */
 function quizIdsOf(int $subjId, string $class, int $limit): array
 {
@@ -155,6 +168,7 @@ $t->guard('random 模式：创建考试', function () use ($t, &$randomExamId, $
 
 $t->guard('random 模式：出题按矩阵抽题', function () use ($t, &$randomExamId) {
     if ($randomExamId <= 0) { $t->assertTrue('跳过', true); return; }
+    markEntered($randomExamId, Fixture::STU_A);
     $res = Http::post("/api/teacher/exams/{$randomExamId}/generate", [], $GLOBALS['H']);
     $t->assertSame('出题 200', 200, $res['status']);
     $r = Database::fetch(
@@ -196,6 +210,8 @@ $t->guard('manual 模式：创建并落库', function () use ($t, &$manualExamId
 });
 
 $t->guard('manual 模式：出题取所选题目', function () use ($t, &$manualExamId, $manualIds) {
+    markEntered($manualExamId, Fixture::STU_A);
+    markEntered($manualExamId, Fixture::STU_B);
     $res = Http::post("/api/teacher/exams/{$manualExamId}/generate", [], $GLOBALS['H']);
     $t->assertSame('出题 200', 200, $res['status']);
     $rows = Database::fetchAll(
@@ -277,6 +293,7 @@ $t->guard('by_kp 模式：创建并落库', function () use ($t, &$kpExamId) {
 });
 
 $t->guard('by_kp 模式：出题按知识点抽题 + 满分回填', function () use ($t, &$kpExamId) {
+    markEntered($kpExamId, Fixture::STU_A);   // 出题只面向已进入考场的考生
     $res = Http::post("/api/teacher/exams/{$kpExamId}/generate", [], $GLOBALS['H']);
     $t->assertSame('出题 200', 200, $res['status']);
 

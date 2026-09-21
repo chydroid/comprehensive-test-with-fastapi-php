@@ -15,7 +15,7 @@ import { siteApi } from '../api/index.js';
 
 /** 与后端 Setting::SCHEMA 的 public 子集保持一致的兜底默认值 */
 const FALLBACK = {
-  exam_entry_lead_minutes: 15,
+  exam_entry_lead_minutes: 10,
   exam_entry_late_minutes: 0,
   exam_pwd_length: 6,
   exam_allow_view_answer: 1,
