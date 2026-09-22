@@ -12,7 +12,8 @@ import {
 } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { teacherApi } from '../../api/index.js';
-import { openExamEditor, deleteExam, openExamStudents, openComposerModal } from './exam-editor.js';
+import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
+import { openComposerModal } from './composer.js';
 import { openRetakeDialog, retakeBadge } from '../retake.js';
 import { openSurveyDialog } from '../survey.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtRelative } from '../../core/format.js';
