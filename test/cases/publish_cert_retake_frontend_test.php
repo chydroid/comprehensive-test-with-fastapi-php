@@ -46,14 +46,14 @@ $read = static function (string $rel) use ($base): string {
  * ================================================================== */
 $t->guard('一 前端 API 层登记齐全', function () use ($t, $read) {
     $api = $read('public/assets/js/api/index.js');
-    $t->assertTrue('学生端 scoreBoard', str_contains($api, "scoreBoard: (params) => http.get('/student/score-board'"));
-    $t->assertTrue('学生端 certificates', str_contains($api, "certificates: () => http.get('/student/certificates')"));
+    $t->assertTrue('学生端 scoreBoard', str_contains($api, "scoreBoard: (params) => http.get('/api/student/score-board'"));
+    $t->assertTrue('学生端 certificates', str_contains($api, "certificates: () => http.get('/api/student/certificates')"));
     $t->assertTrue('学生端 certificate(id)', str_contains($api, '/student/certificates/${examId}'));
-    $t->assertTrue('公开核验 verifyCertificate', str_contains($api, "verifyCertificate: (certNo) => http.get('/public/certificates/verify'"));
-    $t->assertTrue('教师端 retakeCandidates', str_contains($api, 'retakeCandidates: (id) => http.get(`/teacher/exams/${id}/retake-candidates`)'));
-    $t->assertTrue('教师端 createRetake', str_contains($api, 'createRetake:     (id, body) => http.post(`/teacher/exams/${id}/retake`'));
-    $t->assertTrue('管理端 retakeCandidates', str_contains($api, 'retakeCandidates: (id) => http.get(`/admin/exams/${id}/retake-candidates`)'));
-    $t->assertTrue('管理端 createRetake', str_contains($api, 'createRetake:     (id, body) => http.post(`/admin/exams/${id}/retake`'));
+    $t->assertTrue('公开核验 verifyCertificate', str_contains($api, "verifyCertificate: (certNo) => http.get('/api/public/certificates/verify'"));
+    $t->assertTrue('教师端 retakeCandidates', str_contains($api, 'retakeCandidates: (id) => http.get(`/api/teacher/exams/${id}/retake-candidates`)'));
+    $t->assertTrue('教师端 createRetake', str_contains($api, 'createRetake:     (id, body) => http.post(`/api/teacher/exams/${id}/retake`'));
+    $t->assertTrue('管理端 retakeCandidates', str_contains($api, 'retakeCandidates: (id) => http.get(`/api/admin/exams/${id}/retake-candidates`)'));
+    $t->assertTrue('管理端 createRetake', str_contains($api, 'createRetake:     (id, body) => http.post(`/api/admin/exams/${id}/retake`'));
 });
 
 /* ==================================================================

@@ -85,7 +85,7 @@ $t->guard('B1 API 与设置', function () use ($t, $read) {
     $api = $read('public/assets/js/api/index.js');
     $t->assertTrue('examApi.reportCheat 已声明', str_contains($api, 'reportCheat'));
     $t->assertTrue('教师端 cheatEvents 已声明', str_contains($api, 'cheatEvents'));
-    $t->assertTrue('上报路径 /exam/cheat', str_contains($api, "'/exam/cheat'"));
+    $t->assertTrue('上报路径 /api/exam/cheat', str_contains($api, "'/api/exam/cheat'"));
 
     $settings = $read('public/assets/js/core/app-settings.js');
     $t->assertTrue('FALLBACK 含 enable_cheat_guard', str_contains($settings, 'enable_cheat_guard'));
@@ -122,7 +122,7 @@ $t->guard('B1 监考端异常展示', function () use ($t, $read) {
 $t->guard('B3 导入前端', function () use ($t, $read) {
     $api = $read('public/assets/js/api/index.js');
     $t->assertTrue('importQuizzes 已声明', str_contains($api, 'importQuizzes'));
-    $t->assertTrue('导入路径正确', str_contains($api, "'/admin/quizzes/import'"));
+    $t->assertTrue('导入路径正确', str_contains($api, "'/api/admin/quizzes/import'"));
 
     $js = $read('public/assets/js/views/admin/quiz.js');
     $t->assertTrue('题库页有 openImport', str_contains($js, 'function openImport'));
