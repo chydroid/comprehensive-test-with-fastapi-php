@@ -179,7 +179,7 @@ class TeacherExamController extends BaseController
         // 教师只能创建自己负责的考试：忽略前端传入的 exam_tea，强制归属本人，
         // 防止横向把考试挂到他人名下（BUG-241）。
         $data['exam_tea'] = (string) ($sess['tea_name'] ?? '');
-        $this->assertValid($data);
+        $this->assertValid($data, true);
 
         $id = $this->model->create($data + ['exam_status' => Exam::STATUS_EXAM, 'exam_pwd' => 0]);
         $this->persistPaperMode($id, $data);
@@ -742,8 +742,14 @@ class TeacherExamController extends BaseController
         return $ts !== false ? date('Y-m-d H:i:s', $ts) : null;
     }
 
-    /** 教师端宽松校验：必填 + 分值合法性（不校验题库容量） */
-    private function assertValid(array $data): void
+    /**
+     * 教师端宽松校验：必填 + 分值合法性（不校验题库容量）。
+     *
+     * @param bool $isCreate 创建态放宽：允许「先建空考试、再由 AI 组卷 / 手动编辑器补题」，
+     *                       因此不强制结束时间与抽题数量；名称 / 科目 / 开始时间仍然必填。
+     *                       编辑态保持严格——防止把正式考试的题目改空或时间窗口改缺。
+     */
+    private function assertValid(array $data, bool $isCreate = false): void
     {
         if ($data['exam_name'] === '') {
             throw new HttpException(400, '请输入考试名称', 40000);
@@ -754,10 +760,17 @@ class TeacherExamController extends BaseController
         if ((new Subject())->find((int) $data['subj_id']) === null) {
             throw new HttpException(400, '所选科目不存在', 40001);
         }
-        if ($data['exam_start'] === null || $data['exam_end'] === null) {
-            throw new HttpException(400, '请填写完整的考试开始与结束时间', 40002);
+        // 开始时间始终必填；结束时间在创建态可为空（草稿考试，开考前再补；
+        // 模型层 exam_end 为 NULL/空串即「不过期」），编辑态仍强制以保证时间窗口完整。
+        if ($data['exam_start'] === null) {
+            throw new HttpException(400, '请填写考试开始时间', 40002);
+        }
+        if (!$isCreate && $data['exam_end'] === null) {
+            throw new HttpException(400, '请填写考试结束时间', 40002);
         }
 
+        // 手动选题 / 按知识点计划的明细校验：创建态与编辑态都执行（所选题目合法性不能放宽）。
+        // 仅 random 模式的「至少一道题」在创建态放宽（见下方 else 分支），以允许 AI 组卷草稿。
         $mode = (string) ($data['paper_mode'] ?? 'random');
         if ($mode === 'manual') {
             $ids = $data['_manual_ids'] ?? [];
@@ -792,7 +805,10 @@ class TeacherExamController extends BaseController
                 throw new HttpException(400, '按知识点比例模式请至少为某个知识点配置抽题数量', 40003);
             }
         } else {
-            if (Exam::totalQuestions($data) <= 0) {
+            // random 模式：编辑态要求至少一道题；创建态允许「0 题草稿」，
+            // 由 AI 组卷（composeApply）或手动选题编辑器后续补入，
+            // 否则新建考试点「AI 智能组卷」会因尚未配题被 400 卡死。
+            if (!$isCreate && Exam::totalQuestions($data) <= 0) {
                 throw new HttpException(400, '请至少配置一道题目的抽题数量', 40003);
             }
             foreach (Exam::TYPE_PREFIXES as $type) {
