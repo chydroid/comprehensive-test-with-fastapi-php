@@ -147,10 +147,10 @@ $t->guard('教师端单人收卷 / 全员收卷是两个入口', function () use
     $view = (string) file_get_contents($base . '/public/assets/js/views/teacher/index.js');
     $adminView = (string) file_get_contents($base . '/public/assets/js/views/admin/monitor.js');
 
-    $t->assertTrue('API 层声明 submitOne → /api/teacher/monitor/submit-one',
-        preg_match("#submitOne:\s*\(body\)\s*=>\s*http\.post\('/api/teacher/monitor/submit-one'#", $api) === 1);
-    $t->assertTrue('API 层保留 submit → /api/teacher/monitor/submit（全员）',
-        preg_match("#submit:\s*\(body\)\s*=>\s*http\.post\('/api/teacher/monitor/submit'#", $api) === 1);
+    $t->assertTrue('API 层声明 submitOne → /teacher/monitor/submit-one',
+        preg_match("#submitOne:\s*\(body\)\s*=>\s*http\.post\('/teacher/monitor/submit-one'#", $api) === 1);
+    $t->assertTrue('API 层保留 submit → /teacher/monitor/submit（全员）',
+        preg_match("#submit:\s*\(body\)\s*=>\s*http\.post\('/teacher/monitor/submit'#", $api) === 1);
 
     $t->assertTrue('教师端行内「交卷」调用 rowAction(\'submitOne\')',
         str_contains($view, "rowAction('submitOne'"));
@@ -158,13 +158,13 @@ $t->guard('教师端单人收卷 / 全员收卷是两个入口', function () use
         !str_contains($view, "rowAction('submit'"));
 
     // 管理端约定：adminApi.submit 指向 submit-one，全员单独叫 submitAll
-    $t->assertTrue('管理端 submit → /api/admin/monitor/submit-one',
+    $t->assertTrue('管理端 submit → /admin/monitor/submit-one',
         str_contains($adminView, 'submit') && preg_match(
-            "#submit:\s*\(body\)\s*=>\s*http\.post\('/api/admin/monitor/submit-one'#",
+            "#submit:\s*\(body\)\s*=>\s*http\.post\('/admin/monitor/submit-one'#",
             $api
         ) === 1);
-    $t->assertTrue('管理端全员收卷走 submitAll → /api/admin/monitor/submit',
-        preg_match("#submitAll:\s*\(body\)\s*=>\s*http\.post\('/api/admin/monitor/submit'#", $api) === 1);
+    $t->assertTrue('管理端全员收卷走 submitAll → /admin/monitor/submit',
+        preg_match("#submitAll:\s*\(body\)\s*=>\s*http\.post\('/admin/monitor/submit'#", $api) === 1);
 });
 
 /* ============================================================
