@@ -331,17 +331,25 @@ class StudentController extends BaseController
         if ($ids !== []) {
             $ph = implode(',', array_fill(0, count($ids), '?'));
             foreach (Database::fetchAll(
-                "SELECT id, exam_status FROM `examinfo` WHERE id IN ({$ph})",
+                "SELECT id, exam_status, exam_pwd FROM `examinfo` WHERE id IN ({$ph})",
                 $ids
             ) as $r) {
-                $freshMap[(int) $r['id']] = (string) ($r['exam_status'] ?? '');
+                $freshMap[(int) $r['id']] = [
+                    'exam_status' => (string) ($r['exam_status'] ?? ''),
+                    'exam_pwd'    => (string) ($r['exam_pwd'] ?? ''),
+                ];
             }
         }
 
         foreach ($list as &$e) {
             // 惰性开考可能刚推进状态，用刷新后的值覆盖
             if (isset($freshMap[(int) $e['id']])) {
-                $e['exam_status'] = $freshMap[(int) $e['id']];
+                $e['exam_status'] = $freshMap[(int) $e['id']]['exam_status'];
+                // 考生端「已开放入场」判定依赖 exam_pwd，但口令是入场凭证、绝不能下发给考生：
+                // 这里仅临时喂给 entryState() 计算 pwd_ready，末尾的 unset 会统一剥离 exam_pwd。
+                // （pendingForStudent 的 SELECT 故意不含 exam_pwd，避免首页等其他调用方泄密；
+                //  本端点是唯一需要该值来计算入场状态的入口。）
+                $e['exam_pwd'] = $freshMap[(int) $e['id']]['exam_pwd'];
             }
 
             // pendingForStudent 已 LEFT JOIN stuscore，直接据此判定入场状态
