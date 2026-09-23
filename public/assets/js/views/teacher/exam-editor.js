@@ -684,6 +684,12 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     body: el('div.stack', {}, [form, errSlot]),
     size: 'xl',
     footer: [button('取消', { variant: 'secondary', onClick: () => dlg.close() }), submitBtn],
+    // 本表单很长（科目/参考班级/日期时间/题量矩阵/公示范围/证书达标分），
+    // 误点遮罩或误按 Esc 会直接丢弃整张已填内容且无法恢复，代价过高。
+    // 因此关闭途径只保留**明确点击**：右上角 X（closable 默认 true 仍渲染）
+    // 与底部「取消」按钮；点遮罩、按 Esc 一律不关闭。
+    closeOnBackdrop: false,
+    closeOnEsc: false,
   });
 
   submitBtn.addEventListener('click', async () => {

@@ -314,9 +314,19 @@ export function pagination({ page, total, per_page, onPage }) {
 /* ============================ 弹窗 ============================ */
 /**
  * 打开弹窗
+ *
+ * 关闭方式分三类，可分别控制：
+ *  - 右上角 X 按钮：由 closable 控制是否渲染（closable=false 时连 X 都不出现）
+ *  - 点击遮罩（弹窗外侧空白区域）：由 closeOnBackdrop 控制
+ *  - 按 Esc：由 closeOnEsc 控制
+ *
+ * 填写内容较多、误关代价大的弹窗（如考试编辑），可传 closeOnBackdrop:false /
+ * closeOnEsc:false，只保留右上角 X 与底部「取消」这类**明确点击**的关闭途径，
+ * 避免误触遮罩或误按 Esc 丢掉整张表单。三者默认均为开启，既有弹窗行为不变。
+ *
  * @returns {{close:()=>void, root:HTMLElement}}
  */
-export function openModal({ title, body, footer = null, size = '', onClose, closable = true } = {}) {
+export function openModal({ title, body, footer = null, size = '', onClose, closable = true, closeOnBackdrop = true, closeOnEsc = true } = {}) {
   const backdrop = el('div.modal-backdrop');
   const modal = el('div', { class: `modal${size ? ` modal-${size}` : ''}`, role: 'dialog', 'aria-modal': 'true' });
   const titleId = uid('mt');
@@ -381,11 +391,13 @@ export function openModal({ title, body, footer = null, size = '', onClose, clos
     onClose?.();
   }
   function onKey(e) {
-    if (e.key === 'Escape' && closable) { e.stopPropagation(); close(); }
+    if (e.key === 'Escape' && closable && closeOnEsc) { e.stopPropagation(); close(); }
   }
 
   const lastFocused = document.activeElement;
-  if (closable) backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) close(); });
+  // 点遮罩关闭：closable 是总开关，closeOnBackdrop 单独控制「点弹窗外侧」这一种方式。
+  // 两者默认都开，保持既有弹窗行为；长表单弹窗可只关掉 closeOnBackdrop。
+  if (closable && closeOnBackdrop) backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) close(); });
   document.addEventListener('keydown', onKey);
 
   document.body.append(backdrop);
