@@ -275,11 +275,11 @@
 
 .exam-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: var(--sp-6);
   align-items: start;
 }
-@media (max-width: 1024px) { .exam-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 768px) { .exam-layout { grid-template-columns: minmax(0, 1fr); } }
 
 .exam-timer {
   display: flex;

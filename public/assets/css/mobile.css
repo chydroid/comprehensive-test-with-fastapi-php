@@ -7,12 +7,11 @@
    - 视口标签已在 PageController 输出：width=device-width, initial-scale=1。
    ========================================================================== */
 
-/* ==========================================================================
-   1. 答题界面骨架修正（桌面 / 移动通用）
-   --------------------------------------------------------------------------
+/*
+   答题卡在左侧边栏（桌面 / 平板），题目内容在右侧。
    原 .exam-layout 是两列网格，但 DOM 中 topbar 与 exam-body 同为直接子节点，
    导致 topbar 被挤进左列、答题正文被压到 280px 右列——桌面即错、移动更不可用。
-   改为纵向流式：topbar 居顶（可吸顶），exam-body 才是「题干 | 答题卡」两列网格。
+   改为纵向流式：topbar 居顶（可吸顶），exam-body 才是「答题卡 | 题干」两列网格。
    ========================================================================== */
 .exam-layout {
   display: flex;
@@ -42,7 +41,7 @@
 
 .exam-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 288px;
+  grid-template-columns: 288px minmax(0, 1fr);
   gap: var(--sp-6);
   align-items: start;
   padding: var(--sp-5);
@@ -56,13 +55,13 @@
 }
 .exam-bottombar-left,
 .exam-bottombar-right { display: flex; align-items: center; gap: var(--sp-2); }
-/* 答题卡按钮：桌面端隐藏（答题卡在右侧栏常显），移动端显示 */
+/* 答题卡按钮：桌面端隐藏（答题卡在左栏常显），移动端显示 */
 .exam-bottombar .sheet-toggle { display: none; }
 .answer-sheet { position: sticky; top: var(--sp-6); }
 /* 答题卡蒙层：默认隐藏，仅在移动端抽屉打开时出现（见下方媒体查询） */
 .answer-sheet-scrim { display: none; }
 
-@media (max-width: 1024px) {
+@media (max-width: 768px) {
   .exam-body { grid-template-columns: minmax(0, 1fr); }
 }
 

@@ -13,6 +13,7 @@ import { notify, button, openModal, confirmDialog } from '../ui/components.js';
 import { withLoading } from '../core/bootstrap.js';
 import { fmtScore, fmtDuration } from '../core/format.js';
 import { appSettingBool } from '../core/app-settings.js';
+import { getCsrfToken } from '../core/http.js';
 
 /** 题型 → 展示元信息 */
 export const QTYPE = {
@@ -78,7 +79,7 @@ export function createExamRunner(cfg) {
   const prevBtn = button('上一题', { variant: 'secondary', iconName: 'chevron-left', onClick: () => go(state.paperId - 1) });
   const nextBtn = button('下一题', { variant: 'primary', iconName: 'chevron-right', onClick: () => go(state.paperId + 1) });
   const submitBtn = button('交卷', { variant: 'danger', iconName: 'check-circle', onClick: () => confirmSubmit() });
-  // 移动端：底部「答题卡」按钮（桌面端由 CSS 隐藏，答题卡在右栏常显），
+  // 移动端：底部「答题卡」按钮（桌面端由 CSS 隐藏，答题卡在左栏常显），
   // 点击切换底部抽屉式答题卡。
   const sheetBtn = button('答题卡', { variant: 'ghost', iconName: 'grid', class: 'sheet-toggle', onClick: () => root.classList.toggle('is-sheet-open') });
   const bottomBar = el('div.exam-bottombar', {}, [
@@ -113,7 +114,9 @@ export function createExamRunner(cfg) {
   const main = el('div.stack', {}, [questionCard, bottomBar]);
   // 移动端底部抽屉答题卡的蒙层：点击关闭
   const sheetScrim = el('div.answer-sheet-scrim', { on: { click: () => root.classList.remove('is-sheet-open') } });
-  root.append(topbar, el('div.exam-body', {}, [main, sheetCard]), sheetScrim);
+  // 答题卡在左侧边栏（桌面/平板），题目内容在右侧：DOM 顺序与 grid 模板列序一致，
+  // 故 sheetCard 排在 main 之前。移动端仍为底部抽屉，不受此顺序影响。
+  root.append(topbar, el('div.exam-body', {}, [sheetCard, main]), sheetScrim);
 
   /* ---------- 逻辑 ---------- */
 
@@ -202,6 +205,7 @@ export function createExamRunner(cfg) {
       inp.addEventListener('input', () => {
         state.answers.set(state.paperId, inp.value.trim());
         state.dirty = true;
+        scheduleAutosave();
       });
       optionNode.append(inp);
       return;
@@ -239,6 +243,7 @@ export function createExamRunner(cfg) {
           const val = [...set].sort().join('');
           state.answers.set(state.paperId, val);
           state.dirty = true;
+          scheduleAutosave();
           renderQuestion();
         } else {
           state.answers.set(state.paperId, o.key);
@@ -331,6 +336,36 @@ export function createExamRunner(cfg) {
     }
   }
 
+  /**
+   * 卸载前强制落盘当前题：用 keepalive fetch 把脏答案送出去，
+   * 页面关闭 / 刷新 / 切到其他 App 时都不会丢当前题。
+   *
+   * 为什么不能在 beforeunload 里 await fetch：beforeunload 触发后页面立即卸载，
+   * 普通 async 请求来不及发出。keepalive 是专门为「页面卸载后仍要送达」
+   * 设计的请求选项（Chrome 88+ / Firefox 88+ / Safari 14+）。
+   *
+   * 真正的硬断电（进程直接死）任何事件都触发不了，只能靠防抖自动保存兜底，
+   * 所以这里只负责把「当前题在 1.2s 防抖窗口内」这一种常见丢失场景堵上。
+   */
+  function flushOnUnload() {
+    if (state.finished || !state.dirty) return;
+    const val = localAnswer(state.paperId);
+    if (val == null) { state.dirty = false; return; }
+    try {
+      fetch('/api/exam/paper/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': getCsrfToken(),
+        },
+        body: JSON.stringify({ paper_id: state.paperId, stu_key: val }),
+        keepalive: true,
+        credentials: 'same-origin',
+      });
+    } catch (_) { /* 忽略：卸载时失败不影响主流程 */ }
+    state.dirty = false;
+  }
+
   async function confirmSubmit() {
     if (state.submitting || state.finished) return;
     const unanswered = state.nav.total - state.nav.done;
@@ -361,7 +396,17 @@ export function createExamRunner(cfg) {
   async function doSubmit() {
     if (state.submitting) return;
     state.submitting = true;
-    if (state.dirty) await saveCurrent();
+    if (state.dirty) {
+      // 交卷前必须先把当前题落库：保存失败时先重试一次；仍失败则阻断交卷，
+      // 避免基于数据库旧数据交卷导致最后一题答案丢失。
+      let saved = await saveCurrent();
+      if (!saved) saved = await saveCurrent();
+      if (!saved) {
+        state.submitting = false;
+        notify.error('答案保存失败，交卷已中止，请检查网络后重试');
+        return;
+      }
+    }
     const res = await withLoading(submitBtn, () => cfg.submit());
     state.submitting = false;
     if (!res.ok) return;
@@ -380,7 +425,13 @@ export function createExamRunner(cfg) {
     clear(root);
     // http.js 已解包信封，loadReview() 返回的就是 data 本身，
     // 此前写 `.result || (await ...)` 使左侧恒为 undefined，每次交卷都多发一次请求。
-    const data = cfg.loadReview ? await cfg.loadReview() : null;
+    // 若 loadReview 抛错（如 403/网络问题），此前未捕获：既会让 doSubmit 的 Promise 链断裂，
+    // 又会让交卷请求的 403 触发全局 onForbidden → 跳回入口，用户看到的就是"交卷成功后跳回"。
+    // 现在兜住异常：data 为 null 时仍渲染基础交卷结果卡（得分等信息缺失但不影响"已交卷"状态）。
+    let data = null;
+    if (cfg.loadReview) {
+      try { data = await cfg.loadReview(); } catch (_) { /* 静默：交卷本身已成功 */ }
+    }
     root.append(renderResult(data));
   }
 
@@ -558,6 +609,8 @@ export function createExamRunner(cfg) {
     dispose: () => {
       stopTimer();
       teardownCheatGuard();
+      window.removeEventListener('beforeunload', flushOnUnload);
+      window.removeEventListener('pagehide', flushOnUnload);
     },
     async start() {
       const res = await withLoading(root, () => cfg.loadPaper(1), { text: '正在加载试卷…' });
@@ -577,6 +630,10 @@ export function createExamRunner(cfg) {
       renderAll();
       startTimer();
       setupCheatGuard();
+      // 页面卸载前（关标签 / 刷新 / 切到其它 App）强制落盘当前题，
+      // 缩小「答完不翻页直接关页」在 1.2s 防抖窗口内的丢失面。
+      window.addEventListener('beforeunload', flushOnUnload);
+      window.addEventListener('pagehide', flushOnUnload);
     },
     /** 供外部（练习逐题模式）刷新当前题 */
     getState: () => state,

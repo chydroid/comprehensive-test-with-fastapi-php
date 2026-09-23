@@ -67,6 +67,13 @@ class TeacherExamController extends BaseController
         )['c'] ?? 0);
 
         foreach ($rows as &$row) {
+            // 列表访问时收敛「完全无人访问的过期考场」：与管理端同理，
+            // 无常驻 cron，过期考场只能靠请求触发；教师端列表是高频访问入口。
+            if ((string) ($row['exam_status'] ?? '') === Exam::STATUS_TESTING) {
+                if (Exam::autoEndIfDue((int) $row['id'])) {
+                    $row['exam_status'] = 'over';
+                }
+            }
             $row['total_questions'] = Exam::totalQuestions($row);
             $row['computed_score']  = Exam::computedTotalScore($row);
             $row['status_summary']  = $this->model->statusSummary((int) $row['id']);

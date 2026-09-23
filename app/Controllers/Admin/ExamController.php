@@ -60,6 +60,20 @@ class ExamController extends BaseController
 
         $result = $this->model->adminList($filters, $p['offset'], $p['per_page']);
 
+        // 列表访问时收敛「完全无人访问的过期考场」：
+        // 系统无常驻 cron，过期考场只能靠请求触发流转；管理端考试列表是最高频的
+        // 访问入口，在这里触发 autoEndIfDue() 可使过期但无人答题的考场最终收敛为 over，
+        // 否则成绩永远停在 testing（见 Exam::autoEndIfDue 注释）。
+        // endExam() 幂等：已结束的考场廉价 COUNT 为 0 直接返回，重复调用安全。
+        foreach ($result['data'] as &$row) {
+            if ((string) ($row['exam_status'] ?? '') === Exam::STATUS_TESTING) {
+                if (Exam::autoEndIfDue((int) $row['id'])) {
+                    $row['exam_status'] = 'over';
+                }
+            }
+        }
+        unset($row);
+
         // 附带考生进度概览 + 组卷推算满分
         foreach ($result['data'] as &$row) {
             $row['total_questions']   = Exam::totalQuestions($row);

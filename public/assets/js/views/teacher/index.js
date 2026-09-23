@@ -191,14 +191,17 @@ export function TeacherExamsView({ router }) {
 
   async function startExam(r) {
     const ok = await new Promise((resolve) => {
-      openModal({
+      // 确认弹窗必须先 close 再 resolve：弹窗残留会锁 body 滚动并遮挡后续
+      // toast/结果弹窗，导致用户「点了开考却看不到任何反馈」。
+      const dlg = openModal({
         title: '确认开考',
         size: 'sm',
         body: el('p', { text: `确定立即开始「${r.exam_name}」吗？开考后考生将无法再进入考场。` }),
         footer: el('div.row.gap-sm', {}, [
-          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
-          button('立即开考', { variant: 'primary', onClick: () => resolve(true) }),
+          button('取消', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
+          button('立即开考', { variant: 'primary', onClick: () => { dlg.close(); resolve(true); } }),
         ]),
+        onClose: () => resolve(false),
       });
     });
     if (!ok) return;
@@ -206,7 +209,7 @@ export function TeacherExamsView({ router }) {
     const res = await withLoading(tableSlot, () => teacherApi.startExam(r.id));
     if (!res.ok) return;
     const pwd = res.result?.exam_pwd || res.result?.pwd || '';
-    openModal({
+    const successDlg = openModal({
       title: '考试已开始',
       size: 'sm',
       body: el('div.stack', {}, [
@@ -225,7 +228,7 @@ export function TeacherExamsView({ router }) {
           }),
         ]),
       ]),
-      footer: button('知道了', { variant: 'primary', onClick: () => document.body.querySelector('.modal-backdrop')?.click() }),
+      footer: button('知道了', { variant: 'primary', onClick: () => successDlg.close() }),
     });
     load();
   }
@@ -235,14 +238,16 @@ export function TeacherExamsView({ router }) {
     const pwdReady = !!(r.exam_pwd && String(r.exam_pwd) !== '0');
     if (pwdReady) {
       const ok = await new Promise((resolve) => {
-        openModal({
+        // 确认弹窗必须先 close 再 resolve，残留遮罩会挡住后续结果弹窗。
+        const dlg = openModal({
           title: '重新生成口令',
           size: 'sm',
           body: el('p', { text: '重新生成后原口令立即失效，已进入考场的考生需重新输入新口令。确定继续？' }),
           footer: el('div.row.gap-sm', {}, [
-            button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
-            button('重新生成', { variant: 'warning', onClick: () => resolve(true) }),
+            button('取消', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
+            button('重新生成', { variant: 'warning', onClick: () => { dlg.close(); resolve(true); } }),
           ]),
+          onClose: () => resolve(false),
         });
       });
       if (!ok) return;
@@ -250,7 +255,7 @@ export function TeacherExamsView({ router }) {
     const res = await withLoading(tableSlot, () => teacherApi.openExam(r.id));
     if (!res.ok) return;
     const pwd = res.result?.exam_pwd || res.result?.pwd || '';
-    openModal({
+    const successDlg = openModal({
       title: '已开放入场',
       size: 'sm',
       body: el('div.stack', {}, [
@@ -271,7 +276,7 @@ export function TeacherExamsView({ router }) {
         button('复制口令', { variant: 'secondary', iconName: 'copy', block: true,
           onClick: () => copyWithToast(pwd, '考场口令') }),
       ]),
-      footer: button('知道了', { variant: 'primary', onClick: () => document.body.querySelector('.modal-backdrop')?.click() }),
+      footer: button('知道了', { variant: 'primary', onClick: () => successDlg.close() }),
     });
     load();
   }
@@ -279,20 +284,22 @@ export function TeacherExamsView({ router }) {
   /** 出题：只为已进入考场的考生生成试卷 */
   async function generatePapers(r) {
     const ok = await new Promise((resolve) => {
-      openModal({
+      // 同 startExam：确认弹窗不 close 会遮挡出题成功的 toast，造成「无反馈」。
+      const dlg = openModal({
         title: '开始出题',
         size: 'sm',
         body: el('p', { text: `将为本场考试「已进入考场」的考生生成试卷（未入场考生不出卷；已生成的不会被覆盖）。确定开始出题？` }),
         footer: el('div.row.gap-sm', {}, [
-          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
-          button('开始出题', { variant: 'primary', onClick: () => resolve(true) }),
+          button('取消', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
+          button('开始出题', { variant: 'primary', onClick: () => { dlg.close(); resolve(true); } }),
         ]),
+        onClose: () => resolve(false),
       });
     });
     if (!ok) return;
 
     const res = await withLoading(tableSlot, () => teacherApi.generatePapers(r.id, {}));
-    if (!res.ok) return;
+    if (!res.ok) { notify.error(res.error?.message || '出题失败，请重试'); return; }
     const d = res.result || {};
     if ((d.entered ?? 0) === 0) {
       notify.warning('本考场暂无考生入场，无需出卷');

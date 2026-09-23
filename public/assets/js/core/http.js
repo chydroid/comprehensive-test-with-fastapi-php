@@ -62,7 +62,7 @@ function buildQuery(params) {
   return s ? `?${s}` : '';
 }
 
-async function request(method, path, { query, body, headers = {}, raw = false, retry = true, signal } = {}) {
+async function request(method, path, { query, body, headers = {}, raw = false, retry = true, signal, suppressForbidden = false } = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}${buildQuery(query)}`;
 
   const init = { method, headers: { Accept: 'application/json', ...headers }, credentials: 'same-origin', signal };
@@ -123,7 +123,9 @@ async function request(method, path, { query, body, headers = {}, raw = false, r
   if (res.status === 401 && !NO_AUTH_REDIRECT.some((re) => re.test(path))) {
     emit('unauthorized', { path });
   }
-  if (res.status === 403) emit('forbidden', { path, message: payload?.message });
+  // 调用方显式声明本地处理 403（如交卷后拉解析）时，不触发全局跳转，
+  // 否则结果页会被 403 事件送回入口，用户看到「交卷成功后又跳回作答页」。
+  if (res.status === 403 && !suppressForbidden) emit('forbidden', { path, message: payload?.message });
 
   if (!res.ok) {
     throw new ApiError(

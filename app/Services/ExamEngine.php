@@ -450,6 +450,7 @@ final class ExamEngine
         );
 
         $score = 0;
+        $paperFull = 0;
         $wrong = []; // 本次答错的题目（quiz_id + paper_id），用于沉淀错题本
         Database::beginTransaction();
         try {
@@ -462,6 +463,9 @@ final class ExamEngine
 
             foreach ($rows as $r) {
                 $type = (string) $r['quiz_class'];
+                // 卷面满分按该生实际题目求和：by_kp 模式下不同学生的卷面满分可能不同
+                // （知识点组合不同），不能用全局 exam_score 统一封顶。
+                $paperFull += $valMap[$type] ?? 0;
                 if ($type === 'longtext') {
                     continue; // 问答题不自动判分
                 }
@@ -478,8 +482,10 @@ final class ExamEngine
                 }
             }
 
-            // 总分封顶：若因异常（如并发重复排卷）出现重复计分行，避免成绩超过试卷满分
-            $cap = (int) ($exam['exam_score'] ?? 0);
+            // 总分封顶：若因异常（如并发重复排卷）出现重复计分行，避免成绩超过试卷满分。
+            // by_kp 模式下不同学生的卷面满分可能不同，用全局 exam_score 统一会把
+            // 卷面更高的学生错误压低到第一人的满分（exam_score 只按第一人回填）。
+            $cap = $paperFull > 0 ? $paperFull : (int) ($exam['exam_score'] ?? 0);
             if ($cap > 0 && $score > $cap) {
                 $score = $cap;
             }
@@ -542,8 +548,11 @@ final class ExamEngine
         $objective = 0;
         $subjective = 0;
         $pending = 0;
+        $paperFull = 0;
         foreach ($rows as $r) {
             $type = (string) $r['quiz_class'];
+            // 卷面满分按该生实际题目求和：by_kp 模式下不同学生卷面满分可能不同
+            $paperFull += $valMap[$type] ?? 0;
             if (in_array($type, Exam::SUBJECTIVE_TYPES, true)) {
                 if ($r['quiz_score'] === null) {
                     $pending++;          // 尚未批阅：不计分，也不当作答错（不拉低正确率口径）
@@ -562,7 +571,9 @@ final class ExamEngine
             }
         }
 
-        $full = (int) ($exam['exam_score'] ?? 0);
+        // 卷面满分按该生实际题目求和：by_kp 模式下不同学生的卷面满分可能不同，
+        // 用全局 exam_score 统一会把卷面更高的学生压低到第一人的满分。
+        $full = $paperFull > 0 ? $paperFull : (int) ($exam['exam_score'] ?? 0);
         $score = $objective + $subjective;
         // 封顶：批阅不会让总分超过卷面满分（教师误给高分时兜底）
         if ($full > 0 && $score > $full) {
@@ -692,16 +703,26 @@ final class ExamEngine
     /**
      * 归一化前端提交的答案：
      * 多选题前端可能传数组，需合并为有序字符串；判断题 Y/N 兼容为 A/B。
+     *
+     * ⚠️ 归一化只对**客观题**（判断/单选/多选）生效：
+     *   - 去空白、转大写、多选去重升序，都是为了「判分比对」两侧同口径；
+     *   - 填空(text)/问答(longtext) 的**原文必须原样落库**，否则教师端
+     *     批阅时看到的是大写无空格的乱码（作文 "My answer" → "MYANSWER"）。
+     * 客观题判分不受影响：autoGrade 里 isCorrect() 对两侧做同样的归一化。
      */
     public static function normalizeSubmission(string $type, mixed $raw): string
     {
         if (is_array($raw)) {
             $raw = implode('', array_map('strval', $raw));
         }
-        $answer = Quiz::normalizeAnswer($type, (string) $raw);
-        // 判断题：前端可能提交 Y/N（对/错）
-        if ($type === 'radio1') {
-            $answer = str_replace(['Y', 'N'], ['A', 'B'], $answer);
+        $answer = (string) $raw;
+        // 仅客观题需要归一化；填空/问答原样保留（含大小写与空白）
+        if (in_array($type, Quiz::OBJECTIVE_TYPES, true)) {
+            $answer = Quiz::normalizeAnswer($type, $answer);
+            // 判断题：前端可能提交 Y/N（对/错）
+            if ($type === 'radio1') {
+                $answer = str_replace(['Y', 'N'], ['A', 'B'], $answer);
+            }
         }
         return $answer;
     }

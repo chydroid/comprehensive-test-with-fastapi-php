@@ -181,7 +181,10 @@ export function ExamTakeView({ router, query }) {
       loadPaper: async (paperId) => examApi.paper({ paper_id: paperId }),
       saveAnswer: async (paperId, answer) => examApi.save({ paper_id: paperId, stu_key: answer }),
       submit: async () => examApi.submit({}),
-      loadReview: async () => examApi.answer(),
+      // 交卷成功后拉取解析属于“结果增强”而非“入场前置”：
+      // 403（未结束 / 关闭答案解析等）不应触发全局 onForbidden 跳回入口，
+      // 由 exam-runner 在本地 catch 住并渲染“已交卷”基础结果卡。
+      loadReview: async () => examApi.answer({ suppressForbidden: true }),
       onExit: () => examApi.logout(),
     });
 

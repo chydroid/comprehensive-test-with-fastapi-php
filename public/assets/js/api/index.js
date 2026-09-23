@@ -58,7 +58,7 @@ export const examApi = {
   save:   (body) => http.post('/exam/paper/save', body),
   submit: (body) => http.post('/exam/paper/submit', body),
   over:   () => http.get('/exam/over'),
-  answer: () => http.get('/exam/answer'),
+  answer: (opts) => http.get('/exam/answer', opts),
   // B1 防作弊：上报切屏 / 失焦等异常
   reportCheat: (body) => http.post('/exam/cheat', body),
 };
