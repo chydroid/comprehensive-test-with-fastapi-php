@@ -442,6 +442,12 @@ export async function ExamView({ router, can }) {
 
     const errSlot = el('div');
     const submitBtn = button(isEdit ? '保存修改' : '创建考试', { variant: 'primary' });
+    /** 写提示：先清再写，重复点保存不会叠加成多条 */
+    const showErr = (msg, opts) => { clear(errSlot); errSlot.append(alertBox(msg, opts)); };
+    // 提示出现后必须能「及时消失」：任何编辑都撤掉旧提示（旧提示对应的表单状态已改变），
+    // 否则把名称补上后「请填写考试名称」仍纹丝不动地留在底部。
+    form.addEventListener('input', () => clear(errSlot));
+    form.addEventListener('change', () => clear(errSlot));
 
     const bodyWrap = el('div.stack', {}, [form, el('div.flex.gap-2', {}, [checkBtn]), errSlot]);
     const dlg = openModal({
@@ -466,9 +472,9 @@ export async function ExamView({ router, can }) {
         ...collectMatrix(),
       };
 
-      if (!payload.exam_name) { errSlot.append(alertBox('请填写考试名称', { type: 'warning' })); return; }
-      if (!payload.subj_id) { errSlot.append(alertBox('请选择科目', { type: 'warning' })); return; }
-      if (!payload.exam_start_time) { errSlot.append(alertBox('请填写开始时间', { type: 'warning' })); return; }
+      if (!payload.exam_name) { showErr('请填写考试名称', { type: 'warning' }); return; }
+      if (!payload.subj_id) { showErr('请选择科目', { type: 'warning' }); return; }
+      if (!payload.exam_start_time) { showErr('请填写开始时间', { type: 'warning' }); return; }
 
       const { ok, error } = await withLoading(submitBtn, () => (
         isEdit ? adminApi.updateExam(id, payload) : adminApi.createExam(payload)
@@ -480,7 +486,7 @@ export async function ExamView({ router, can }) {
         list.load();
       } else if (error) {
         const detail = error.data?.shortfall ? `缺题：${Object.entries(error.data.shortfall).map(([k, v]) => `${QUIZ_TYPE_LABELS[k.split('_')[0]] || k}缺 ${v}`).join('、')}` : '';
-        errSlot.append(alertBox(error.message || '保存失败', { type: 'danger', title: detail || '' }));
+        showErr(error.message || '保存失败', { type: 'danger', title: detail || '' });
       }
     });
   }

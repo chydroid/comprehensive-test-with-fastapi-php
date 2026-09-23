@@ -111,6 +111,34 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     },
   );
 
+  /* ---------- 保存错误提示区 ---------- */
+  // 刻意声明在组卷矩阵之前：下方 renderMode() 会立即执行，手动选题的「加入 / 移除」
+  // 这类**非输入事件**也要复用同一套提示逻辑；若声明在 form 之后会落进 TDZ。
+  const errSlot = el('div');
+  /** 仅当「前端校验类」提示在场时才做实时复核——弹窗一打开就复核会让用户边填边被提示轰炸 */
+  let liveCheck = false;
+
+  /** 写提示：先清再写，重复点保存不会叠加成多条 */
+  function showErr(msg, type = 'warning') {
+    clear(errSlot);
+    errSlot.append(alertBox(msg, { type }));
+    liveCheck = type === 'warning';
+  }
+  function clearErr() { clear(errSlot); liveCheck = false; }
+
+  /**
+   * 表单发生任何改动时复核提示（修「提示出现后永不消失」）：
+   *  - 校验类提示：重跑 validateExam，全部通过即撤掉，仍有错则换成当前第一条（不叠加）；
+   *  - 后端返回的提示（danger）：表单已改动即视为失效，直接撤掉（下次保存会重新给出）。
+   */
+  function onFormEdit() {
+    if (errSlot.childElementCount === 0) return;   // 没有提示在场，什么都不用做
+    if (!liveCheck) { clearErr(); return; }
+    const errs = validateExam(collectPayload());
+    if (errs.length) showErr(errs[0], 'warning');
+    else clearErr();
+  }
+
   /* ---------- 组卷矩阵 ---------- */
   const counts = {};
   const scores = {};
@@ -281,7 +309,8 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
 
   function renderMode() {
     clear(modeSlot);
-    modeSlot.append(segmented(MODE_ITEMS, paperMode, (k) => { paperMode = k; renderMode(); }));
+    // 切换组卷模式会改变校验口径（random/manual/by_kp 的必填项不同），需重算提示
+    modeSlot.append(segmented(MODE_ITEMS, paperMode, (k) => { paperMode = k; renderMode(); onFormEdit(); }));
     randomPane.style.display = paperMode === 'random' ? '' : 'none';
     manualPane.style.display = paperMode === 'manual' ? '' : 'none';
     kpPane.style.display = paperMode === 'by_kp' ? '' : 'none';
@@ -341,6 +370,7 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
                 manualMeta.set(String(r.id), { title: r.quiz_title || '', type: r.quiz_class || '' });
                 void doSearch();
                 renderSelected();
+                onFormEdit();   // 「加入」是点击而非输入事件，bubble 不到 form，需显式复核
               },
             }),
           },
@@ -382,7 +412,7 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
           el('span.fs-xs', { text: (meta.title || `#${qid}`).slice(0, 24) + ((meta.title || '').length > 24 ? '…' : '') }),
           el('button.btn-ghost.btn-xs', {
             type: 'button', title: '移除', text: '×',
-            onClick: () => { manualIds.delete(qid); renderSelected(); void doSearch(); },
+            onClick: () => { manualIds.delete(qid); renderSelected(); void doSearch(); onFormEdit(); },
           }),
         ]);
         chips.append(chip);
@@ -538,13 +568,13 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     const payload = collectPayload();
     const errs = validateExam(payload);
     if (errs.length) {
-      errSlot.append(alertBox(errs[0], { type: 'warning' }));
+      showErr(errs[0], 'warning');
       return { ok: false };
     }
     const res = await withLoading(trigger, () =>
       isEdit ? teacherApi.updateExam(id, payload) : teacherApi.createExam(payload), { silent: true });
     if (!res.ok) {
-      errSlot.append(alertBox(res.error?.message || '保存失败', { type: 'danger' }));
+      showErr(res.error?.message || '保存失败', 'danger');
       return { ok: false };
     }
     const fresh = res.result;
@@ -677,8 +707,12 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
     }),
   ]);
 
-  const errSlot = el('div');
   const submitBtn = button(isEdit ? '保存修改' : '创建考试', { variant: 'primary' });
+  // 任何编辑都实时复核 / 撤除底部提示（见 onFormEdit）。
+  // input 覆盖文本框与矩阵数字框，change 覆盖下拉（科目 / 类别 / 题型）与复选框（参考班级）。
+  // 手动选题的「加入 / 移除」是点击，已在各自 onClick 里显式调用 onFormEdit。
+  form.addEventListener('input', onFormEdit);
+  form.addEventListener('change', onFormEdit);
   const dlg = openModal({
     title: isEdit ? `编辑考试 #${id}` : '新建考试',
     body: el('div.stack', {}, [form, errSlot]),
@@ -693,7 +727,7 @@ export async function openExamEditor({ id = null, options = {}, onSaved } = {}) 
   });
 
   submitBtn.addEventListener('click', async () => {
-    clear(errSlot);
+    clearErr();   // 每次保存前重置提示区（连同实时复核开关），避免残留旧提示
     const saved = await saveExam(submitBtn);
     if (!saved.ok) return;
     notify.success(isEdit ? '考试已更新' : '考试已创建');
