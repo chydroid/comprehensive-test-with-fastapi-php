@@ -15,6 +15,8 @@ abstract class Model
     protected array $fillable = [];
     /** 自动维护 created_at/updated_at（表存在对应列时生效） */
     protected bool $timestamps = true;
+    /** 查询结果中隐藏不外泄的列（如 password）：find/all/where/paginate/paginateKeyset 统一裁剪 */
+    protected array $hidden = [];
 
     public function table(): string
     {
@@ -30,17 +32,20 @@ abstract class Model
     /** 按主键查询单条 */
     public function find(int|string $id): ?array
     {
-        return Database::fetch(
+        $row = Database::fetch(
             "SELECT * FROM `{$this->table()}` WHERE `{$this->primaryKey}` = ? LIMIT 1",
             [$id]
         );
+        return $row === null ? null : $this->stripHidden($row);
     }
 
     /** 全部记录 */
     public function all(string $orderBy = 'id ASC'): array
     {
         $order = $this->assertOrderBy($orderBy);
-        return Database::fetchAll("SELECT * FROM `{$this->table()}` ORDER BY $order");
+        return $this->stripHiddenAll(
+            Database::fetchAll("SELECT * FROM `{$this->table()}` ORDER BY $order")
+        );
     }
 
     /** 等值条件查询：where(['status' => 1]) */
@@ -50,9 +55,11 @@ abstract class Model
         // 空条件时不输出 "WHERE "，避免生成非法 SQL
         $whereSql = $sql === '' ? '' : "WHERE $sql";
         $order = $this->assertOrderBy($orderBy);
-        return Database::fetchAll(
-            "SELECT * FROM `{$this->table()}` $whereSql ORDER BY $order",
-            $params
+        return $this->stripHiddenAll(
+            Database::fetchAll(
+                "SELECT * FROM `{$this->table()}` $whereSql ORDER BY $order",
+                $params
+            )
         );
     }
 
@@ -77,10 +84,12 @@ abstract class Model
         )['c'] ?? 0);
 
         $offset = ($page - 1) * $perPage;
-        $list = Database::fetchAll(
-            "SELECT * FROM `{$this->table()}` $whereSql
-             ORDER BY `{$this->primaryKey}` DESC LIMIT $perPage OFFSET $offset",
-            $params
+        $list = $this->stripHiddenAll(
+            Database::fetchAll(
+                "SELECT * FROM `{$this->table()}` $whereSql
+                 ORDER BY `{$this->primaryKey}` DESC LIMIT $perPage OFFSET $offset",
+                $params
+            )
         );
 
         return [
@@ -113,12 +122,12 @@ abstract class Model
             $allParams = [...$params, $after];
         }
 
-        // 多取 1 条以判断是否还有下一页
-        $rows = Database::fetchAll(
+        // 多取 1 条以判断是否还有下一页（游标取末行主键不受影响：主键在 hidden 裁剪前已提取）
+        $rows = $this->stripHiddenAll(Database::fetchAll(
             "SELECT * FROM `{$this->table()}` $whereSql$cursorSql
              ORDER BY `{$this->primaryKey}` DESC LIMIT " . ($perPage + 1),
             $allParams
-        );
+        ));
 
         $hasMore = count($rows) > $perPage;
         $list = $hasMore ? array_slice($rows, 0, $perPage) : $rows;
@@ -258,5 +267,23 @@ abstract class Model
             $data['updated_at'] = $now;
         }
         return $data;
+    }
+
+    /** 裁剪单行隐藏列：未声明 $hidden 时原样返回，保证现有模型零影响 */
+    protected function stripHidden(array $row): array
+    {
+        if ($this->hidden === []) {
+            return $row;
+        }
+        return array_diff_key($row, array_flip($this->hidden));
+    }
+
+    /** 裁剪多行隐藏列：逐行调用 stripHidden */
+    protected function stripHiddenAll(array $rows): array
+    {
+        if ($this->hidden === [] || $rows === []) {
+            return $rows;
+        }
+        return array_map(fn (array $row): array => $this->stripHidden($row), $rows);
     }
 }

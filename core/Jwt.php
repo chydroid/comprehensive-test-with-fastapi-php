@@ -16,13 +16,20 @@ final class Jwt
     {
         $now = time();
         $header  = ['alg' => 'HS256', 'typ' => 'JWT'];
-        $payload = $claims + [
+        // 内置 claims 放右侧（+ 号优先级低），业务 claims 无法覆盖 exp/nbf/jti 等安全字段，
+        // 防止调用方传入 $claims 注入超长 exp 绕过有效期
+        $payload = [
             'iss' => $issuer,
             'iat' => $now,
             'nbf' => $now,
             'exp' => $now + $ttl,
             'jti' => bin2hex(random_bytes(16)),
-        ];
+        ] + $claims;
+        // 安全字段最终再强制覆盖一次，确保业务声明无论如何都无法篡改
+        $payload['iss'] = $issuer;
+        $payload['exp'] = $now + $ttl;
+        $payload['nbf'] = $now;
+        $payload['iat'] = $now;
         $signing = self::b64(json_encode($header, JSON_UNESCAPED_SLASHES))
                  . '.'
                  . self::b64(json_encode($payload, JSON_UNESCAPED_SLASHES));
@@ -61,8 +68,9 @@ final class Jwt
         if (isset($payload['nbf']) && $payload['nbf'] > $now + $leeway) {
             return null; // 尚未生效
         }
-        if (isset($payload['iss']) && $payload['iss'] !== $issuer) {
-            return null; // 签发者不符
+        // iss 必须存在且与期望一致：本项目签发的令牌一定带 iss，缺失即视为无效（防绕过）
+        if (($payload['iss'] ?? null) !== $issuer) {
+            return null; // 签发者不符或缺失
         }
         return $payload;
     }

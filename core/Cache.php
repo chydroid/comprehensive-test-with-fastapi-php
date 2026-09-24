@@ -228,6 +228,20 @@ final class Cache
         if ($ttl > 0) {
             $data['exp'] = time() + $ttl;
         }
-        @file_put_contents($dir . '/' . md5($key) . '.cache', json_encode($data), LOCK_EX);
+        $encoded = json_encode($data);
+        if ($encoded === false) {
+            // 值无法 JSON 序列化（如含非法 UTF-8）→ 记警告并跳过写入，避免产生损坏的 .cache 文件
+            log_message('Cache::fileSet 值无法 JSON 序列化，写入失败: ' . $key, 'warning');
+            return;
+        }
+        // 原子写：写临时文件 + rename，避免并发读到半截文件（与 RateLimitMiddleware flock 语义一致但更简单可靠）
+        $target = $dir . '/' . md5($key) . '.cache';
+        $tmp = $target . '.' . bin2hex(random_bytes(4)) . '.tmp';
+        if (@file_put_contents($tmp, $encoded, LOCK_EX) !== false) {
+            @rename($tmp, $target);
+        } else {
+            @unlink($tmp);
+            log_message('Cache::fileSet 写入失败: ' . $target, 'warning');
+        }
     }
 }

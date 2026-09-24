@@ -274,7 +274,14 @@ class Database
         if ($pdo->inTransaction()) {
             // 嵌套事务：改用 savepoint，避免 PDO 抛 "already active transaction"
             self::$savepointDepth++;
-            $pdo->exec('SAVEPOINT sp' . self::$savepointDepth);
+            $depth = self::$savepointDepth;
+            try {
+                $pdo->exec('SAVEPOINT sp' . $depth);
+            } catch (\Throwable $e) {
+                // SAVEPOINT 创建失败（如连接已断）：回退深度，避免 commit/rollBack 时引用不存在的 savepoint
+                self::$savepointDepth--;
+                throw $e;
+            }
         } else {
             $pdo->beginTransaction();
         }
@@ -284,8 +291,15 @@ class Database
     {
         $pdo = self::connection();
         if (self::$savepointDepth > 0) {
-            $pdo->exec('RELEASE SAVEPOINT sp' . self::$savepointDepth);
-            self::$savepointDepth--;
+            $depth = self::$savepointDepth;
+            try {
+                $pdo->exec('RELEASE SAVEPOINT sp' . $depth);
+                self::$savepointDepth--;
+            } catch (\Throwable $e) {
+                // savepoint 不存在（可能已被 ROLLBACK TO 级联删除或连接重建）：同步深度后抛出，由调用方决策
+                self::$savepointDepth = 0;
+                throw $e;
+            }
         } else {
             $pdo->commit();
         }
@@ -295,9 +309,15 @@ class Database
     {
         $pdo = self::connection();
         if (self::$savepointDepth > 0) {
-            $pdo->exec('ROLLBACK TO SAVEPOINT sp' . self::$savepointDepth);
-            $pdo->exec('RELEASE SAVEPOINT sp' . self::$savepointDepth);
-            self::$savepointDepth--;
+            $depth = self::$savepointDepth;
+            try {
+                $pdo->exec('ROLLBACK TO SAVEPOINT sp' . $depth);
+                $pdo->exec('RELEASE SAVEPOINT sp' . $depth);
+                self::$savepointDepth--;
+            } catch (\Throwable $e) {
+                self::$savepointDepth = 0;
+                throw $e;
+            }
         } else {
             $pdo->rollBack();
         }

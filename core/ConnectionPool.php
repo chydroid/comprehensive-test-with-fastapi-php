@@ -34,9 +34,18 @@ final class ConnectionPool
         return ($this->factory)();
     }
 
-    /** 归还连接到空闲列表 */
+    /** 归还连接到空闲列表；防护：null/非连接对象直接忽略，防止误传污染池 */
     public function release(mixed $conn): void
     {
+        if ($conn === null) {
+            return; // 空连接（如获取失败未实际创建）不归还，避免 null 混入空闲队列
+        }
+        // 去重：同一连接对象不允许被多次归还（上层重连/异常分支可能重复调用）
+        foreach ($this->idle as $existing) {
+            if ($existing === $conn) {
+                return;
+            }
+        }
         $this->idle[] = $conn;
     }
 
