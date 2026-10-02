@@ -5,7 +5,7 @@
 import { el, clear } from '../core/dom.js';
 import { logoMark } from '../core/logo.js';
 import { appName } from '../core/brand.js';
-import { button, field, input, alertBox } from './components.js';
+import { button, field, input, alertBox, bindFormErrors } from './components.js';
 
 /**
  * 渲染登录页
@@ -42,9 +42,21 @@ export function renderLogin(cfg) {
   const submitBtn = button('登 录', { variant: 'primary', type: 'submit', block: true, size: 'lg' });
   form.append(submitBtn, errSlot);
 
+  // 提示区：写前先清（不叠加）+ 输入即复核（改正后提示及时消失）。
+  // 此前只有提交时 clear，用户补全字段后红框与提示仍残留，看起来像改动没生效。
+  const { showErr, clearErr } = bindFormErrors(form, errSlot, () => {
+    const vals = {};
+    for (const [k, ctl] of Object.entries(controls)) vals[k] = ctl.value.trim();
+    // 先整体摘掉旧红框，再按当前值重标，避免「改好了仍是红框」
+    Object.values(controls).forEach((c) => c.classList.remove('is-invalid'));
+    const missing = fields.filter((f) => !vals[f.name]);
+    missing.forEach((f) => controls[f.name].classList.add('is-invalid'));
+    return missing.length ? ['请填写完整的登录信息'] : [];
+  });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    clear(errSlot);
+    clearErr();
     Object.values(controls).forEach((c) => c.classList.remove('is-invalid'));
 
     const values = {};
@@ -53,7 +65,7 @@ export function renderLogin(cfg) {
     const missing = fields.filter((f) => !values[f.name]);
     if (missing.length) {
       missing.forEach((f) => controls[f.name].classList.add('is-invalid'));
-      errSlot.append(alertBox('请填写完整的登录信息', { type: 'warning' }));
+      showErr('请填写完整的登录信息', 'warning');
       controls[missing[0].name].focus();
       return;
     }
@@ -67,7 +79,7 @@ export function renderLogin(cfg) {
     try {
       await onSubmit(payload);
     } catch (error) {
-      errSlot.append(alertBox(error?.message || '登录失败，请重试', { type: 'danger' }));
+      showErr(error?.message || '登录失败，请重试', 'danger');
       const last = fields[fields.length - 1]?.name;
       if (last && controls[last]) { controls[last].focus(); controls[last].select?.(); }
     } finally {

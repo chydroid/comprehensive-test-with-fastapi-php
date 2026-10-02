@@ -15,7 +15,7 @@
 import { el, clear } from '../core/dom.js';
 import {
   button, badge, openModal, notify, alertBox, field, input,
-  emptyStated, loadingOverlay, statCard,
+  emptyStated, loadingOverlay, statCard, bindFormErrors,
 } from '../ui/components.js';
 import { withLoading } from '../core/bootstrap.js';
 import { fmtScore } from '../core/format.js';
@@ -149,7 +149,7 @@ export async function openRetakeDialog({ exam, api, onDone } = {}) {
           onClick: () => {
             picked = new Set(list.filter((r) => r.state !== 'passed').map((r) => String(r.stu_id)));
             for (const [id, cb] of boxes) cb.checked = picked.has(id);
-            sync();
+            sync(); live();
           },
         }),
         button('全选', {
@@ -157,7 +157,7 @@ export async function openRetakeDialog({ exam, api, onDone } = {}) {
           onClick: () => {
             picked = new Set(list.map((r) => String(r.stu_id)));
             for (const cb of boxes.values()) cb.checked = true;
-            sync();
+            sync(); live();
           },
         }),
         button('清空', {
@@ -165,7 +165,7 @@ export async function openRetakeDialog({ exam, api, onDone } = {}) {
           onClick: () => {
             picked = new Set();
             for (const cb of boxes.values()) cb.checked = false;
-            sync();
+            sync(); live();
           },
         }),
         counter,
@@ -187,23 +187,33 @@ export async function openRetakeDialog({ exam, api, onDone } = {}) {
     ]));
   }
 
-  submitBtn.addEventListener('click', async () => {
-    errSlot.replaceChildren();
-    const pickedIds = [...picked];
-    if (!pickedIds.length) {
-      errSlot.append(alertBox('请至少选择一名参加补考的考生', { type: 'warning' }));
-      return;
-    }
+  /** 返回第一条校验错误；全部通过返回 null（提交与实时复核共用同一口径） */
+  function firstError() {
+    if (!picked.size) return '请至少选择一名参加补考的考生';
     const examStart = toSqlDateTime(startInput?.value);
     const examEnd = toSqlDateTime(endInput?.value);
-    if (!examStart || !examEnd) {
-      errSlot.append(alertBox('请填写补考的开始时间与结束时间', { type: 'warning' }));
-      return;
-    }
+    if (!examStart || !examEnd) return '请填写补考的开始时间与结束时间';
     if (new Date(examEnd.replace(' ', 'T')) <= new Date(examStart.replace(' ', 'T'))) {
-      errSlot.append(alertBox('补考结束时间必须晚于开始时间', { type: 'warning' }));
-      return;
+      return '补考结束时间必须晚于开始时间';
     }
+    return null;
+  }
+
+  // 提示区：写前先清（不叠加）+ 改动即复核。
+  // 勾选框的 change 会冒泡到 body 自动触发；「清空」是点击，需显式调 live()（见下方）。
+  const { showErr, clearErr, live } = bindFormErrors(body, errSlot, () => {
+    const m = firstError();
+    return m ? [m] : [];
+  });
+
+  submitBtn.addEventListener('click', async () => {
+    clearErr();
+    const msg = firstError();
+    if (msg) { showErr(msg, 'warning'); return; }
+
+    const pickedIds = [...picked];
+    const examStart = toSqlDateTime(startInput?.value);
+    const examEnd = toSqlDateTime(endInput?.value);
 
     // 勾到已通过者 → 显式带上 allow_passed，否则后端按设计返回 400
     const passedIds = new Set(
@@ -226,7 +236,7 @@ export async function openRetakeDialog({ exam, api, onDone } = {}) {
       dlg.close();
       onDone?.();
     } else if (error) {
-      errSlot.append(alertBox(error.message || '生成补考失败', { type: 'danger' }));
+      showErr(error.message || '生成补考失败', 'danger');
     }
   });
 }

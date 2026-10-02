@@ -1569,3 +1569,83 @@ FAIL  C4 教师监考中心完整渲染   << 考场控制/应考人数 stats=0
 > 记录这条的目的：**「测试通过」与「测试因为正确的原因通过」是两件事**。
 > 一个断言如果依赖于脏数据，它就是一颗定时炸弹 —— 数据一清理，它就会以
 > 「产品回归」的面目炸出来，浪费排查成本。
+
+## 第九轮（2026-10-02）：全面排查 —— 缺陷记录与修复
+
+### 排查方法
+
+先立基线，再分路排查，避免把「工具噪声」误判为「产品缺陷」：
+
+| 手段 | 说明 |
+|---|---|
+| 基线回归 | 改任何东西前先跑全量，得到 **1641 PASS / 0 FAIL / 1 SKIP**（1 SKIP 为已知的 `exam_end=''` 边界） |
+| 静态扫描 | 105 个 PHP + 54 个 JS；语法、SQL 注入面、除零、static 缓存、TODO/空 catch、权限逃逸口 |
+| 运行时 fuzz | 导出 196 条路由，逐个以**未登录态**请求，统计状态码分布 |
+| 前端自检 | `check_frontend.mjs` 54 文件语法 + import 解析 |
+
+### BUG-255：三处表单的校验提示「改正后不消失」（已修复）
+
+**缺陷现象**：提交失败弹出「请填写题干 / 请填写完整登录信息 / 请至少选择一名参加补考的考生」
+后，用户把字段补上，提示**仍纹丝不动**地留着，直到下次提交才刷新 —— 容易让人误以为改动没生效。
+
+**位置与根因**（同一个错误模式，5 处里漏了 3 处）：
+
+| 文件 | 位置 | 说明 |
+|---|---|---|
+| `public/assets/js/views/admin/quiz.js` | 提交处理器 350–362、379 | `errSlot` 仅提交时 `clear`，无「改动→复核」链路 |
+| `public/assets/js/ui/login.js` | 56、70 | 同上；且 `is-invalid` 红框改好后也不撤 |
+| `public/assets/js/views/retake.js` | 194–204、229 | 用 `replaceChildren` 所以不叠加，但提示同样不消失 |
+
+这与第九轮修的 `exam-editor.js` / `admin/exam.js` **是同一类缺陷**（当时只修了两处，
+其余三处没跟上，形成不一致）。
+
+**为什么新增共享助手而不是抄三遍**：这套「先清后写 + 改动即复核」的逻辑一旦重复实现，
+必会再次分叉。故在 `ui/components.js` 新增：
+
+```js
+export function bindFormErrors(form, errSlot, recheck)
+```
+
+三条约定写进文档注释：
+1. `showErr()` 先 `clear` 再写 —— 杜绝叠加；
+2. 表单任意 `input`/`change` 触发 `live()`：warning（校验类）提示重跑 `recheck()`，
+   全通过即撤掉、仍有错则换成当前第一条；danger（后端错误）提示改动即失效；
+3. `errSlot` 为空时 `live()` 直接 return —— 避免刚打开表单就被提示轰炸。
+
+**顺带修掉的连带问题**：
+- `login.js`：实时复核时先整体摘 `is-invalid` 再按当前值重标，修「改好了仍是红框」。
+- `quiz.js`：抽出 `collectPayload()` + `firstError()`，让**提交校验与实时复核共用同一口径**，
+  顺带消除了原先两处各拼一次 payload 的重复。
+- `retake.js`：「仅选未通过 / 全选 / 清空」是**点击**而非 `change`，不会冒泡，
+  故在各自 `onClick` 里显式调用 `live()`（与 exam-editor 处理手动选题一致的约束）。
+
+**验证**：新增 `temp/domtest/bind_form_errors_test.mjs`（jsdom 真实事件）**8 PASS / 0 FAIL**，
+覆盖：无提示时不打扰 / 重复写不叠加 / 改正后消失 / 仍有错则换第一条 / danger 改动即撤 /
+danger 不被 recheck 改写。前端自检 54 文件 0 错误；`modal_close` 9/9、`exam_editor_err` 11/11 无回归。
+
+### 本轮排查确认「无问题」的面（避免以后重复劳动）
+
+以下都是**已验证、非缺陷**的结论，附判据：
+
+| 排查面 | 结论 | 判据 |
+|---|---|---|
+| SQL 注入 | 无注入面 | 无 `$_GET/$_POST` 直拼 SQL；SQL 插值仅 `$ph` 占位符与内部构造的 where |
+| 未鉴权 500 | 无 | 196 路由未鉴权 fuzz：**162 → 401**，0 个 500；其余 200/400 均为公开端点（login/logout/me/health/docs/openapi/metrics）与页面路由 |
+| 除零崩溃 | 无 | `ScoreAnalysis` 全部除法均有守卫（`$total<=0 continue`、`$count===0` 早返回、`$denominator>0` 分支） |
+| 并发组卷 | 无竞态 | `ExamEngine::generatePaper` 的 `SELECT … FOR UPDATE` **在事务内**，正确串行化同名考试的多请求组卷 |
+| mock 配额锁 | 无泄漏 | `GET_LOCK` 失败路径即释放；`RELEASE_LOCK` 包 try/catch，连接关闭时 MySQL 自动回收 |
+| 交卷幂等 | 正确 | `LEFT(stu_status,4) != 'over'` 同时覆盖 `over` 与 `overBak`，是刻意为之而非疏漏 |
+| 权限逃逸口 | 无 | `updateStatus` 的 `$allowFromSubmitted` 参数**全项目无人传 true**（死参数，无害） |
+| 常驻模式 static | 无隐患 | 仅 2 处函数内 static，PHP-FPM 每请求新进程；Swoole 入口存在但非本环境部署方式 |
+| 前端静态 | 干净 | 54 文件 0 语法错误 / 0 未解析 import |
+
+### 排查过程中的工具陷阱（非产品缺陷，记录以省后来人的时间）
+
+1. **dev server 必须与探测在同一条命令内启停**：沙箱里后台进程随 bash 调用结束被回收，
+   单独 `nohup &` 起的服务在下次调用时已死，fuzz 会拿到满屏 **502「upstream connect failed」**
+   —— 这是**服务没起来**，不是产品 bug。
+2. **shell 正则聚合统计会算错数**：`sed -E 's/.*([0-9]+) FAIL.*/\1/'` 这类贪婪匹配，
+   加上 `gsub(/[^0-9]/,"",$1)` 会把相邻数字拼接（如 "52"+"0" → "520"），
+   导致「明明全绿却报 1 FAIL」。改用 **awk 按 token 定位**（`$i=="FAIL" ? $(i-1)`）才可靠。
+3. `php -r` 内联脚本写 /tmp 会落到 Windows 侧临时目录，Git Bash 读不到 —— 一律写脚本文件到 `temp/`。
+4. `shell_exec` 在本环境 php.ini 中被禁用，PHP 侧聚合脚本需改用别的方式。

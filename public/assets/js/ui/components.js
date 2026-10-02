@@ -531,6 +531,54 @@ export function alertBox(message, { type = 'info', title = '', action = null } =
   ].filter(Boolean));
 }
 
+/* ============================ 表单错误提示绑定 ============================ */
+
+/**
+ * 绑定表单提示区的「写 / 清 / 改动即复核」，统一收口一类缺陷：
+ * 提交失败弹出「请填写××」后，用户把字段补上，提示却**纹丝不动**地留着
+ * （直到下次提交才刷新），容易让人以为改动没生效。
+ *
+ * 三条约定：
+ *  1. showErr() **先 clear 再写** —— 杜绝重复提交把提示叠加成多条；
+ *  2. 表单任意 input / change 触发 live()：
+ *     - 校验类（warning）提示在场 → 重跑 recheck()，全通过即撤掉，仍有错则换成当前第一条；
+ *     - 后端错误（danger）提示在场 → 表单已改动即视为失效，直接撤掉（下次提交会重新给出）；
+ *  3. errSlot 为空时 live() 直接返回 —— 避免刚打开表单就被提示轰炸。
+ *
+ * @param {HTMLElement} form    表单容器（监听其 input/change 冒泡）
+ * @param {HTMLElement} errSlot 提示容器
+ * @param {?Function} recheck   返回 string[]：空数组=通过；非空=当前未通过原因（只显示第一条）
+ * @returns {{showErr:Function, clearErr:Function, live:Function}}
+ */
+export function bindFormErrors(form, errSlot, recheck) {
+  // 当前提示是否为「可实时复核」的校验类提示（danger 类不复核）
+  let liveCheck = false;
+
+  function showErr(msg, type = 'warning') {
+    clear(errSlot);
+    errSlot.append(alertBox(msg, { type }));
+    liveCheck = type === 'warning';
+  }
+
+  function clearErr() {
+    clear(errSlot);
+    liveCheck = false;
+  }
+
+  function live() {
+    if (errSlot.childElementCount === 0) return; // 无提示在场：什么都不用做
+    if (!liveCheck) { clearErr(); return; }      // danger：改动即失效
+    const errs = typeof recheck === 'function' ? recheck() : [];
+    if (errs && errs.length) showErr(errs[0], 'warning');
+    else clearErr();
+  }
+
+  form.addEventListener('input', live);
+  form.addEventListener('change', live);
+
+  return { showErr, clearErr, live };
+}
+
 /* ============================ 骨架屏 ============================ */
 export function skeletonRows(count = 5, cols = 4) {
   const wrap = el('div', { style: { padding: 'var(--sp-4)' } });

@@ -6,7 +6,7 @@
 import { el, mount, clear } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import {
-  button, badge, card, notify, openModal, confirmDialog, alertBox,
+  button, badge, card, notify, openModal, confirmDialog, alertBox, bindFormErrors,
   tabs, segmented, descList, codeBlock, emptyStated, field, input, select, textarea,
 } from '../../ui/components.js';
 import { createListView, openFormModal, confirmDelete } from '../../ui/crud.js';
@@ -330,10 +330,8 @@ export async function QuizView({ router, can }) {
         footer: [button('取消', { variant: 'secondary', onClick: () => dlg.close() }), submitBtn],
       });
 
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        clear(errSlot);
-
+      /** 取当前表单值：提交与实时复核共用，避免两处口径分叉 */
+      function collectPayload() {
         const type = typeSelect.value;
         const payload = {
           subj_id: Number(subjSelect.value) || 0,
@@ -346,26 +344,36 @@ export async function QuizView({ router, can }) {
           quiz_kp: kpInput.value.trim(),
           quiz_key: OPTION_TYPES.includes(type) ? collectKey() : keyInput.value.trim(),
         };
+        payload.quiz_option = OPTION_TYPES.includes(type) ? collectOptions().join('|') : '';
+        return payload;
+      }
 
-        if (!payload.subj_id) { errSlot.append(alertBox('请选择科目', { type: 'warning' })); return; }
-        if (!payload.quiz_title) { errSlot.append(alertBox('请填写题干', { type: 'warning' })); return; }
-        if (!payload.quiz_key) { errSlot.append(alertBox('请设置正确答案', { type: 'warning' })); return; }
-
-        if (OPTION_TYPES.includes(type)) {
-          const opts = collectOptions();
-          const filled = opts.filter((x) => x.trim() !== '');
-          if (type === 'checkbox' && filled.length < 3) {
-            errSlot.append(alertBox('多选题至少需要 3 个有效选项', { type: 'warning' }));
-            return;
-          }
-          if (type !== 'radio1' && filled.length < 2) {
-            errSlot.append(alertBox('至少需要 2 个有效选项', { type: 'warning' }));
-            return;
-          }
-          payload.quiz_option = opts.join('|');
-        } else {
-          payload.quiz_option = '';
+      /** 返回第一条校验错误；全部通过返回 null */
+      function firstError(payload) {
+        if (!payload.subj_id) return '请选择科目';
+        if (!payload.quiz_title) return '请填写题干';
+        if (!payload.quiz_key) return '请设置正确答案';
+        if (OPTION_TYPES.includes(payload.quiz_class)) {
+          const filled = collectOptions().filter((x) => x.trim() !== '');
+          if (payload.quiz_class === 'checkbox' && filled.length < 3) return '多选题至少需要 3 个有效选项';
+          if (payload.quiz_class !== 'radio1' && filled.length < 2) return '至少需要 2 个有效选项';
         }
+        return null;
+      }
+
+      // 提示区：写前先清（不叠加）+ 输入即复核（补齐题干后提示及时消失）
+      const { showErr, clearErr } = bindFormErrors(form, errSlot, () => {
+        const m = firstError(collectPayload());
+        return m ? [m] : [];
+      });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        clearErr();
+
+        const payload = collectPayload();
+        const msg = firstError(payload);
+        if (msg) { showErr(msg, 'warning'); return; }
 
         const { ok, error } = await withLoading(submitBtn, () => (
           isEdit ? adminApi.updateQuiz(id, payload) : adminApi.createQuiz(payload)
@@ -376,7 +384,7 @@ export async function QuizView({ router, can }) {
           dlg.close();
           list.load();
         } else if (error) {
-          errSlot.append(alertBox(error.message || '保存失败', { type: 'danger' }));
+          showErr(error.message || '保存失败', 'danger');
         }
       });
     }).catch((e) => notify.error(e?.message || '加载题目失败'));
