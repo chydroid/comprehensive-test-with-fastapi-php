@@ -111,13 +111,15 @@ class App
         if ($request->method() === 'HEAD') {
             $response->skipBody();
         }
+        // 先输出响应：send() 内部 JSON 编码失败时会把状态码升为 500，
+        // 之后统计/日志才能拿到「最终」状态码，避免指标与访问日志记录到旧的 200
+        $response->send();
         // 指标采集：用路由模式（/api/users/{id}）避免实际路径导致高基数；
         // 未匹配（404/405 等）路径统一归入 <unknown>，防止任意路径制造无界序列
         $pattern = $this->router->match($request->method(), $request->path()) ?? '<unknown>';
         Metrics::recordRequest($request->method(), $pattern, $response->statusCode(), $elapsed);
         $this->logAccess($request, $response->statusCode(), $elapsed);
         $this->logSlow($request, $elapsed);
-        $response->send();
         return $response;
     }
 

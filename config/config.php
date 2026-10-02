@@ -22,20 +22,23 @@ return [
     ],
 
     'database' => [
-        'host'       => env('DB_HOST', '127.0.0.1'),
+        // host/name/user/pass 一律强转 string：env() 会把纯数字值（如密码 "888888"）转成 int，
+        // 而 Database::newPdo 是 strict_types 文件内的 string 形参，传入 int 会直接
+        // TypeError → 全站 500（对齐框架第六轮 G4）
+        'host'       => (string) env('DB_HOST', '127.0.0.1'),
         'port'       => (int) env('DB_PORT', 3306),
-        'name'       => env('DB_NAME', 'csip_exam'),
-        'user'       => env('DB_USER', 'csip_exam'),
-        'pass'       => env('DB_PASS', ''),
+        'name'       => (string) env('DB_NAME', 'csip_exam'),
+        'user'       => (string) env('DB_USER', 'csip_exam'),
+        'pass'       => (string) env('DB_PASS', ''),
         'charset'    => 'utf8mb4',
         'persistent' => (bool) env('DB_PERSISTENT', true),
         'read' => [
             'enabled'   => (bool) env('DB_READ_ENABLED', false),
-            'host'      => env('DB_READ_HOST', ''),
+            'host'      => (string) env('DB_READ_HOST', ''),
             'port'      => (int) env('DB_READ_PORT', 3306),
-            'name'      => env('DB_READ_NAME', ''),
-            'user'      => env('DB_READ_USER', ''),
-            'pass'      => env('DB_READ_PASS', ''),
+            'name'      => (string) env('DB_READ_NAME', ''),
+            'user'      => (string) env('DB_READ_USER', ''),
+            'pass'      => (string) env('DB_READ_PASS', ''),
             'persistent'=> (bool) env('DB_READ_PERSISTENT', true),
         ],
         'pool' => [
@@ -46,16 +49,16 @@ return [
 
     'redis' => [
         'enabled' => (bool) env('REDIS_ENABLED', false),
-        'host'    => env('REDIS_HOST', '127.0.0.1'),
+        'host'    => (string) env('REDIS_HOST', '127.0.0.1'),
         'port'    => (int) env('REDIS_PORT', 6379),
-        'auth'    => env('REDIS_PASSWORD', ''),
+        'auth'    => (string) env('REDIS_PASSWORD', ''),
         'db'      => (int) env('REDIS_DB', 0),
         'timeout' => (float) env('REDIS_TIMEOUT', 2.0),
     ],
 
     'memcached' => [
         'enabled' => (bool) env('MEMCACHED_ENABLED', false),
-        'host'    => env('MEMCACHED_HOST', '127.0.0.1'),
+        'host'    => (string) env('MEMCACHED_HOST', '127.0.0.1'),
         'port'    => (int) env('MEMCACHED_PORT', 11211),
         'servers' => [],
     ],

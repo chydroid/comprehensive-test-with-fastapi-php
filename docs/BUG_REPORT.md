@@ -1649,3 +1649,84 @@ danger 不被 recheck 改写。前端自检 54 文件 0 错误；`modal_close` 9
    导致「明明全绿却报 1 FAIL」。改用 **awk 按 token 定位**（`$i=="FAIL" ? $(i-1)`）才可靠。
 3. `php -r` 内联脚本写 /tmp 会落到 Windows 侧临时目录，Git Bash 读不到 —— 一律写脚本文件到 `temp/`。
 4. `shell_exec` 在本环境 php.ini 中被禁用，PHP 侧聚合脚本需改用别的方式。
+
+---
+
+## 附录：框架第六轮修复（G1–G7）的回灌判定（2026-10-02）
+
+框架仓库 `fastapi-php` 的 `fcdb3b7`（第六轮全面审查）与本项目回流的 `fe041e9`
+**改动了同一批文件**（`core/App.php`、`core/Model.php`），一度看起来需要合并。
+逐项落到本项目分叉核对后，结论是**只有 2 项该回灌**。
+
+### 判定方法：可达性 × 前置条件
+
+上游的修复不能盲目回灌。判据是两条：
+- **可达性** —— 本项目有没有调用点？
+- **前置条件** —— 触发所需的开关/配置在本项目是否成立？
+
+| 项 | 上游修法 | 本项目 | 判定 |
+|---|---|---|---|
+| G1 `Model::create` 空输入守卫前移到 `fillTimestamps` 之前 | 有 | 未修 | **不回灌**：15/15 模型全部 `$timestamps = false`，`fillTimestamps()` 第 258 行直接原样返回，守卫前移后移行为完全一致 |
+| G2 `paginateKeyset` 游标改从 hidden 裁剪前提取 | 有 | 未修 | **不回灌**：全项目**零处调用** `paginateKeyset`，且无任何模型声明 `$hidden`，双重不可达 |
+| G3 email 上限 120 对齐 DB | 有 | 不适用 | 本项目 `Controller.php` 用 `filter_var(FILTER_VALIDATE_EMAIL)`，**根本没有 120 上限**，不存在该 bug |
+| G4 config string 字段显式 `(string)` | 有 | 未修 | **回灌**（见下） |
+| G5 login/refresh 仅读请求体 | 有 | 不适用 | 本项目无 `$_GET` 读凭据路径 |
+| G6 `App::finish` 先 `send()` 后 metrics/日志 | 有 | 未修 | **回灌**（见下） |
+| G7 OpenAPI POST 201→200 | 有 | 不适用 | 本项目统一固定 200 |
+
+### BUG-256 ｜【P1】纯数字数据库密码导致全站 500（框架 G4 回灌）
+
+**现象**：把 `DB_PASS` 配成纯数字（如 `888888`）后，全站每个请求都 500，
+错误日志是 `Core\Database::newPdo(): Argument #5 ($pass) must be of type string, int given`。
+
+**根因（两级）**：
+1. `env()` 对无前导零的整数字符串做 `int` 转换（`preg_match('/^-?(?:0|[1-9]\d*)$/')` → `(int)`），
+   于是 `env('DB_PASS', '888888')` 返回的是 **int(888888)** 而非字符串。
+2. `config/config.php` 把 `env()` 的返回值**原样**放进 `database.pass`，
+   而 `core/Database.php` 顶部是 `declare(strict_types=1)`，其 `newPdo()` 签名是
+   `string $pass`。**strict_types 按「调用方文件」判定**，`newPdo()` 的 4 个调用点
+   全在 `Database.php` 内部（line 33/50/99/109），因此 PHP **不做**隐式转换，直接 TypeError。
+
+注意 `port` 参数在同一行写了 `(int) env(...)` 强转，而 `host/name/user/pass` 没有——
+这个不对称正是缺陷所在。
+
+**复现（strict_types 语义已用探针实证）**：
+```
+env('DB_PASS','888888') => integer 888888
+Core\newPdo(): Argument #5 ($pass) must be of type string, int given
+```
+
+**修复**：`config/config.php` 的 `database`（含 `read` 副本）、`redis`、`memcached`
+共 **14 个 string 字段**全部加 `(string)` 强转，与上游 G4 对齐但覆盖更全
+（上游只改了 database/redis 的 host+name+user+pass，本项目另有 read 副本与 memcached）。
+`(int)`/`(bool)`/`(float)` 字段保持原样。
+
+**验证**：`temp/probe_g4_fixed.php` 注入 `$_ENV` 纯数字配置后加载真实 config，
+断言 14 个字段全部 `is_string` **且值守恒**（`'888888'` 强转后仍等于 `'888888'`）→ PASS。
+
+> 本项目当前 `DB_PASS=d74e408875b8` 含字母，恰好躲过此 bug —— 属**侥幸未暴露**，
+> 一旦换密码为纯数字即全站 500。
+
+### BUG-257 ｜【P2】编码失败时指标与访问日志记录错误的 200（框架 G6 回灌）
+
+**现象**：`Response::send()` 在 `json_encode` 失败时会把 `statusCode` 改成 500
+（`core/Response.php` 编码失败分支），但 `App::finish()` 里 metrics 与访问日志
+**在此之前**就已经用旧状态码记录完了 → 指标显示 200，实际返回 500，监控与日志失真。
+
+**根因**：`App::finish()` 的顺序是「metrics → logAccess → logSlow → send」，
+而后写入的 `send()` 仍可能改状态码，顺序与依赖相悖。
+
+**修复**：`core/App.php` 调整为「**先 `send()`，再 metrics/日志**」，
+让统计拿到的是最终状态码（对齐上游 G6）。
+
+**副作用核查**：`logAccess()` 只用 method/path/status/elapsed，`logSlow()` 只用 elapsed，
+均不依赖响应体或未输出状态，**调整顺序无副作用**。
+
+### 本轮方法论：上游修复不可盲目回灌
+
+7 项里只有 2 项（G4/G6）真正成立。若无脑全量回灌：
+- 会在 `Model.php` 改两处**本项目永不执行**的代码（G1/G2），增加无谓 diff 与后续冲突面；
+- 更糟的是可能把项目侧的**刻意定制**覆盖掉（如同 `App` 的 CWE-209 加固）。
+
+**判据口诀**：先问「本项目有没有调用点」，再问「触发条件在本项目成不成立」，
+两者皆否 → 记为「不可达，不回灌」，避免以后重复分析。
