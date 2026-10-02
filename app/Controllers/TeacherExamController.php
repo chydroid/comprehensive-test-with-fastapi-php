@@ -15,6 +15,7 @@ use App\Models\Teacher;
 use App\Services\ExamComposer;
 use App\Services\ExamEngine;
 use App\Services\ExamRetake;
+use App\Services\InvigilationService;
 use App\Services\ScoreAnalysis;
 use Core\Database;
 use Core\HttpException;
@@ -205,6 +206,11 @@ class TeacherExamController extends BaseController
         }
 
         $data = $this->collectParams();
+        // 与 save() / retake() 同源：强制归属本人，忽略前端传入的 exam_tea。
+        // collectParams() 会把 exam_tea 原样带出且它在 Exam::$fillable 内，
+        // 若不覆盖，教师可把考试过户给任意同事（横向越权：对方随即获得全套操作权），
+        // 或置空让它从所有教师端列表消失、只剩管理员能回收（BUG-258）。
+        $data['exam_tea'] = (string) ($this->authTeacher()['tea_name'] ?? '');
         $this->assertValid($data);
 
         $hasPaper = (int) (Database::fetch(
@@ -504,10 +510,10 @@ class TeacherExamController extends BaseController
             $status = (string) ($r['stu_status'] ?? '');
             $base = explode(':', $status)[0];
             fputcsv($buffer, [
-                (string) $r['stu_id'],
-                (string) $r['stu_name'],
-                (string) $r['grade_id'],
-                (string) $r['class_id'],
+                InvigilationService::csvSafe((string) $r['stu_id']),
+                InvigilationService::csvSafe((string) $r['stu_name']),
+                InvigilationService::csvSafe((string) $r['grade_id']),
+                InvigilationService::csvSafe((string) $r['class_id']),
                 (int) $r['stu_score'],
                 $statusMap[$base] ?? $status,
             ]);

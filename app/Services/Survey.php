@@ -72,12 +72,31 @@ final class Survey
      * （判断哪些要删、哪些要改序）远大于它的收益。整替换也让 sort_no 永远连续。
      *
      * @param array<int,array{title?:string,type?:string,options?:array|string,required?:bool}> $items
+     * @param bool $force 已有考生作答时是否仍强制覆盖（false 则抛 409，见下方说明）
      * @return array{questions:array,count:int}
      */
-    public static function save(int $examId, array $items): array
+    public static function save(int $examId, array $items, bool $force = false): array
     {
         if (count($items) > self::MAX_QUESTIONS) {
             throw new \Core\HttpException(400, '单场问卷最多 ' . self::MAX_QUESTIONS . ' 道题', 40000);
+        }
+
+        // 「全删重建」会连带清空 exam_survey_answer，而下面是**无条件** DELETE：
+        // 考生已提交后再改题（哪怕只改个错别字）会静默清掉整场作答，
+        // stats() 的回收率与均值归零且不可恢复。已有作答时要求显式 force，
+        // 让教师知道这次保存会丢数据（BUG-263）。
+        if (!$force) {
+            $answered = (int) (Database::fetch(
+                'SELECT COUNT(*) AS c FROM `exam_survey_answer` WHERE exam_id = ?',
+                [$examId]
+            )['c'] ?? 0);
+            if ($answered > 0) {
+                throw new \Core\HttpException(
+                    409,
+                    '本场问卷已有 ' . $answered . ' 条考生作答，修改题目将清空这些作答。如确需继续，请勾选「强制覆盖作答」后重试。',
+                    40904
+                );
+            }
         }
 
         $clean = [];

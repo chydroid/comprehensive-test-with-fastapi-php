@@ -56,11 +56,15 @@ class TeacherSurveyController extends BaseController
             throw new HttpException(400, '单场问卷最多 ' . Survey::MAX_QUESTIONS . ' 道题', 40000);
         }
 
-        $result = Survey::save($examId, $raw);
+        // force=1 表示教师已知悉「会清空已有考生作答」并确认覆盖；
+        // 不传时若已有作答，服务层抛 409 拦住静默数据丢失（BUG-263）。
+        $force = (bool) $this->request->input('force', false);
+        $result = Survey::save($examId, $raw, $force);
 
         $this->audit('exam.survey.save', 'exam:' . $examId, [
             'actor'  => 'teacher',
             'count'  => $result['count'],
+            'forced' => $force,
         ]);
 
         return $this->ok($result, '问卷已保存');

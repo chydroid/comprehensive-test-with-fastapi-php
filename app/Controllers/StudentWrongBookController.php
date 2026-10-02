@@ -27,16 +27,19 @@ class StudentWrongBookController extends BaseController
         $stuId = (string) $sess['id'];
 
         $in = $this->validate([
-            'page'       => 'integer|min:1',
-            'per_page'   => 'integer|min:1|max:100',
             'mastered'   => 'in:0,1',
             'subj_id'    => 'integer',
             'quiz_class' => 'in:radio1,radio2,checkbox,text,longtext',
             'exam_type'  => 'in:formal,mock,exercise',
         ]);
 
-        $page = max(1, (int) ($in['page'] ?? 1));
-        $perPage = min(100, max(1, (int) ($in['per_page'] ?? 20)));
+        // 复用 BaseController::page() 取分页参数，不要自己 max(1, …)：
+        // page 缺上限时，传 PHP_INT_MAX 会让 ($page-1)*$perPage 溢出成浮点数，
+        // WrongBook 的 "LIMIT … OFFSET {$offset}" 插值成 OFFSET 1.8E+20 → MySQL 语法错误 500。
+        // 注意 page() 返回的是**关联数组**（page/per_page/offset/keyword），须按键名取值。
+        $p = $this->page();
+        $page = (int) $p['page'];
+        $perPage = (int) $p['per_page'];
 
         $filters = [];
         if (isset($in['mastered'])) {

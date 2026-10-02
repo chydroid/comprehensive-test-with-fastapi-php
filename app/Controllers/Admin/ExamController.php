@@ -172,15 +172,18 @@ class ExamController extends BaseController
         $data = $this->collectParams();
         $this->assertValid($data, true);
 
-        // 已开考的考试不允许改组卷参数（否则与已生成试卷不一致）
-        if ((string) $row['exam_status'] === Exam::STATUS_TESTING) {
-            $hasPaper = (int) (Database::fetch(
-                'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ?',
-                [$id]
-            )['c'] ?? 0);
-            if ($hasPaper > 0) {
-                throw new HttpException(409, '该考试已开考且已生成试卷，组卷参数不可修改', 40902);
-            }
+        // 已生成试卷的考试不允许改组卷参数（否则与已生成试卷不一致）。
+        // 注意不能只在 testing 时判断：generateForClass()/markReady() 出题成功后
+        // 状态已是 paper，而"paper 状态"与"已有 stupaper 行"是常态同时成立，
+        // 原守卫恰好在出题后到惰性开考前这段最需要的窗口里失效。
+        // 此时改组卷参数会让 recomputeScore() 覆写 exam_score，与真实卷面满分背离，
+        // 而它是及格判定 / 证书达标 / 补考名单的唯一依据（BUG-262）。
+        $hasPaper = (int) (Database::fetch(
+            'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ?',
+            [$id]
+        )['c'] ?? 0);
+        if ($hasPaper > 0) {
+            throw new HttpException(409, '该考试已生成试卷，组卷参数不可修改', 40902);
         }
 
         // 不要把 exam_status 无条件打回 exam：出题后状态已是 paper，

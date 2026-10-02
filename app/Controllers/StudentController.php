@@ -278,8 +278,12 @@ class StudentController extends BaseController
     public function materials(): Response
     {
         $this->authStudent();
-        $page = max(1, (int) $this->request->query('page', 1));
-        $perPage = min(60, max(5, (int) $this->request->query('per_page', 20)));
+        // 同 StudentWrongBookController::index()：复用 page() 取**带上限**的分页参数，
+        // 避免 ($page-1)*$perPage 溢出成浮点后 OFFSET 插值报 SQL 语法错误（BUG-260）。
+        // page() 返回关联数组，须按键名取值。
+        $p = $this->page(null, 60);
+        $page = (int) $p['page'];
+        $perPage = (int) $p['per_page'];
 
         $result = Material::list(
             [

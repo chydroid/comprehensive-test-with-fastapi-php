@@ -104,6 +104,11 @@ class SessionAuthMiddleware implements Middleware
         // 管理后台 —— 带权限点（更长的前缀优先匹配）
         ['/api/admin/admins',     'admin', 'admin.manage'],
         ['/api/admin/system',     'admin', 'system.manage'],
+        // 审计日志：必须显式登记。GET 走 SAFE_METHODS 短路只取 readPoint，
+        // 未登记时会落到下方 '/api/admin/' 兜底 = admin.access，而该点四个内置角色全有，
+        // 于是任何管理员角色都能读全量审计日志（detail 里含教师端写入的考场口令
+        // 与考生准考证号列表，等于从日志侧绕过归属校验）。须在兜底之前登记（BUG-259）。
+        ['/api/admin/logs',       'admin', 'system.manage'],
         ['/api/admin/config',     'admin', 'system.config'],
         ['/api/admin/settings',   'admin', 'system.config'],
         ['/api/admin/dashboard',  'admin', 'dashboard.view'],
