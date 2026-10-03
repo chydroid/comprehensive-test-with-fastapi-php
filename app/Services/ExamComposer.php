@@ -83,6 +83,9 @@ final class ExamComposer
             'degrade_reason' => $r['degrade_reason'] ?? '',
             'questions'      => $r['questions'],
             'truncated'      => !empty($r['truncated']),
+            // 难度缺档时本地抽样会借用其他难度凑满题量（见 LocalComposer::DIFF_FALLBACK）。
+            // 透传给前端如实告知教师，避免「说好的易3中4难3，实得全是中」而无人解释。
+            'diff_borrowed'  => (int) ($r['diff_borrowed'] ?? 0),
             'composable'     => self::isComposable($exam),
             'subject_id'     => $subjId,
         ];

@@ -58,6 +58,8 @@ function aiComposeCleanup(array &$quizIds): void
     }
     \Core\Database::query("DELETE FROM `quizlib` WHERE quiz_writer = '__TEST__'");
     \Core\Database::query("DELETE FROM `quizlib` WHERE quiz_writer = 'AI组卷'");
+    // 回收「难度兜底」用例建的临时科目（题已随上面的 quiz_writer 一并删除）
+    \Core\Database::query("DELETE FROM `subject` WHERE subj_name LIKE '__TEST__难度%'");
     $revert = [];
     foreach (AI_KEYS as $k) { $revert[$k] = null; }
     try { Setting::putMany($revert); } catch (\Throwable $e) { /* ignore */ }
@@ -88,14 +90,44 @@ function studentPost(string $path, array $body): array
     return Http::post($path, $body, ['X-CSRF-Token' => $csrf]);
 }
 
-function insertQuiz(int $subjId, string $type, string $diff, string $title, string $opt, string $key): int
+function insertQuiz(int $subjId, string $type, string $diff, string $title, string $opt, string $key, string $kp = ''): int
 {
     \Core\Database::query(
         'INSERT INTO `quizlib` (subj_id, quiz_title, quiz_class, quiz_option, quiz_key, quiz_diff, quiz_writer, quiz_time, quiz_kp, quiz_key_ok)
          VALUES (?, ?, ?, ?, ?, ?, \'__TEST__\', NOW(), ?, 1)',
-        [$subjId, $title, $type, $opt, $key, $diff, '__TEST__']
+        [$subjId, $title, $type, $opt, $key, $diff, $kp]
     );
     return \Core\Database::lastInsertId();
+}
+
+/**
+ * 为「难度兜底」用例建一个独立科目 + 指定难度的题，返回科目 id。
+ * 独立科目是关键：直接在业务科目上验证会受真实题库分布干扰（真实题难度多为单一）。
+ *
+ * @param array<int,array{0:string,1:string,2?:string}> $spec [题型, 难度, 知识点]
+ */
+function testSubject(string $name, array $spec): int
+{
+    $existing = \Core\Database::fetch('SELECT id FROM `subject` WHERE subj_name = ?', [$name]);
+    if (is_array($existing)) {
+        (new \App\Models\Subject())->delete((int) $existing['id']);
+    }
+    $subjId = (new \App\Models\Subject())->create([
+        'subj_name' => $name,
+        'subj_info' => '__TEST__ 临时科目',
+    ]);
+    foreach ($spec as $i => $one) {
+        insertQuiz(
+            (int) $subjId,
+            (string) $one[0],
+            (string) $one[1],
+            '__TEST__' . $name . '_' . $i,
+            'A.一|B.二',
+            'A',
+            (string) ($one[2] ?? '')
+        );
+    }
+    return (int) $subjId;
 }
 
 aiComposeCleanup($createdQuizIds);
@@ -221,6 +253,113 @@ $t->guard('E-1 非本人教师 compose 404', function () use ($t, $examId) {
 $t->guard('E-2 考生调用教师端 compose 401', function () use ($t, $examId) {
     $res = studentPost("/api/teacher/exams/{$examId}/compose", ['count' => 3]);
     $t->assertSame('期望 401', 401, $res['status']);
+});
+
+/* ==================================================================
+ * F. 难度缺档兜底（2026-10-03 修 BUG-265）
+ *
+ * 背景：draw() 此前严格按 quiz_diff 精确过滤，某档没题就返回 0 且**不借用其他难度**。
+ * 而真实题库里绝大多数是「难度单一」的（本项目 994 道旧题全为 Z），于是教师要 10 题
+ * 只拿到 3-4 题，前端还标「题库题量不足，已截断」——实际不是题量不足而是难度只有一档。
+ * 现在该档抽不够时按就近难度逐级放宽补足，并如实上报借用题数。
+ * ================================================================== */
+$composer = new \App\Services\Composition\LocalComposer();
+
+$t->guard('F-1 难度齐全时精确匹配，不借用', function () use ($t, $composer) {
+    // 用 __TEST__ 题（Y/Z/N 三档齐全）建一个专用科目
+    $sid = testSubject('__TEST__难度三档', [
+        ['radio2', 'Y'], ['radio2', 'Z'], ['radio2', 'N'],
+    ]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 1, 'mid' => 1, 'hard' => 1]);
+    $t->assertSame('三档各 1 题', 3, count($r['questions']));
+    $t->assertSame('不应借用', 0, (int) ($r['diff_borrowed'] ?? -1));
+    $t->assertSame('不应截断', false, (bool) $r['truncated']);
+});
+
+$t->guard('F-2 难度缺档时借用其他难度补足题量', function () use ($t, $composer) {
+    // 只有 Z 的科目：题量必须够（6 道题要 6 道），只是难度只有一档。
+    // 关键区分：**题量够但难度缺** 不该报截断；**题量不够** 才报（见 F-5）。
+    $sid = testSubject('__TEST__难度单一', [
+        ['radio2', 'Z'], ['radio2', 'Z'], ['radio2', 'Z'],
+        ['radio2', 'Z'], ['radio2', 'Z'], ['radio2', 'Z'],
+    ]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 2, 'mid' => 2, 'hard' => 2]);
+    $t->assertSame('题量够时应补满 6 题', 6, count($r['questions']));
+    $t->assertSame('题量够则不应报截断', false, (bool) $r['truncated']);
+    $t->assertTrue('借用数 > 0', (int) ($r['diff_borrowed'] ?? 0) > 0);
+    $ids = array_map('intval', array_column($r['questions'], 'id'));
+    $t->assertSame('借用不得产生重复', count($ids), count(array_unique($ids)));
+});
+
+$t->guard('F-2b 难度缺档 + 题量充足时，跨档补齐不空转', function () use ($t, $composer) {
+    // 回归防线：draw() 早期版本不把已抽 id 传进 SQL，Y 档借来的 2 道会被
+    // Z 档同一条 LIMIT 查询重复取回并撞 $seen 跳过，表现为「明明够题却少给」。
+    // 题量=9（Y/Z/N 各 3），要 9 道题，断言必须给满 9 道。
+    $sid = testSubject('__TEST__难度补齐', [
+        ['radio2', 'Y'], ['radio2', 'Y'], ['radio2', 'Y'],
+        ['radio2', 'Z'], ['radio2', 'Z'], ['radio2', 'Z'],
+        ['radio2', 'N'], ['radio2', 'N'], ['radio2', 'N'],
+    ]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 3, 'mid' => 3, 'hard' => 3]);
+    $t->assertSame('应给满 9 题', 9, count($r['questions']));
+    $t->assertSame('不应截断', false, (bool) $r['truncated']);
+    $t->assertSame('难度齐全不应借用', 0, (int) ($r['diff_borrowed'] ?? -1));
+    $ds = [];
+    foreach ($r['questions'] as $q) { $ds[(string) $q['difficulty']] = ($ds[(string) $q['difficulty']] ?? 0) + 1; }
+    ksort($ds);
+    $t->assertSame('难度分布 Y3/Z3/N3', ['N' => 3, 'Y' => 3, 'Z' => 3], $ds);
+});
+
+$t->guard('F-2c 只有单一难度且题量恰好=需求时补齐', function () use ($t, $composer) {
+    // 回归防线（同上）：全 Z 库 3 道，Y/Z/N 各要 1 道，共 3 道。
+    // 若不传 exclude，第 2、3 档会重复取回同一批题被 $seen 跳过，最终只得 1 道。
+    $sid = testSubject('__TEST__难度单档补齐', [['radio2', 'Z'], ['radio2', 'Z'], ['radio2', 'Z']]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 1, 'mid' => 1, 'hard' => 1]);
+    $t->assertSame('应给满 3 题', 3, count($r['questions']));
+    $t->assertSame('不应截断', false, (bool) $r['truncated']);
+    $ids = array_map('intval', array_column($r['questions'], 'id'));
+    $t->assertSame('无重复', count($ids), count(array_unique($ids)));
+});
+
+$t->guard('F-3 借用不能产生重复题', function () use ($t, $composer) {
+    $sid = testSubject('__TEST__难度去重', [['radio2', 'Z'], ['radio2', 'Z'], ['radio2', 'Z']]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 3, 'mid' => 3, 'hard' => 3]);
+    $ids = array_map('intval', array_column($r['questions'], 'id'));
+    $t->assertSame('无重复', count($ids), count(array_unique($ids)));
+    $t->assertTrue('不超过库中题量', count($ids) <= 3);
+});
+
+$t->guard('F-4 借用题的 difficulty 必须是真实值（不谎报）', function () use ($t, $composer) {
+    // 库中只有 Z，借来的题也必须显示 Z，不能谎报成 Y/N
+    $sid = testSubject('__TEST__难度真实', [['radio2', 'Z'], ['radio2', 'Z']]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 2, 'mid' => 0, 'hard' => 0]);
+    foreach ($r['questions'] as $q) {
+        $t->assertSame('difficulty 应为真实值 Z', 'Z', (string) $q['difficulty']);
+    }
+});
+
+$t->guard('F-5 题量真不足时仍须标 truncated（不能假装够了）', function () use ($t, $composer) {
+    $sid = testSubject('__TEST__难度不足', [['radio2', 'Z'], ['radio2', 'Z']]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 10, 'mid' => 0, 'hard' => 0]);
+    $t->assertTrue('题量不足应截断', (bool) $r['truncated']);
+    $t->assertSame('有多少给多少', 2, count($r['questions']));
+});
+
+$t->guard('F-6 知识点/题型过滤在兜底后仍生效', function () use ($t, $composer) {
+    $sid = testSubject('__TEST__难度过滤', [
+        ['radio2', 'Z', 'KP甲'], ['radio2', 'Z', 'KP甲'], ['checkbox', 'Z', 'KP乙'],
+    ]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 5, 'mid' => 0, 'hard' => 0, 'kps' => ['KP甲'], 'types' => ['radio2']]);
+    foreach ($r['questions'] as $q) {
+        $t->assertSame('题型应为 radio2', 'radio2', (string) $q['type']);
+        $t->assertSame('知识点应为 KP甲', 'KP甲', (string) $q['kp']);
+    }
+});
+
+$t->guard('F-7 diff_borrowed 字段必须存在（前端依赖）', function () use ($t, $composer) {
+    $sid = testSubject('__TEST__难度字段', [['radio2', 'Z']]);
+    $r = $composer->compose(['subj_id' => $sid, 'easy' => 1]);
+    $t->assertTrue('compose 返回 diff_borrowed', array_key_exists('diff_borrowed', $r));
 });
 
 aiComposeCleanup($createdQuizIds);

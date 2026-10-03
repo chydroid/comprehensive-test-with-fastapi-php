@@ -118,6 +118,11 @@ export function openComposerModal({ examId, subjId = 0, subjName = '', onApplied
     if (res.truncated) {
       chips.push(badge('题库题量不足，已截断', { tone: 'warning' }));
     }
+    // 难度缺档时本地抽样会借用其他难度凑满题量（如题库全为「中」时，易/难档借中）。
+    // 必须如实告知：否则教师设了「易3中4难3」却拿到一卷中等难度而无任何解释。
+    if (res.diff_borrowed > 0) {
+      chips.push(badge(`题库难度档位不足，${res.diff_borrowed} 题已按相近难度替代`, { tone: 'warning' }));
+    }
     if (res.composable === false) {
       chips.push(badge('考试已开始，无法组卷', { tone: 'danger' }));
     }

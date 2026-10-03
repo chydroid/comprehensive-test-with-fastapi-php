@@ -48,6 +48,8 @@ final class ComposerFactory
             $r['degraded'] = false;
             $r['provider'] = $provider->key();
             $r['degrade_reason'] = '';
+            // 统一补齐：远程路径不产出此键，调用方（ExamComposer）直接读取
+            $r['diff_borrowed'] ??= 0;
             return $r;
         }
 
@@ -56,6 +58,7 @@ final class ComposerFactory
             $r['degraded'] = false;
             $r['provider'] = $provider->key();
             $r['degrade_reason'] = '';
+            $r['diff_borrowed'] = 0;
             return $r;
         } catch (ComposerFailureException $e) {
             $local = self::fallback()->compose($spec);

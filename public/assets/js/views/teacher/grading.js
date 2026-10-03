@@ -252,7 +252,15 @@ export function TeacherGradingView({ query } = {}) {
         const data = r.result || {};
         const list = data.items || [];
         if (!list.length) {
-          notify.info(`没有可建议的题目（${Number(data.skipped_graded) || 0} 题已批阅）`);
+          // 「没有可建议的题目」有两种截然不同的原因，不区分会让教师以为功能坏了：
+          //   ① 本场压根没有问答题 → 没有任何可批阅对象（内容缺失，功能正常）
+          //   ② 问答题都已批阅     → 换个考生才有可批的
+          const skipped = Number(data.skipped_graded) || 0;
+          if (skipped > 0) {
+            notify.info(`没有可建议的题目（${skipped} 题已批阅）`);
+          } else {
+            notify.info('本场考试没有问答题，AI 判卷不适用。AI 判卷仅针对问答题（需要人工评阅的主观题），本场全是客观题。');
+          }
           return;
         }
 
