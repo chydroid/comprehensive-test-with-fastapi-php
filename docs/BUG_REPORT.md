@@ -1854,3 +1854,36 @@ Core\newPdo(): Argument #5 ($pass) must be of type string, int given
 - **幂等性**：重复交卷（`LEFT(stu_status,4)!='over'` + `rowCount()===0` 回查既有成绩）、
   重复批阅（全量覆盖写）、重复出题（事务内 + `FOR UPDATE`）、
   重复问卷（`ON DUPLICATE KEY UPDATE` + `UNIQUE(qid,stu_id)`）均已正确。
+
+### 配套防线：`test/cases/route_guard_test.php`（31 断言）
+
+针对本轮 7 条缺陷的统一根因（守卫只打在某一个入口）新增静态回归防线，
+把这类约束从「靠人 review」变成「会失败的断言」：
+
+| 断言 | 覆盖 | 对应缺陷 |
+|---|---|---|
+| 教师端 `{id}` 路由均做归属校验 | 21 条路由，支持委托链下钻（`ownExamId()`） | 归属校验漏入口 |
+| **写入口强制归属本人（第 2 层）** | `save`/`update`/`retake` 的 `exam_tea` 须取本人 `tea_name` | BUG-258 |
+| 后台 GET 须登记 `IDENTITY_RULES` | 排除兜底前缀 + 识别 `EXACT_RULES` 优先 | BUG-259 |
+| 后台写操作不得只靠推导 | 显式 `WRITE_POINTS` 或显式前缀覆盖 | BUG-238/239 同型 |
+
+**第 2 层为何必须单列**：BUG-258 时 `update()` **已有** `assertOwnExam`（第 1 层在），
+缺的是「强制 `exam_tea` 回本人」。若只断言第 1 层，测试会 PASS，
+给出「已覆盖」的假安全感——这正是本轮踩过的坑。
+
+**双向验证**（断言有效性的唯一判据）：
+- 移除 `/api/admin/logs` 登记 → 精确 FAIL 并指名该路由（复现 BUG-259）；
+- 移除 `update()` 强制归属 → 精确 FAIL，`save`/`retake` 仍 PASS（无误伤）；
+- 移除 `update()` 的 `assertOwnExam` → 第 1 层断言捕获；
+- 还原后全绿。
+
+**实现中踩到的三个「假防线」陷阱**（写这类静态断言时务必注意）：
+1. **兜底前缀会废掉断言**：提取 `IDENTITY_RULES` 时若把兜底项
+   `['/api/admin/','admin','admin.access']` 算作「已登记」，它匹配一切
+   `/api/admin/*`，任何未登记路由都会误报通过。必须显式排除。
+2. **`guard()` 会把内部异常吞成单条 FAIL 而不中断**：闭包当数组用
+   （`count($fn)`）触发 TypeError，只看自己 grep 的那几行会误以为「断言通过」。
+   **验证输出必须看完整结果。**
+3. **漏 `exit($t->finish())` → 断言一条都没被统计**：单跑看着一串 PASS，
+   但全量回归抓不到统计行。识别信号是「用例文件数增加、TOTAL 不变」。
+   确认接入的充要条件：全量 TOTAL 增量 == 新文件自身 PASS 数（本次 1641 → 1672 = +31）。
