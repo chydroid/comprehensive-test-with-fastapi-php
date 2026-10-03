@@ -197,14 +197,24 @@ final class LlmComposer implements ComposerProvider
                 continue;
             }
             $diff = self::normDiff((string) ($item['difficulty'] ?? ''));
-            $options = self::normOptions($item['options'] ?? null);
+            $options = self::normOptions($item['options'] ?? []);
+            // 判断题的选项必须是「正确|错误」两档（答案键 A/B 依赖于此）。
+            // 模型常只给 ['正确'] 甚至不给选项 —— 归一为标准两档，否则考生端
+            // 只有一个选项可勾、或答案字母越界。
+            // ⚠️ 摆正顺序时必须同步摆正答案：模型给了「错误|正确」时若只摆正选项、
+            //    答案字母 A 就会指向「正确」，等于把答案改了。
+            $rawAnswer = (string) ($item['answer'] ?? '');
+            if ($type === 'radio1') {
+                [$options, $rawAnswer] = self::normJudgeOptions($options, $rawAnswer);
+            }
+            $answer = self::normAnswer($type, $rawAnswer, count($options));
             // 客观题必须有选项且答案非空；主观题答案（要点）必须非空
             if (in_array($type, Quiz::OBJECTIVE_TYPES, true)) {
-                if ($options === [] || trim((string) ($item['answer'] ?? '')) === '') {
+                if ($options === [] || $answer === '') {
                     continue;
                 }
             } else {
-                if (trim((string) ($item['answer'] ?? '')) === '') {
+                if ($answer === '') {
                     continue;
                 }
             }
@@ -213,7 +223,7 @@ final class LlmComposer implements ComposerProvider
                 'type'       => $type,
                 'stem'       => mb_substr($stem, 0, 500),
                 'options'    => $options,
-                'answer'     => trim((string) ($item['answer'] ?? '')),
+                'answer'     => $answer,
                 'kp'         => trim((string) ($item['kp'] ?? '')),
                 'difficulty' => $diff === '' ? 'Z' : $diff,
                 'analysis'   => trim((string) ($item['analysis'] ?? '')) !== '' ? mb_substr(trim((string) ($item['analysis'])), 0, 500) : null,
@@ -228,8 +238,99 @@ final class LlmComposer implements ComposerProvider
         return $out;
     }
 
-    private static function normType(string $t): string
+    /**
+     * 模型返回的答案归一。
+     *
+     * 模型常把答案写成「答案是A」「A. 匀速礼让行人」「（A）」等口语形式，直接落库
+     * 会让这题**永远判错**（正确答案键应是纯字母集合，见 Quiz::normalizeAnswer）。
+     * 客观题：只保留落在选项范围内的字母，多选去重升序；识别不出则返回 '' 由调用方丢弃该题。
+     * 主观题：答案本身就是要点原文，仅去空白。
+     */
+    private static function normAnswer(string $type, string $raw, int $optionCount): string
     {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return '';
+        }
+        if (!in_array($type, Quiz::OBJECTIVE_TYPES, true)) {
+            return $raw;   // 填空/问答：答案即原文
+        }
+
+        // 去掉「答案是」「正确选项」等前缀与包裹符号，只留下字母
+        $s = preg_replace('/^[^A-Za-z]*?(答案|正确选项|选项)\s*(是|为|：|:)?\s*/u', '', $raw) ?? $raw;
+        $s = preg_replace('/[（(【\[]|[）)】\]]/u', '', $s) ?? $s;
+        $s = strtoupper(preg_replace('/[^A-Za-z]/u', '', $s) ?? '');
+
+        if ($s === '') {
+            return '';
+        }
+        // 答案字母必须落在选项范围内（A..第 optionCount 个），否则这题是脏数据
+        $max = max(1, $optionCount);
+        $letters = [];
+        foreach (str_split($s) as $ch) {
+            $idx = ord($ch) - 65;
+            if ($idx < 0 || $idx >= $max) {
+                return '';   // 出现越界字母 → 判为不可用
+            }
+            $letters[$ch] = true;
+        }
+        $letters = array_keys($letters);
+        sort($letters);
+        return implode('', $letters);
+    }
+
+    /**
+     * 判断题选项归一为标准两档「正确|错误」（答案键 A=正确 / B=错误）。
+     *
+     * 若模型已给两项且语义正确就沿用；否则（只给一项、给了四项、给了「对/错」等）
+     * 一律重建为标准两档——语义由 stem 决定，选项形状必须固定。
+     *
+     * @param array<int,array{key:string,text:string}> $options
+     * @return array{0:array<int,array{key:string,text:string}>,1:string} [选项, 修正后的答案]
+     */
+    private static function normJudgeOptions(array $options, string $answer): array
+    {
+        $texts = array_map(static fn ($o): string => trim((string) ($o['text'] ?? '')), $options);
+        $judge = static function (string $s): string {
+            $s = preg_replace('/[^一-龥]/u', '', $s) ?? $s;
+            if (str_contains($s, '正确') || str_contains($s, '对')) {
+                return 'A';
+            }
+            if (str_contains($s, '错误') || str_contains($s, '错') || str_contains($s, '不对')) {
+                return 'B';
+            }
+            return '';
+        };
+
+        $std = [
+            ['key' => 'A', 'text' => '正确'],
+            ['key' => 'B', 'text' => '错误'],
+        ];
+
+        if (count($texts) === 2) {
+            $a = $judge($texts[0]);
+            $b = $judge($texts[1]);
+            if ($a === 'A' && $b === 'B') {
+                return [$std, $answer];
+            }
+            if ($a === 'B' && $b === 'A') {
+                // 模型给的顺序是 错误|正确 → 摆正选项，同时把答案 A/B 互换
+                $swapped = strtoupper($answer) === 'A' ? 'B' : (strtoupper($answer) === 'B' ? 'A' : $answer);
+                return [$std, $swapped];
+            }
+        }
+        // 兜底：模型给的不是标准两档 → 固定重建。答案若是用「正确/错误」写的，
+        // 也一并翻成字母，让下游 normAnswer 统一处理。
+        $ans = trim($answer);
+        if (str_contains($ans, '正确') || str_contains($ans, '对')) {
+            $ans = 'A';
+        } elseif (str_contains($ans, '错误') || str_contains($ans, '错') || str_contains($ans, '不对')) {
+            $ans = 'B';
+        }
+        return [$std, $ans];
+    }
+
+    private static function normType(string $t): string    {
         $t = trim($t);
         $map = [
             'radio1' => 'radio1', '判断题' => 'radio1', '判断' => 'radio1', 'truefalse' => 'radio1',
@@ -265,6 +366,21 @@ final class LlmComposer implements ComposerProvider
             } else {
                 $text = trim((string) $o);
             }
+            if ($text === '') {
+                continue;
+            }
+            // 模型很爱把选项写成 ['A. 匀速礼让行人', 'B. 强行超车', ...]，
+            // 也可能用数字或顿号。本方法按序重新分配 key，若不剥掉自带前缀，
+            // 前端会渲染成「A.A. 匀速礼让行人」——字母重复，选项看起来像坏掉了。
+            // （字母前缀的处理与 Quiz::parseOptions 保持一致。）
+            // 先剥字母前缀（A. / A、/ A: / A) / (A) 等），这是模型最常见的写法。
+            $text = preg_replace('/^[\x{3010}\x{FF08}(]?[A-Za-z][\x{3011}\x{FF09})\]]?[\.、:：\)]?\s*/u', '', $text) ?? $text;
+            // 数字前缀要更谨慎：「3.5 千瓦时」的小数点绝不能当序号剥掉。
+            // 只认「数字 + 非数字分隔符（.、:）」且分隔符后紧跟非数字时才剥。
+            if (preg_match('/^(\d{1,2})[\.、:：]\s*([^\d\s].*)$/u', $text, $dm)) {
+                $text = $dm[2];
+            }
+            $text = trim($text);
             if ($text === '') {
                 continue;
             }

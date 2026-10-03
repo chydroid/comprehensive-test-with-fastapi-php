@@ -362,6 +362,185 @@ $t->guard('F-7 diff_borrowed 字段必须存在（前端依赖）', function () 
     $t->assertTrue('compose 返回 diff_borrowed', array_key_exists('diff_borrowed', $r));
 });
 
+/* ==================================================================
+ * G. 远程模型返回的脏数据必须归一（LlmComposer）
+ *
+ * 背景：模型爱把选项写成 ['A. 匀速礼让行人', ...]、把答案写成「答案是A」、
+ * 把判断题选项写成 ['错误','正确']。此前 normOptions 只按序重新分配 key 而不剥
+ * 自带前缀 → 前端渲染成「A.A. 匀速礼让行人」；answer 原样入库 → 该题永远判错。
+ * 这些脏数据会**被教师勾选后落库**，属真实数据污染，必须在解析层拦住。
+ * ================================================================== */
+$llm = new ReflectionClass(\App\Services\Composition\LlmComposer::class);
+$mNormOptions  = $llm->getMethod('normOptions');       $mNormOptions->setAccessible(true);
+$mNormJudge    = $llm->getMethod('normJudgeOptions');  $mNormJudge->setAccessible(true);
+$mNormAnswer   = $llm->getMethod('normAnswer');        $mNormAnswer->setAccessible(true);
+
+$t->guard('G-1 选项自带前缀必须剥离（否则显示 A.A. xxx）', function () use ($t, $mNormOptions) {
+    $cases = [
+        [['A. 匀速礼让行人', 'B. 强行超车'],      ['匀速礼让行人', '强行超车']],
+        [['A、匀速礼让行人', 'B、强行超车'],      ['匀速礼让行人', '强行超车']],
+        [['A: 匀速礼让行人', 'B: 强行超车'],      ['匀速礼让行人', '强行超车']],
+        [['(A) 匀速礼让行人', '(B) 强行超车'],    ['匀速礼让行人', '强行超车']],
+        [['（A）匀速礼让行人', '（B）强行超车'],  ['匀速礼让行人', '强行超车']],
+        [['【A】匀速礼让行人', '【B】强行超车'],  ['匀速礼让行人', '强行超车']],
+        [['1. 匀速礼让行人', '2. 强行超车'],      ['匀速礼让行人', '强行超车']],
+        [['1、匀速礼让行人', '2、强行超车'],      ['匀速礼让行人', '强行超车']],
+        // 模型也可能返回已带 key 的结构
+        [[['key' => 'A', 'text' => 'A. 匀速礼让行人'], ['key' => 'B', 'text' => 'B. 强行超车']],
+         ['匀速礼让行人', '强行超车']],
+    ];
+    foreach ($cases as $i => [$in, $want]) {
+        $out = $mNormOptions->invoke(null, $in);
+        $got = array_map(static fn ($o): string => (string) $o['text'], $out);
+        $t->assertSame("第 " . ($i + 1) . " 组前缀已剥离", $want, $got);
+        // key 必须按序重新分配
+        $keys = array_map(static fn ($o): string => (string) $o['key'], $out);
+        $t->assertSame("第 " . ($i + 1) . " 组 key 按序分配", ['A', 'B'], $keys);
+    }
+});
+
+$t->guard('G-2 数字开头的正文不得被误当成序号剥掉', function () use ($t, $mNormOptions) {
+    // 「3.5 千瓦时」的小数点不是序号；「2024 年的新规」也不是。
+    $out = $mNormOptions->invoke(null, ['3.5 千瓦时的负载', '4.2 米']);
+    $t->assertSame('小数不得被剥', '3.5 千瓦时的负载', $out[0]['text']);
+    $out2 = $mNormOptions->invoke(null, ['2024 年的新规', '15 元']);
+    $t->assertSame('年份不得被剥', '2024 年的新规', $out2[0]['text']);
+});
+
+$t->guard('G-3 答案口语化必须归一（否则该题永远判错）', function () use ($t, $mNormAnswer) {
+    $cases = [
+        ['A', 'A'], ['答案是A', 'A'], ['A. 匀速礼让行人', 'A'], ['（A）', 'A'],
+        ['a', 'A'], ['  B  ', 'B'], ['答案：AC', 'AC'],
+    ];
+    foreach ($cases as [$in, $want]) {
+        $t->assertSame("「{$in}」-> {$want}", $want, $mNormAnswer->invoke(null, 'radio2', $in, 4));
+    }
+});
+
+$t->guard('G-4 答案字母越界必须拒收（防止脏数据落库）', function () use ($t, $mNormAnswer) {
+    // 4 个选项却答 E → 整题不可用，必须返回 '' 让调用方丢弃
+    $t->assertSame('越界字母 E 拒收', '', $mNormAnswer->invoke(null, 'radio2', 'E', 4));
+    $t->assertSame('越界字母 F 拒收', '', $mNormAnswer->invoke(null, 'radio2', 'AF', 4));
+    $t->assertSame('无字母拒收', '', $mNormAnswer->invoke(null, 'radio2', '不确定', 4));
+});
+
+$t->guard('G-5 多选答案去重升序（对齐判分语义）', function () use ($t, $mNormAnswer) {
+    // Quiz::normalizeAnswer 认为 ABC≡CBA≡ACC，解析层就要先归一好
+    $t->assertSame('ca -> AC', 'AC', $mNormAnswer->invoke(null, 'checkbox', 'ca', 4));
+    $t->assertSame('ACC -> AC', 'AC', $mNormAnswer->invoke(null, 'checkbox', 'ACC', 4));
+    $t->assertSame('CBA -> ABC', 'ABC', $mNormAnswer->invoke(null, 'checkbox', 'CBA', 4));
+    $t->assertSame('答案是ABD -> ABD', 'ABD', $mNormAnswer->invoke(null, 'checkbox', '答案是ABD', 4));
+});
+
+$t->guard('G-6 主观题答案保留原文（不按字母映射）', function () use ($t, $mNormAnswer) {
+    $t->assertSame('要点原文保留', '网络诈骗的防范措施', $mNormAnswer->invoke(null, 'longtext', '网络诈骗的防范措施', 0));
+    $t->assertSame('多要点保留', '要点一；要点二', $mNormAnswer->invoke(null, 'longtext', '要点一；要点二', 0));
+});
+
+$t->guard('G-7 判断题选项必须归一为「正确|错误」', function () use ($t, $mNormJudge) {
+    $mk = static fn (string $x, string $y): array => [['key' => 'A', 'text' => $x], ['key' => 'B', 'text' => $y]];
+    foreach ([$mk('正确', '错误'), $mk('对', '错'), $mk('错误', '正确')] as $in) {
+        [$opts] = $mNormJudge->invoke(null, $in, 'A');
+        $texts = array_map(static fn ($o): string => (string) $o['text'], $opts);
+        $t->assertSame('归一为标准两档', ['正确', '错误'], $texts);
+    }
+    // 只给一项 / 完全没给，都必须补齐两档
+    [$o1] = $mNormJudge->invoke(null, [['key' => 'A', 'text' => '正确']], 'A');
+    $t->assertSame('只给一项也补齐', ['正确', '错误'], array_map(static fn ($o): string => (string) $o['text'], $o1));
+    [$o2] = $mNormJudge->invoke(null, [], 'A');
+    $t->assertSame('没给选项也补齐', ['正确', '错误'], array_map(static fn ($o): string => (string) $o['text'], $o2));
+});
+
+$t->guard('G-8 判断题摆正选项时必须同步摆正答案（否则答案被改）', function () use ($t, $mNormJudge, $mNormAnswer) {
+    $mk = static fn (string $x, string $y): array => [['key' => 'A', 'text' => $x], ['key' => 'B', 'text' => $y]];
+    // 模型给了「错误|正确」且答案 A（指第一项=错误）→ 摆正后答案必须变 B
+    [$opts, $ans] = $mNormJudge->invoke(null, $mk('错误', '正确'), 'A');
+    $final = $mNormAnswer->invoke(null, 'radio1', $ans, count($opts));
+    $t->assertSame('顺序反转后答案应为 B', 'B', $final);
+    // 顺序本来就对时答案不变
+    [$opts2, $ans2] = $mNormJudge->invoke(null, $mk('正确', '错误'), 'A');
+    $t->assertSame('顺序正确时答案保持 A', 'A', $mNormAnswer->invoke(null, 'radio1', $ans2, count($opts2)));
+    // 答案用中文写也要翻成字母
+    [, $ans3] = $mNormJudge->invoke(null, [], '错误');
+    $t->assertSame('中文答案翻成 B', 'B', $mNormAnswer->invoke(null, 'radio1', $ans3, 2));
+});
+
+/**
+ * G-1~G-8 直接调私有方法，能覆盖边界但不覆盖**调用链**。
+ * 此前「把 normAnswer 换成 trim()」这类注入后 97 条仍全绿 —— 因为没有一条测试
+ * 走真实的 parse() 入口。故补本组：从「模型 HTTP 响应」一路到「可用题目对象」。
+ */
+$mParse = $llm->getMethod('parse');
+$mParse->setAccessible(true);
+
+/** 构造一条 OpenAI 兼容响应，内部 content 为给定 JSON 字符串 */
+$llmResp = static function (string $content): array {
+    return ['choices' => [['message' => ['role' => 'assistant', 'content' => $content]]]];
+};
+
+$t->guard('G-9 真实解析链路：脏选项/口语答案必须被归一', function () use ($t, $mParse, $llmResp) {
+    // 模拟模型真实会返回的样子：选项带 A. 前缀、答案写成「答案是A」
+    $raw = json_encode([
+        ['type' => '单选题', 'stem' => '下列哪项正确？',
+         'options' => ['A. 甲', 'B. 乙', 'C. 丙', 'D. 丁'],
+         'answer' => '答案是A', 'difficulty' => '易'],
+    ], JSON_UNESCAPED_UNICODE);
+    $out = $mParse->invoke(null, $llmResp($raw), ['subj_id' => 2, 'subject_name' => '测试']);
+    $t->assertSame('应解析出 1 题', 1, count($out));
+    $q = $out[0];
+    $t->assertSame('选项前缀已剥离', '甲', $q['options'][0]['text']);
+    $t->assertSame('答案已归一', 'A', $q['answer']);
+    $t->assertSame('key 仍按序分配', 'A', $q['options'][0]['key']);
+    $t->assertSame('难度已归一', 'Y', $q['difficulty']);
+    $t->assertTrue('标记为新题待审核', (bool) $q['new']);
+});
+
+$t->guard('G-10 真实解析链路：答案越界的题必须被丢弃而非落库', function () use ($t, $mParse, $llmResp) {
+    // 4 个选项却答 E。若不做钳制，这题会以「quiz_key=E」落库 → 永远判错。
+    $raw = json_encode([
+        ['type' => '单选题', 'stem' => '越界答案题',
+         'options' => ['A. 甲', 'B. 乙', 'C. 丙', 'D. 丁'],
+         'answer' => 'E', 'difficulty' => '中'],
+        // 这题合法，用于确认不是把整批都丢了
+        ['type' => '单选题', 'stem' => '正常题',
+         'options' => ['A. 甲', 'B. 乙'], 'answer' => 'B', 'difficulty' => '中'],
+    ], JSON_UNESCAPED_UNICODE);
+    $out = $mParse->invoke(null, $llmResp($raw), ['subj_id' => 2, 'subject_name' => '测试']);
+    $t->assertSame('越界题应被丢弃，只剩 1 题', 1, count($out));
+    $t->assertSame('留下的是合法那题', '正常题', $out[0]['stem']);
+    $t->assertSame('合法题答案正确', 'B', $out[0]['answer']);
+});
+
+$t->guard('G-11 真实解析链路：判断题选项顺序反转须同步修正答案', function () use ($t, $mParse, $llmResp) {
+    // 模型给了「错误|正确」但答案 A（指第一项）→ 摆正后答案必须变 B
+    $raw = json_encode([
+        ['type' => '判断题', 'stem' => '该项说法正确。',
+         'options' => ['错误', '正确'], 'answer' => 'A', 'difficulty' => '易'],
+    ], JSON_UNESCAPED_UNICODE);
+    $out = $mParse->invoke(null, $llmResp($raw), ['subj_id' => 2, 'subject_name' => '测试']);
+    $t->assertSame('应解析出 1 题', 1, count($out));
+    $t->assertSame('选项已摆正为 正确|错误', ['正确', '错误'],
+        array_map(static fn ($o): string => (string) $o['text'], $out[0]['options']));
+    $t->assertSame('答案随选项同步修正为 B', 'B', $out[0]['answer']);
+    // 判分必须自洽：选「错误」(=B) 应判对
+    $t->assertTrue('按修正后的答案判分正确',
+        \App\Models\Quiz::isCorrect('radio1', $out[0]['answer'], 'B'));
+});
+
+$t->guard('G-12 真实解析链路：全批不可用必须抛异常（不得静默返回空）', function () use ($t, $mParse, $llmResp) {
+    // 若这里返回空数组而不抛，ComposerFactory 不会降级，教师只会看到「没有可用的建议题目」
+    $raw = json_encode([
+        ['type' => '单选题', 'stem' => '无选项', 'options' => [], 'answer' => 'A'],
+    ], JSON_UNESCAPED_UNICODE);
+    $threw = false;
+    try {
+        $mParse->invoke(null, $llmResp($raw), ['subj_id' => 2, 'subject_name' => '测试']);
+    } catch (\Throwable $e) {
+        $threw = true;
+    }
+    $t->assertTrue('全批不可用时应抛 ComposerFailureException 以触发降级', $threw);
+});
+
 aiComposeCleanup($createdQuizIds);
 
 exit($t->finish());
