@@ -302,12 +302,21 @@ export function StudentInfoView() {
   const root = el('div.stack');
   const formSlot = el('div');
 
-  (async () => {
-    const [infoRes, optRes] = await Promise.all([
-      withLoading(formSlot, () => studentApi.info()),
-      studentApi.options().catch(() => null),
-    ]);
-    if (!infoRes.ok) return;
+  async function load() {
+    let infoRes, optRes;
+    try {
+      [infoRes, optRes] = await Promise.all([
+        withLoading(formSlot, () => studentApi.info()),
+        studentApi.options().catch(() => null),
+      ]);
+    } catch (e) {
+      mount(formSlot, alertBox('加载失败：' + (e?.message || e), { type: 'danger', action: button('重试', { variant: 'secondary', onClick: load }) }));
+      return;
+    }
+    if (!infoRes.ok) {
+      mount(formSlot, alertBox(infoRes.error?.message || '获取个人信息失败', { type: 'danger', action: button('重试', { variant: 'secondary', onClick: load }) }));
+      return;
+    }
     const info = infoRes.result;
     const opts = optRes || { grades: [], classes: [] };
 
@@ -356,11 +365,12 @@ export function StudentInfoView() {
     }
 
     mount(formSlot, card({ title: '基本资料', iconName: 'user', body: form }));
-  })();
+  }
 
   root.append(el('div.page-head', {}, [
     el('div', {}, [el('h1.page-title', { text: '个人资料' }), el('p.page-sub', { text: '维护你的考生信息' })]),
   ]), formSlot);
+  load();
   return root;
 }
 
