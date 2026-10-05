@@ -218,7 +218,8 @@ class ExamRetake
             'stu_class'        => (string) ($src['stu_class'] ?? ''),
             'paper_mode'       => (string) ($src['paper_mode'] ?? 'random'),
             'exam_status'      => Exam::STATUS_EXAM,
-            'exam_pwd'         => 0,
+            // 与新建考试同口径：补考场次一建立就有考场口令，监考可直接告知考生
+            'exam_pwd'         => Exam::generatePwd(),
             'exam_score'       => (int) ($src['exam_score'] ?? 0),
             'score_visibility' => Exam::visibilityOf($src),
             'cert_threshold'   => (int) ($src['cert_threshold'] ?? 0),

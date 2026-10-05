@@ -172,7 +172,7 @@ $t->guard('开考后无法再入场', function () use ($t) {
     $t->assertTrue('提示考试已开始', str_contains($res['raw'], '无法进入考场'));
 });
 
-/* ---------- 6. 未到入场时间（开考前 10 分钟之外）被拒 ---------- */
+/* ---------- 6. 未到入场时间（开考前 15 分钟之外）被拒 ---------- */
 $t->guard('未到入场时间被拒', function () use ($t) {
     $future = Fixture::createExam([
         'exam_status' => 'exam',
@@ -190,7 +190,7 @@ $t->guard('未到入场时间被拒', function () use ($t) {
         'exam_pwd' => $future['exam_pwd'],
     ]);
     $t->assertSame('未到入场时间 -> 403', 403, $res['status']);
-    $t->assertTrue('提示 10 分钟后才可入场', str_contains($res['raw'], '10 分钟'));
+    $t->assertTrue('提示 15 分钟后才可入场', str_contains($res['raw'], '15 分钟'));
 });
 
 /* =================== 阶段二：监考出题 =================== */

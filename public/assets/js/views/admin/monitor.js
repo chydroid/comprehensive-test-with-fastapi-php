@@ -15,6 +15,7 @@ import { loadAppSettings, appSettingInt, entryWindowText } from '../../core/app-
 import { withLoading } from '../../core/bootstrap.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtRelative, fmtTime, initials, hashTone } from '../../core/format.js';
 import { statusBadge } from './exam.js';
+import { openGeneratePanel } from '../generate-panel.js';
 
 const TONES = [
   'linear-gradient(135deg,#13a191,#0a6f64)',
@@ -225,8 +226,9 @@ export async function MonitorView({ router, query }) {
     if (status.startsWith('over')) return '考试已结束，不再接受入场';
     if (status === 'testing') return '考试进行中，考生正在作答';
     if (status === 'paper') return '已出题完毕，等待开考（到达开考时间将自动开考）';
-    if (pwdReady) return '入场已开放，等待监考出题';
-    return '尚未开放入场，考生暂时无法进入考场';
+    // exam 且已有口令：口令是建考试时生成的，入场由「考前 15 分钟」的时间窗把关
+    if (pwdReady) return '考生可在开考前凭考场口令入场；到开考前片刻系统自动出题，也可现在手动出题';
+    return '尚未生成考场口令，请先在考试管理中重建本场考试或刷新口令';
   }
 
   function pwdBlock(pwd) {
@@ -263,21 +265,11 @@ export async function MonitorView({ router, query }) {
   }
 
   async function doGeneratePapers() {
-    const ok = await confirmDialog('将为本场考试「已进入考场」的考生生成试卷（未入场考生不出卷；已生成的不会覆盖）。确定开始出题？', {
-      title: '开始出题', confirmText: '开始出题', tone: 'warning',
-      detail: '出题完成后考试状态变为「已组卷」，等待开考。',
+    // 出题过程逐人可见：列出已入场考生后分批推进（见 generate-panel.js）。
+    // 原来是「确认 → 一次请求 → 一句 toast」，监考看不到在给谁出题、出了几题。
+    await openGeneratePanel({
+      examId, examName: currentExam?.exam_name, api: adminApi, onDone: () => reload(),
     });
-    if (!ok) return;
-    const { ok: done, error, result } = await withLoading(null, () => adminApi.generatePapers(examId, {}), { silent: true });
-    if (!done) { notify.error(error?.message || '出题失败'); return; }
-    const r = result || {};
-    if ((r.entered ?? 0) === 0) {
-      notify.warning('本考场暂无考生入场，无需出卷');
-    } else {
-      notify.success(`出题完成：生成 ${r.generated ?? r.count ?? 0} 份${r.skipped ? `，跳过 ${r.skipped} 份` : ''}`);
-    }
-    if (r.warnings?.length) notify.warning(r.warnings.join('；'));
-    reload();
   }
 
   async function doStart() {

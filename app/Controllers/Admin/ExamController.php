@@ -79,6 +79,13 @@ class ExamController extends BaseController
             $row['total_questions']   = Exam::totalQuestions($row);
             $row['computed_score']    = Exam::computedTotalScore($row);
             $row['status_summary']    = $this->model->statusSummary((int) $row['id']);
+            // 应考人数（班级展开 / 补考名单）：与「已入场」配对，
+            // 让监考在**出题之前**就能看到「来了几个 / 该来几个」——
+            // 入场后到出题前这段窗口正是核对到场情况的唯一时机。
+            // 只对流程中的场次算：已结束场次的名单没有意义，白跑一次查询。
+            $row['eligible_total']    = in_array((string) ($row['exam_status'] ?? ''), Exam::ACTIVE_STATUSES, true)
+                ? count(Exam::studentIdsForExam($row))
+                : (int) ($row['status_summary']['total'] ?? 0);
         }
         unset($row);
 
@@ -150,7 +157,15 @@ class ExamController extends BaseController
         $data = $this->collectParams();
         $this->assertValid($data, true);
 
-        $id = $this->model->create($data + ['exam_status' => Exam::STATUS_EXAM, 'exam_pwd' => 0]);
+        // 考场口令在**建立考试的当下**就生成：它是考场入口的唯一凭证，
+        // 必须出现在考试信息列表里供监考提前告知考生（此前为 0，要点「开放入场」
+        // 才有口令，导致考前根本无从发布通知）。
+        // 入场时机不由口令控制，而由入场窗口（开考前 exam_entry_lead_minutes 分钟）
+        // 把关，因此口令提前存在不会让考生提前进场。
+        $id = $this->model->create($data + [
+            'exam_status' => Exam::STATUS_EXAM,
+            'exam_pwd'    => Exam::generatePwd(),
+        ]);
         $this->persistPaperMode($id, $data);
         $this->recomputeScore($id, $data);
         $this->audit('exam.create', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? '']);
@@ -299,7 +314,38 @@ class ExamController extends BaseController
     }
 
     /**
-     * POST /api/admin/exams/{id}/generate —— 出题：为已进入考场的考生预生成随机试卷（无考生入场时提示「无需出卷」）
+     * GET /api/admin/exams/{id}/generate/plan —— 出题预览：列出「已进入考场」的考生
+     * 及各自是否已出卷，供管理端先渲染排队名单、再分批推进出题（过程逐人可见）。
+     */
+    public function generatePlan(): Response
+    {
+        $id = $this->idParam();
+        $exam = $this->model->detail($id);
+        if ($exam === null) {
+            throw new HttpException(404, '考试不存在', 40400);
+        }
+
+        $students = ExamEngine::pendingStudents($id);
+        return $this->ok([
+            'exam_id'       => $id,
+            'exam_name'     => (string) ($exam['exam_name'] ?? ''),
+            'exam_status'   => (string) ($exam['exam_status'] ?? ''),
+            'exam_start'    => (string) ($exam['exam_start'] ?? ''),
+            'total'         => count($students),
+            'pending'       => count(array_filter($students, static fn (array $s): bool => !$s['has_paper'])),
+            // 自动出题只剩多少秒（0 表示已过出题时点或已关闭自动出题）
+            'auto_gen_in'   => Exam::autoGenerateIn($exam),
+            'students'      => $students,
+        ]);
+    }
+
+    /**
+     * POST /api/admin/exams/{id}/generate —— 出题：为已进入考场的考生预生成随机试卷
+     * （无考生入场时提示「无需出卷」）
+     *
+     * body 可传 {stu_ids: [...]}：只给这批考生出题，管理端据此分批调用，
+     * 每批返回逐人明细，前端即可实时点亮「正在给谁出题 / 已出好」。
+     * 不传 = 给全部已入场考生出题（原有行为）。
      */
     public function generatePapers(): Response
     {
@@ -321,7 +367,8 @@ class ExamController extends BaseController
             );
         }
 
-        $result = ExamEngine::generateForClass($id, $exam);
+        $stuIds = $this->requestedStuIds();
+        $result = ExamEngine::generateForClass($id, $exam, $stuIds);
 
         // 考场无人入场：不应强行给全班出卷，提示监考即可（出卷只给已进入考场的考生）。
         if ($result['entered'] === 0) {
@@ -332,9 +379,11 @@ class ExamController extends BaseController
                 'exam_id'       => $id,
                 'student_total' => 0,
                 'entered'       => 0,
+                'pending'       => 0,
                 'generated'     => 0,
                 'skipped'       => 0,
                 'warnings'      => [],
+                'details'       => [],
             ], '本考场暂无考生入场，无需出卷');
         }
 
@@ -354,10 +403,35 @@ class ExamController extends BaseController
             'exam_id'       => $id,
             'student_total' => $result['students'],
             'entered'       => $result['entered'],
+            'pending'       => $result['pending'],
             'generated'     => $result['generated'],
             'skipped'       => $result['skipped'],
             'warnings'      => array_values($warnings),
+            // 逐人明细：管理端分批调用时据此把每个人从「排队中」点亮为「已出卷 N 题」
+            'details'       => $result['details'],
         ], "出题完成：为 {$result['entered']} 名已入场考生生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
+    }
+
+    /**
+     * 取请求里可选的「指定考生」列表（出题分批推进用）。
+     *
+     * 只有 POST/PUT 的 JSON 体里带 stu_ids 时才返回数组，否则返回 null（= 全部）。
+     * 注意 validate() 拒绝数组值，所以这里必须自己从原始输入里取，
+     * 且只保留标量字符串，避免把数组/对象喂进 SQL。
+     *
+     * @return string[]|null
+     */
+    private function requestedStuIds(): ?array
+    {
+        $raw = $this->request->input('stu_ids');
+        if (!is_array($raw)) {
+            return null;
+        }
+        $ids = array_values(array_unique(array_filter(
+            array_map(static fn ($v): string => is_scalar($v) ? trim((string) $v) : '', $raw),
+            static fn (string $v): bool => $v !== ''
+        )));
+        return $ids === [] ? null : $ids;
     }
 
     /* ------------------------------------------------------------------ */

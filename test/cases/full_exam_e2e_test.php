@@ -182,7 +182,9 @@ $t->guard('管理员新建考试：状态与满分由服务端推算', function 
     $newExamId = (int) ($data['id'] ?? 0);
     $t->assertTrue('返回新考试 id', $newExamId > 0);
     $t->assertSame('初始状态为未开考', 'exam', (string) ($data['exam_status'] ?? ''));
-    $t->assertSame('未开放入场时无口令', '0', (string) ($data['exam_pwd'] ?? 'x'));
+    // 考场口令随考试一同生成：考前就要能在考试信息里看到并告知考生，
+    // 而不是等到「开放入场」才拿到（入场时机由入场窗口把关，与口令无关）。
+    $t->assertSame('新建即有考场口令', 1, preg_match('/^\d{4,10}$/', (string) ($data['exam_pwd'] ?? '')) ? 1 : 0);
     $t->assertSame('满分 = 4 题 × 5 分', 20, (int) ($data['exam_score'] ?? 0));
     $t->assertSame('参考班级按 ID 归一', Fixture::CLASS_ID3, (string) ($data['stu_class'] ?? ''));
 });
@@ -304,7 +306,7 @@ $t->guard('入场边界：未开放入场 / 未到窗口 / 开考后 / 凭据错
             'password' => Fixture::PWD, 'exam_pwd' => $futureExam['exam_pwd'],
         ]);
         $t->assertSame('未到入场窗口 -> 403', 403, $res['status']);
-        $t->assertTrue('提示开考前 10 分钟才可入场', str_contains($res['raw'], '10 分钟'));
+        $t->assertTrue('提示开考前 15 分钟才可入场', str_contains($res['raw'], '15 分钟'));
     }
 
     // 已开考且该生未入场（默认 exam_entry_late_minutes = 0，开考后不得入场）

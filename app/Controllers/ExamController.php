@@ -105,7 +105,7 @@ class ExamController extends BaseController
             $now = time();
             $opens = Exam::entryOpensAt($exam);
             $closes = Exam::entryClosesAt($exam);
-            $lead = Setting::int('exam_entry_lead_minutes', 10);
+            $lead = Setting::int('exam_entry_lead_minutes', 15);
             $late = Setting::int('exam_entry_late_minutes', 0);
             if ($opens !== null && $now < $opens) {
                 $msg = $lead > 0
@@ -221,6 +221,9 @@ class ExamController extends BaseController
             ]);
         }
 
+        // 惰性流转：到点先自动出题（exam → paper），再自动开考（paper → testing）。
+        // 顺序不可颠倒：开考只认 paper 状态，没有卷就开考会让考生拿到空卷。
+        Exam::autoGenerateIfDue($examId);
         Exam::autoStartIfDue($examId);
 
         $exam = (new Exam())->find($examId);

@@ -15,8 +15,10 @@ import { siteApi } from '../api/index.js';
 
 /** 与后端 Setting::SCHEMA 的 public 子集保持一致的兜底默认值 */
 const FALLBACK = {
-  exam_entry_lead_minutes: 10,
+  exam_entry_lead_minutes: 15,
   exam_entry_late_minutes: 0,
+  // 开考前多少秒自动为已入场考生出题（0 = 只手动出题）
+  exam_auto_gen_lead_seconds: 10,
   exam_pwd_length: 6,
   exam_allow_view_answer: 1,
   exam_show_score_immediately: 1,

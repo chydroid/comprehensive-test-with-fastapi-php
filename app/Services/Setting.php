@@ -52,19 +52,27 @@ final class Setting
     public const SCHEMA = [
         /* ---------------- 考试规则 ---------------- */
         'exam_entry_lead_minutes' => [
-            'group' => 'exam', 'type' => 'int', 'default' => 10, 'min' => 0, 'max' => 1440,
+            'group' => 'exam', 'type' => 'int', 'default' => 15, 'min' => 0, 'max' => 1440,
             'label' => '提前入场时间', 'unit' => '分钟', 'public' => true,
-            'hint'  => '开考前多久允许考生凭考场口令进入考场等待。默认 10 分钟（考试前 10 分钟可入场）；0 表示不限制，随时可入场。',
+            'hint'  => '开考前多久允许考生凭考场口令进入考场等待。默认 15 分钟（考试前 15 分钟内可入场）；0 表示不限制，随时可入场。',
         ],
         'exam_entry_late_minutes' => [
             'group' => 'exam', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 1440,
             'label' => '开考后迟到入场宽限', 'unit' => '分钟', 'public' => true,
             'hint'  => '开考后仍允许入场的宽限时长。0 表示开考后一律不得入场（推荐）。',
         ],
+        'exam_auto_gen_lead_seconds' => [
+            'group' => 'exam', 'type' => 'int', 'default' => 10, 'min' => 0, 'max' => 600,
+            'label' => '自动出题提前量', 'unit' => '秒', 'public' => true,
+            'hint'  => '开考前多少秒自动为已进入考场的考生出题（监考也可随时手动出题）。'
+                     . '默认 10 秒：既留出出题时间，又不至于让试题在开考前长时间暴露在等待室。'
+                     . '0 表示不自动出题，完全由监考手动触发。'
+                     . '本系统无常驻定时任务，自动出题由考生轮询 / 监考页面访问时惰性触发（幂等）。',
+        ],
         'exam_pwd_length' => [
             'group' => 'exam', 'type' => 'int', 'default' => 6, 'min' => 4, 'max' => 10,
             'label' => '考场口令位数', 'unit' => '位', 'public' => true,
-            'hint'  => '「开放入场」时自动生成的随机口令长度，4–10 位数字。',
+            'hint'  => '新建考试时自动生成的随机口令长度，4–10 位数字（可在考试管理里重新生成）。',
         ],
         'exam_allow_view_answer' => [
             'group' => 'exam', 'type' => 'bool', 'default' => 1, 'public' => true,

@@ -78,6 +78,10 @@ class TeacherExamController extends BaseController
             $row['total_questions'] = Exam::totalQuestions($row);
             $row['computed_score']  = Exam::computedTotalScore($row);
             $row['status_summary']  = $this->model->statusSummary((int) $row['id']);
+            // 应考人数（与管理端 index 同口径）：出题前核对到场情况用
+            $row['eligible_total']  = in_array((string) ($row['exam_status'] ?? ''), Exam::ACTIVE_STATUSES, true)
+                ? count(Exam::studentIdsForExam($row))
+                : (int) ($row['status_summary']['total'] ?? 0);
         }
         unset($row);
 
@@ -189,7 +193,13 @@ class TeacherExamController extends BaseController
         $data['exam_tea'] = (string) ($sess['tea_name'] ?? '');
         $this->assertValid($data, true);
 
-        $id = $this->model->create($data + ['exam_status' => Exam::STATUS_EXAM, 'exam_pwd' => 0]);
+        // 考场口令随考试一同生成（与管理端 save() 同口径）：监考要能在考试信息里
+        // 直接看到口令并提前告知考生，而不是等到「开放入场」才拿到。
+        // 入场时机由入场窗口把关，口令提前存在不等于提前开考。
+        $id = $this->model->create($data + [
+            'exam_status' => Exam::STATUS_EXAM,
+            'exam_pwd'    => Exam::generatePwd(),
+        ]);
         $this->persistPaperMode($id, $data);
         $this->recomputeScore($id, $data);
         $this->audit('exam.create', 'exam:' . $id, ['exam_name' => $data['exam_name'] ?? '', 'actor' => 'teacher']);
@@ -344,7 +354,8 @@ class TeacherExamController extends BaseController
             );
         }
 
-        $result = ExamEngine::generateForClass($id, $exam);
+        $stuIds = $this->requestedStuIds();
+        $result = ExamEngine::generateForClass($id, $exam, $stuIds);
         // 考场无人入场：不应强行给全班出卷，提示监考即可（出卷只给已进入考场的考生）。
         if ($result['entered'] === 0) {
             // 不出卷，但「出题」代表监考已就绪：必须推进 exam → paper，
@@ -354,9 +365,11 @@ class TeacherExamController extends BaseController
                 'exam_id'       => $id,
                 'student_total' => 0,
                 'entered'       => 0,
+                'pending'       => 0,
                 'generated'     => 0,
                 'skipped'       => 0,
                 'warnings'      => [],
+                'details'       => [],
             ], '本考场暂无考生入场，无需出卷');
         }
 
@@ -375,10 +388,55 @@ class TeacherExamController extends BaseController
             'exam_id'       => $id,
             'student_total' => $result['students'],
             'entered'       => $result['entered'],
+            'pending'       => $result['pending'],
             'generated'     => $result['generated'],
             'skipped'       => $result['skipped'],
             'warnings'      => array_values($warnings),
+            // 逐人明细：管理端分批调用时据此把每个人从「排队中」点亮为「已出卷 N 题」
+            'details'       => $result['details'],
         ], "出题完成：为 {$result['entered']} 名已入场考生生成 {$result['generated']} 份，跳过（已有试卷）{$result['skipped']} 份");
+    }
+
+    /**
+     * GET /api/teacher/exams/{id}/generate/plan —— 出题预览（与管理端同构）：
+     * 列出已进入考场的考生及各自是否已出卷，供前端先渲染排队名单再分批推进。
+     */
+    public function generatePlan(): Response
+    {
+        $id = $this->idParam();
+        $exam = $this->assertOwnExam($id);
+
+        $students = ExamEngine::pendingStudents($id);
+        return $this->ok([
+            'exam_id'     => $id,
+            'exam_name'   => (string) ($exam['exam_name'] ?? ''),
+            'exam_status' => (string) ($exam['exam_status'] ?? ''),
+            'exam_start'  => (string) ($exam['exam_start'] ?? ''),
+            'total'       => count($students),
+            'pending'     => count(array_filter($students, static fn (array $s): bool => !$s['has_paper'])),
+            'auto_gen_in' => Exam::autoGenerateIn($exam),
+            'students'    => $students,
+        ]);
+    }
+
+    /**
+     * 取请求里可选的「指定考生」列表（出题分批推进用）。
+     * 见管理端 Admin\ExamController::requestedStuIds()：validate() 拒数组值，
+     * 故这里自己从原始输入取，并只保留标量字符串。
+     *
+     * @return string[]|null
+     */
+    private function requestedStuIds(): ?array
+    {
+        $raw = $this->request->input('stu_ids');
+        if (!is_array($raw)) {
+            return null;
+        }
+        $ids = array_values(array_unique(array_filter(
+            array_map(static fn ($v): string => is_scalar($v) ? trim((string) $v) : '', $raw),
+            static fn (string $v): bool => $v !== ''
+        )));
+        return $ids === [] ? null : $ids;
     }
 
     /** DELETE /api/teacher/exams/{id} */

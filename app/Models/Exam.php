@@ -613,14 +613,14 @@ class Exam extends Model
      *       → 监考出题(排卷) → 到点惰性自动开考 或 手动开考 → 考生作答
      *
      * 入场窗口由后台「系统设置 → 考试规则」控制，不再写死：
-     *   exam_entry_lead_minutes  开考前多久开放入场（默认 10 分钟，考试前 10 分钟可入场）
+     *   exam_entry_lead_minutes  开考前多久开放入场（默认 15 分钟，考试前 15 分钟内可入场）
      *   exam_entry_late_minutes  开考后迟到入场的宽限（默认 0 = 开考后不得入场）
      * ================================================================== */
 
-    /** 入场提前量（秒）：读取后台设置，随配置实时生效（默认 10 分钟见 Setting schema） */
+    /** 入场提前量（秒）：读取后台设置，随配置实时生效（默认 15 分钟见 Setting schema） */
     public static function entryLeadSeconds(): int
     {
-        return max(0, Setting::int('exam_entry_lead_minutes', 10) * 60);
+        return max(0, Setting::int('exam_entry_lead_minutes', 15) * 60);
     }
 
     /** 开考后允许迟到入场的宽限（秒）：0 表示开考后不得入场 */
@@ -658,6 +658,83 @@ class Exam extends Model
     {
         $pwd = (string) ($exam['exam_pwd'] ?? '');
         return $pwd !== '' && $pwd !== '0';
+    }
+
+    /**
+     * 距「自动出题」还有多少秒。
+     *
+     * 供管理端出题面板显示「还有 N 秒自动为已入场考生出题」，让监考知道
+     * 不手动点也不会误事（也用来提示已过出题时点）。
+     *
+     * @return int|null null = 不适用（已出题 / 已开考 / 已结束 / 关闭了自动出题）
+     */
+    public static function autoGenerateIn(array $exam): ?int
+    {
+        if ((string) ($exam['exam_status'] ?? '') !== self::STATUS_EXAM) {
+            return null;
+        }
+        $lead = Setting::int('exam_auto_gen_lead_seconds', 10);
+        if ($lead <= 0) {
+            return null; // 关闭自动出题
+        }
+        $start = strtotime((string) ($exam['exam_start'] ?? ''));
+        if ($start === false) {
+            return null;
+        }
+        return $start - $lead - time();
+    }
+
+    /**
+     * 惰性自动出题：已到「开考前 exam_auto_gen_lead_seconds 秒」且仍未出题(exam)
+     * → 为已进入考场的考生预生成试卷。
+     *
+     * 与 autoStartIfDue()/autoEndIfDue() 同构：本系统无常驻定时任务，只能在
+     * 考生轮询 / 监考页面访问时顺带触发（幂等）。
+     *
+     * 为什么必须有它：若只靠监考手动点「出题」，一旦监考忘了点，到点后
+     *   —— 状态停在 exam，autoStartIfDue() 只在 paper 状态推进，整场不会开考，
+     *   考生被永久卡在等待室（此前唯一兜底是 ExamController::paper() 的按需补卷）。
+     *
+     * 设置为 0 表示关闭自动出题，完全由监考手动触发。
+     *
+     * @return bool 本次是否触发了出题
+     */
+    public static function autoGenerateIfDue(int $examId): bool
+    {
+        if ($examId <= 0) {
+            return false;
+        }
+        $lead = Setting::int('exam_auto_gen_lead_seconds', 10);
+        if ($lead <= 0) {
+            return false; // 0 = 关闭自动出题
+        }
+        // 先用一条廉价 COUNT 判断：只有「未出题且已到出题时点」的场次才值得
+        // 往下走。轮询每秒都可能打到这里，不能每次都 find + 组卷。
+        $deadline = date('Y-m-d H:i:s', time() + $lead);
+        $c = (int) (\Core\Database::fetch(
+            "SELECT COUNT(*) AS c FROM `examinfo`
+             WHERE id = ? AND exam_status = ?
+               AND exam_start IS NOT NULL AND exam_start <> ''
+               AND exam_start <> '0000-00-00 00:00:00'
+               AND exam_start <= ?",
+            [$examId, self::STATUS_EXAM, $deadline]
+        )['c'] ?? 0);
+        if ($c === 0) {
+            return false;
+        }
+
+        $exam = (new self())->find($examId);
+        if ($exam === null || (string) ($exam['exam_status'] ?? '') !== self::STATUS_EXAM) {
+            return false;
+        }
+
+        $result = ExamEngine::generateForClass($examId, $exam);
+        // 无人入场也要推进 exam → paper：否则此后入场的考生拿不到预生成卷，
+        // 且整场无法到点自动开考（试卷由 ExamController::paper() 惰性补卷兜底）。
+        if ((int) ($result['entered'] ?? 0) === 0) {
+            ExamEngine::markReady($examId);
+        }
+        return true;
     }
 
     /**
@@ -777,7 +854,7 @@ class Exam extends Model
         $closes    = self::entryClosesAt($exam);
         $pwdReady  = self::isOpenForEntry($exam);
         $now       = time();
-        $lead      = Setting::int('exam_entry_lead_minutes', 10);
+        $lead      = Setting::int('exam_entry_lead_minutes', 15);
         $late      = Setting::int('exam_entry_late_minutes', 0);
 
         $base = [
@@ -891,12 +968,13 @@ class Exam extends Model
                 'locked'  => (int) ($r['locked'] ?? 0),
                 'waiting' => (int) ($r['waiting'] ?? 0),
                 'over'    => (int) ($r['over_cnt'] ?? 0),
+                'entered' => (int) ($r['online'] ?? 0) + (int) ($r['locked'] ?? 0),
             ];
         }
         // 没有成绩行的场次也要给出全 0，否则前端拿到 undefined
         foreach ($ids as $id) {
             if (!isset($out[$id])) {
-                $out[$id] = ['total' => 0, 'online' => 0, 'locked' => 0, 'waiting' => 0, 'over' => 0];
+                $out[$id] = ['total' => 0, 'online' => 0, 'locked' => 0, 'waiting' => 0, 'over' => 0, 'entered' => 0];
             }
         }
         return $out;
@@ -945,6 +1023,10 @@ class Exam extends Model
             'locked'  => (int) ($row['locked'] ?? 0),
             'waiting' => (int) ($row['waiting'] ?? 0),
             'over'    => (int) ($row['over_cnt'] ?? 0),
+            // 已入场 = online + locked：考生一进入考场（等待室）就是 online，
+            // 与「是否已出题」无关。考前监考要看的正是这个数（谁来了、谁还没来），
+            // 此前只能靠 online/locked 自己在前端相加，各处口径不一。
+            'entered' => (int) ($row['online'] ?? 0) + (int) ($row['locked'] ?? 0),
         ];
     }
 

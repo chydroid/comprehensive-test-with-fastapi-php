@@ -103,6 +103,7 @@ export const teacherApi = {
   startExam:    (id) => http.post(`/teacher/exams/${id}/start`),
   openExam:     (id) => http.post(`/teacher/exams/${id}/open`),
   generatePapers: (id, body) => http.post(`/teacher/exams/${id}/generate`, body),
+  generatePlan:   (id) => http.get(`/teacher/exams/${id}/generate/plan`),
   examStudents: (id, params) => http.get(`/teacher/exams/${id}/students`, { query: params }),
   examQuizCount:(id, params) => http.get(`/teacher/exams/${id}/quiz-count`, { query: params }),
   // A2 成绩与学情分析（按考试）
@@ -181,6 +182,7 @@ export const adminApi = {
   startExam:    (id) => http.post(`/admin/exams/${id}/start`),
   openExam:     (id) => http.post(`/admin/exams/${id}/open`),
   generatePapers: (id, body) => http.post(`/admin/exams/${id}/generate`, body),
+  generatePlan:   (id) => http.get(`/admin/exams/${id}/generate/plan`),
   examQuizCount:(id, params) => http.get(`/admin/exams/${id}/quiz-count`, { query: params }),
   // A2 成绩与学情分析（按考试）
   examAnalysis: (id, params) => http.get(`/admin/exams/${id}/analysis`, { query: params }),

@@ -49,6 +49,8 @@ class MonitorController extends BaseController
                     if (Exam::autoEndIfDue((int) $e['id'])) {
                         continue;
                     }
+                    // 到点惰性自动出题（开考前 exam_auto_gen_lead_seconds 秒）
+                    Exam::autoGenerateIfDue((int) $e['id']);
                     // 到点惰性自动开考
                     Exam::autoStartIfDue((int) $e['id']);
                     $kept[] = $e;
@@ -70,6 +72,7 @@ class MonitorController extends BaseController
         }
 
         $this->assertExam($examId);
+        Exam::autoGenerateIfDue($examId);
         Exam::autoStartIfDue($examId);
         Exam::autoEndIfDue($examId);
         $data = $this->service->roster(

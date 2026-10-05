@@ -15,6 +15,7 @@ import { teacherApi } from '../../api/index.js';
 import { openExamEditor, deleteExam, openExamStudents } from './exam-editor.js';
 import { openComposerModal } from './composer.js';
 import { openRetakeDialog, retakeBadge } from '../retake.js';
+import { openGeneratePanel } from '../generate-panel.js';
 import { openSurveyDialog } from '../survey.js';
 import { fmtDateTime, fmtScore, fmtNumber, fmtRelative } from '../../core/format.js';
 import { loadAppSettings, appSettingInt, entryWindowText } from '../../core/app-settings.js';
@@ -108,6 +109,27 @@ export function TeacherExamsView({ router }) {
           ].filter(Boolean)),
           el('div.muted.small', { text: r.subj_name || '' }),
         ]) },
+        // 考场口令随考试一同生成，考前即可查看并告知考生；点击复制。
+        { key: 'exam_pwd', title: '考场口令', align: 'center', render: (r) => {
+          const pwd = String(r.exam_pwd ?? '');
+          if (!pwd || pwd === '0') return el('span.muted.small', { text: '—' });
+          return button(pwd, {
+            variant: 'ghost', size: 'xs', class: 'mono',
+            title: `考场口令 ${pwd}（点击复制）`,
+            onClick: () => copyWithToast(pwd, '考场口令'),
+          });
+        } },
+        // 到考情况：考前（未出题）就能看到「已入场 / 应考」，便于核对到场
+        { key: '_entry', title: '入场', align: 'center', render: (r) => {
+          const s = r.status_summary || {};
+          const eligible = Number(r.eligible_total ?? 0);
+          const entered = Number(s.entered ?? (Number(s.online ?? 0) + Number(s.locked ?? 0)));
+          return el('div.small', {}, [
+            el('div', {}, [el('strong', { text: String(entered) }),
+              eligible ? el('span.muted', { text: ` / ${eligible}` }) : null].filter(Boolean)),
+            Number(s.over ?? 0) ? el('div.muted', { text: `交卷 ${s.over}` }) : null,
+          ].filter(Boolean));
+        } },
         { key: 'exam_status', title: '状态', render: (r) => examStatusBadge(r.exam_status) },
         // A3 组卷模式标识：random 为默认（不展示标签），manual/by_kp 显式标出，
         // 避免教师对「题量/满分与组卷矩阵对不上」产生误解。
@@ -283,33 +305,10 @@ export function TeacherExamsView({ router }) {
 
   /** 出题：只为已进入考场的考生生成试卷 */
   async function generatePapers(r) {
-    const ok = await new Promise((resolve) => {
-      // 同 startExam：确认弹窗不 close 会遮挡出题成功的 toast，造成「无反馈」。
-      const dlg = openModal({
-        title: '开始出题',
-        size: 'sm',
-        body: el('p', { text: `将为本场考试「已进入考场」的考生生成试卷（未入场考生不出卷；已生成的不会被覆盖）。确定开始出题？` }),
-        footer: el('div.row.gap-sm', {}, [
-          button('取消', { variant: 'secondary', onClick: () => { dlg.close(); resolve(false); } }),
-          button('开始出题', { variant: 'primary', onClick: () => { dlg.close(); resolve(true); } }),
-        ]),
-        onClose: () => resolve(false),
-      });
+    // 出题过程逐人可见：先列出已入场考生，再分批推进（见 generate-panel.js）
+    await openGeneratePanel({
+      examId: r.id, examName: r.exam_name, api: teacherApi, onDone: () => load(),
     });
-    if (!ok) return;
-
-    const res = await withLoading(tableSlot, () => teacherApi.generatePapers(r.id, {}));
-    if (!res.ok) { notify.error(res.error?.message || '出题失败，请重试'); return; }
-    const d = res.result || {};
-    if ((d.entered ?? 0) === 0) {
-      notify.warning('本考场暂无考生入场，无需出卷');
-    } else {
-      notify.success(`出题完成：生成 ${d.generated ?? 0} 份${d.skipped ? `，跳过 ${d.skipped} 份` : ''}`);
-    }
-    if (Array.isArray(d.warnings) && d.warnings.length) {
-      notify.warning(d.warnings.map((w) => `${w.label || w.type}${w.diff_label || ''} 需 ${w.need} 题、库存 ${w.have}`).join('；'));
-    }
-    load();
   }
 
   async function showDetail(id) {
@@ -523,26 +522,10 @@ export function TeacherMonitorView({ router, query }) {
   }
 
   async function generatePapers() {
-    const ok = await new Promise((resolve) => {
-      openModal({
-        title: '开始出题',
-        size: 'sm',
-        body: el('p', { text: '将为本场考试每位考生随机生成一套试卷（已生成的不会被覆盖）。确定开始出题？' }),
-        footer: el('div.row.gap-sm', {}, [
-          button('取消', { variant: 'secondary', onClick: () => resolve(false) }),
-          button('开始出题', { variant: 'primary', onClick: () => resolve(true) }),
-        ]),
-      });
+    // 出题过程逐人可见：先列出已入场考生，再分批推进（见 generate-panel.js）
+    await openGeneratePanel({
+      examId: state.examId, examName: state.exam?.exam_name, api: teacherApi, onDone: () => init(),
     });
-    if (!ok) return;
-    const res = await withLoading(controlSlot, () => teacherApi.generatePapers(state.examId, {}));
-    if (!res.ok) return;
-    const d = res.result || {};
-    notify.success(`出题完成：生成 ${d.generated ?? 0} 份${d.skipped ? `，跳过 ${d.skipped} 份` : ''}`);
-    if (Array.isArray(d.warnings) && d.warnings.length) {
-      notify.warning(d.warnings.map((w) => `${w.label || w.type}${w.diff_label || ''} 需 ${w.need} 题、库存 ${w.have}`).join('；'));
-    }
-    init();
   }
 
   async function startExam() {

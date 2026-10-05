@@ -16,6 +16,7 @@ import { withLoading } from '../../core/bootstrap.js';
 import { entryWindowText, loadAppSettings } from '../../core/app-settings.js';
 import { fmtDateTime, fmtScore, fmtNumber, normalizeTime, defaultExamWindow } from '../../core/format.js';
 import { openRetakeDialog, retakeBadge } from '../retake.js';
+import { openGeneratePanel } from '../generate-panel.js';
 import { QUIZ_TYPE_LABELS } from './quiz.js';
 
 /** 组卷参与的种类（与后端 TYPE_PREFIXES 对应） */
@@ -115,6 +116,18 @@ export async function ExamView({ router, can }) {
           const label = classLabel(r.stu_class) || r.exam_class || '';
           return el('span.fs-sm', { text: label || '—', title: label });
         } },
+      // 考场口令：随考试一同生成，考前就要能直接看到并告知考生
+      // （此前只有点「开放入场」才有口令，考前无从发布）。点击即复制。
+      { key: 'exam_pwd', title: '考场口令', align: 'center', width: '110px',
+        render: (r) => {
+          const pwd = String(r.exam_pwd ?? '');
+          if (!pwd || pwd === '0') return el('span.fs-sm.c-tertiary', { text: '—' });
+          return button(pwd, {
+            variant: 'ghost', size: 'sm', class: 'mono',
+            title: `考场口令 ${pwd}（点击复制）`,
+            onClick: () => copyWithToast(pwd, '考场口令'),
+          });
+        } },
       { key: 'exam_start', title: '考试时间', width: '180px',
         render: (r) => el('div.fs-sm.mono', {}, [
           el('div', { text: fmtDateTime(r.exam_start) }),
@@ -126,20 +139,27 @@ export async function ExamView({ router, can }) {
         render: (r) => el('span.mono.fw-600', { text: fmtScore(r.computed_score) }) },
       { key: 'exam_status', title: '状态', align: 'center', width: '100px',
         render: (r) => statusBadge(r.exam_status) },
-      { key: 'progress', title: '考生进度', width: '150px',
+      { key: 'progress', title: '入场情况', width: '160px',
         render: (r) => {
           const s = r.status_summary || {};
-          const total = Number(s.total ?? 0);
-          if (!total) return el('span.fs-xs.c-tertiary', { text: '未开考' });
-          return el('div', {}, [
-            el('div.flex.gap-2.fs-xs.mb-1', {}, [
-              s.over ? el('span.c-success', { text: `交卷 ${s.over}` }) : null,
-              s.online ? el('span.c-brand', { text: `在线 ${s.online}` }) : null,
-              s.locked ? el('span.c-warning', { text: `锁定 ${s.locked}` }) : null,
-              s.waiting ? el('span.c-tertiary', { text: `待考 ${s.waiting}` }) : null,
-            ].filter(Boolean)),
-            el('div.fs-xs.c-tertiary', { text: `共 ${total} 人` }),
-          ]);
+          const eligible = Number(r.eligible_total ?? 0);
+          const entered = Number(s.entered ?? (Number(s.online ?? 0) + Number(s.locked ?? 0)));
+          const st = String(r.exam_status || '');
+          // 已入场 / 应考：考前（未出题）最关键的统计——谁来了、谁还没来。
+          // 此前只在 total>0 时才渲染，无人入场时显示「未开考」，
+          // 恰好把「考前核对到场情况」这个最需要它的窗口遮住了。
+          const head = el('div.flex.gap-2.fs-xs.mb-1', {}, [
+            el('span.fw-600', { text: `已入场 ${entered}` }),
+            eligible ? el('span.c-tertiary', { text: `应考 ${eligible}` }) : null,
+          ].filter(Boolean));
+          const tail = [];
+          if (Number(s.over ?? 0)) tail.push(el('span.c-success', { text: `交卷 ${s.over}` }));
+          if (Number(s.online ?? 0)) tail.push(el('span.c-brand', { text: `在线 ${s.online}` }));
+          if (Number(s.locked ?? 0)) tail.push(el('span.c-warning', { text: `锁定 ${s.locked}` }));
+          if (!tail.length && st !== 'exam' && st !== 'paper') {
+            tail.push(el('span.c-tertiary', { text: '无人入场' }));
+          }
+          return el('div', {}, [head, tail.length ? el('div.flex.gap-2.fs-xs.c-tertiary', {}, tail) : null].filter(Boolean));
         } },
     ],
 
@@ -537,60 +557,23 @@ export async function ExamView({ router, can }) {
 
   /* ============================ 生成试卷（出题） ============================ */
   async function openGenerate(row) {
+    // 出题前先看题库容量：不足时先让监考知情，避免出了残缺卷才发现
     const detail = await adminApi.exam(row.id).catch(() => null);
-    const studentCount = Number(detail?.stock?.student_count ?? 0);
-
-    const classText = classLabel(row.stu_class) || row.exam_class || '全部班级';
-    const body = el('div.stack');
-    body.append(alertBox(`将为「已进入考场」的考生（符合「${classText}」）逐人生成试卷；未入场考生不出卷。生成后考试状态变为「已组卷」。`, { type: 'info' }));
-
-    if (detail?.stock) {
-      body.append(descList([
-        ['参考班级', classText],
-        ['题量', `${fmtNumber(row.total_questions)} 题`],
-        ['满分', fmtScore(row.computed_score)],
-        ['预计考生数', fmtNumber(studentCount)],
-      ]));
-    }
-
-    if (detail?.warnings?.length) {
-      body.append(alertBox(detail.warnings.join('；'), { type: 'warning' }));
-    }
-
-    const resultSlot = el('div');
-    body.append(resultSlot);
-
-    const genBtn = button('开始生成试卷', { variant: 'primary', iconName: 'sparkles' });
-    const dlg = openModal({
-      title: `生成试卷 · ${row.exam_name}`,
-      body, size: 'lg',
-      footer: [button('关闭', { variant: 'secondary', onClick: () => dlg.close() }), genBtn],
-    });
-
-    genBtn.addEventListener('click', async () => {
-      const ok = await confirmDialog(`确定为 ${studentCount || '全部'} 名考生生成试卷吗？`, {
-        title: '生成试卷', confirmText: '生成', tone: 'warning',
-        detail: '已存在的试卷不会被覆盖。',
-      });
+    const stock = detail?.stock;
+    if (stock && stock.ok === false) {
+      const problems = (stock.shortfall || []).map((s) => `${s.type}(${s.diff}) 需 ${s.need} 道，实际 ${s.have} 道`);
+      const ok = await confirmDialog(
+        `题库题量不足（${problems.join('；')}），仍要继续出题吗？`,
+        { title: '题库不足', confirmText: '仍然出题', tone: 'danger',
+          detail: '继续出题会让部分考生拿到少于设定题量的试卷。' }
+      );
       if (!ok) return;
+    }
 
-      const { ok: done, error, result } = await withLoading(genBtn, () => adminApi.generatePapers(row.id, {}), { silent: true });
-      clear(resultSlot);
-      if (done) {
-        const r = result || {};
-        if ((r.entered ?? 0) === 0) {
-          resultSlot.append(alertBox('本考场暂无考生入场，无需出卷', { type: 'warning', title: '无需出卷' }));
-        } else {
-          resultSlot.append(alertBox(
-            `生成完成：成功 ${r.generated ?? r.count ?? 0} 份${r.skipped ? `，跳过 ${r.skipped} 份` : ''}`,
-            { type: 'success', title: '试卷生成成功' }
-          ));
-        }
-        if (r.warnings?.length) resultSlot.append(alertBox(r.warnings.join('；'), { type: 'warning' }));
-        list.load();
-      } else if (error) {
-        resultSlot.append(alertBox(error.message || '生成失败', { type: 'danger' }));
-      }
+    // 出题过程逐人可见：先列出已入场考生，再分批推进（见 generate-panel.js）
+    await openGeneratePanel({
+      examId: row.id, examName: row.exam_name, api: adminApi,
+      onDone: () => list.load(),
     });
   }
 

@@ -55,6 +55,7 @@ class TeacherMonitorController extends BaseController
                 [$teaName, Exam::MOCK_CLASS]
             );
             foreach ($exams as &$e) {
+                Exam::autoGenerateIfDue((int) $e['id']);
                 Exam::autoStartIfDue((int) $e['id']);
             }
             unset($e);
@@ -73,6 +74,7 @@ class TeacherMonitorController extends BaseController
         }
 
         $this->assertOwnExam($examId, $teaName);
+        Exam::autoGenerateIfDue($examId);
         Exam::autoStartIfDue($examId);
         Exam::autoEndIfDue($examId);
         $data = $this->service->roster(

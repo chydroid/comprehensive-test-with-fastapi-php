@@ -180,6 +180,8 @@ return [
     ['POST', '/api/teacher/exams/{id}/start', [TeacherExamController::class, 'start']],
     ['POST', '/api/teacher/exams/{id}/open', [TeacherExamController::class, 'open']],
     ['POST', '/api/teacher/exams/{id}/generate', [TeacherExamController::class, 'generatePapers']],
+    // 出题预览：已入场考生名单（分批推进出题过程用）
+    ['GET',  '/api/teacher/exams/{id}/generate/plan', [TeacherExamController::class, 'generatePlan']],
     // 补考（C2）：候选名单 + 生成补考场次
     ['GET',  '/api/teacher/exams/{id}/retake-candidates', [TeacherExamController::class, 'retakeCandidates']],
     ['POST', '/api/teacher/exams/{id}/retake', [TeacherExamController::class, 'retake']],
@@ -260,6 +262,8 @@ return [
     ['POST',   '/api/admin/exams/{id}/start', [ExamController::class, 'start']],
     ['POST',   '/api/admin/exams/{id}/open', [ExamController::class, 'open']],
     ['POST',   '/api/admin/exams/{id}/generate', [ExamController::class, 'generatePapers']],
+    // 出题预览：已入场考生名单（分批推进出题过程用）
+    ['GET',    '/api/admin/exams/{id}/generate/plan', [ExamController::class, 'generatePlan']],
     // 补考（C2）：候选名单 + 生成补考场次
     ['GET',    '/api/admin/exams/{id}/retake-candidates', [ExamController::class, 'retakeCandidates']],
     ['POST',   '/api/admin/exams/{id}/retake', [ExamController::class, 'retake']],

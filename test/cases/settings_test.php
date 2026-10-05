@@ -49,6 +49,7 @@ if (!Harness::dbAvailable()) {
 const S_KEYS = [
     'exam_entry_lead_minutes', 'exam_entry_late_minutes', 'exam_pwd_length',
     'exam_allow_view_answer', 'exam_show_score_immediately',
+    'exam_auto_gen_lead_seconds', 'exam_notice',
     'login_max_attempts', 'login_window_minutes', 'password_min_length',
     'rate_limit_enabled', 'rate_limit_max_requests', 'rate_limit_window_seconds',
     'page_size_default', 'waiting_poll_seconds', 'monitor_refresh_seconds',
@@ -87,9 +88,10 @@ Fixture::cleanup();
 $t->guard('默认值：未配置时读取 schema 默认值', function () use ($t) {
     Setting::flush();
     $all = Setting::all();
-    $t->assertSame('考试入场提前量默认 10 分钟', 10, (int) ($all['exam_entry_lead_minutes'] ?? -1));
+    $t->assertSame('考试入场提前量默认 15 分钟', 15, (int) ($all['exam_entry_lead_minutes'] ?? -1));
     $t->assertSame('迟到宽限默认 0（开考后不得入场）', 0, (int) ($all['exam_entry_late_minutes'] ?? -1));
     $t->assertSame('口令位数默认 6', 6, (int) ($all['exam_pwd_length'] ?? -1));
+    $t->assertSame('自动出题提前量默认 10 秒', 10, (int) ($all['exam_auto_gen_lead_seconds'] ?? -1));
     $t->assertSame('每页条数默认 20', 20, (int) ($all['page_size_default'] ?? -1));
     $t->assertSame('全部 schema 键均已返回', count(S_KEYS), count(array_intersect(S_KEYS, array_keys($all))));
 });
@@ -198,9 +200,9 @@ $t->guard('putMany(null) 撤销覆盖 → 删除行并回落默认值', function
     $saved = Setting::putMany(['exam_entry_lead_minutes' => null]);
     $t->assertTrue('撤销后 siteconfig 无该行', Setting::stored('exam_entry_lead_minutes') === null);
     $t->assertTrue('撤销后不再出现在 storedKeys()', !in_array('exam_entry_lead_minutes', Setting::storedKeys(), true));
-    $t->assertSame('撤销后取值回落默认 10', 10, (int) Setting::get('exam_entry_lead_minutes'));
+    $t->assertSame('撤销后取值回落默认 15', 15, (int) Setting::get('exam_entry_lead_minutes'));
     // 返回口径：撤销项汇报「生效后的值」，调用方无需再查一次
-    $t->assertSame('返回值即生效值（默认 10）', 10, (int) $saved['exam_entry_lead_minutes']);
+    $t->assertSame('返回值即生效值（默认 15）', 15, (int) $saved['exam_entry_lead_minutes']);
 
     // 幂等：对本来就没有行的键撤销，不抛错也不产生行
     Setting::putMany(['exam_entry_lead_minutes' => null]);
@@ -219,7 +221,7 @@ $t->guard('撤销与写入可同请求混用，且未知键不参与', function 
 
     $t->assertTrue('撤销的键已无行', Setting::stored('exam_entry_lead_minutes') === null);
     $t->assertSame('同时写入的键保留新值', '25', (string) Setting::stored('page_size_default'));
-    $t->assertSame('撤销的键回落默认', 10, (int) Setting::get('exam_entry_lead_minutes'));
+    $t->assertSame('撤销的键回落默认 15', 15, (int) Setting::get('exam_entry_lead_minutes'));
     $t->assertSame('写入的键生效新值', 25, (int) Setting::get('page_size_default'));
 
     // 只有未知键时仍应判定为「无可更新项」，不能静默成功
@@ -239,7 +241,8 @@ $t->guard('公开接口下发客户端参数', function () use ($t) {
     $res = Http::get('/api/public/settings');
     $t->assertSame('公开设置 -> 200', 200, $res['status']);
     $data = Http::data($res) ?? [];
-    $t->assertSame('含入场提前量', 10, (int) ($data['exam_entry_lead_minutes'] ?? -1));
+    $t->assertSame('含入场提前量', 15, (int) ($data['exam_entry_lead_minutes'] ?? -1));
+    $t->assertSame('含自动出题提前量', 10, (int) ($data['exam_auto_gen_lead_seconds'] ?? -1));
     $t->assertTrue('不含限流阈值', !array_key_exists('rate_limit_max_requests', $data));
 });
 
@@ -334,11 +337,11 @@ $t->guard('HTTP 层可撤销覆盖（PUT null → 回落默认）', function () 
     $res = Http::put('/api/admin/settings', ['exam_entry_lead_minutes' => null], ['X-CSRF-Token' => $csrf]);
     $t->assertSame('PUT null -> 200', 200, $res['status']);
     $saved = Http::data($res)['saved'] ?? [];
-    $t->assertSame('响应汇报撤销后的生效值（默认 10）', 10, (int) ($saved['exam_entry_lead_minutes'] ?? -1));
+    $t->assertSame('响应汇报撤销后的生效值（默认 15）', 15, (int) ($saved['exam_entry_lead_minutes'] ?? -1));
 
     Setting::flush();
     $t->assertTrue('行已删除', Setting::stored('exam_entry_lead_minutes') === null);
-    $t->assertSame('取值回落默认 10', 10, Setting::int('exam_entry_lead_minutes'));
+    $t->assertSame('取值回落默认 15', 15, Setting::int('exam_entry_lead_minutes'));
     $stored = Http::data(Http::get('/api/admin/settings'))['stored'] ?? [];
     $t->assertTrue('stored 列表已不含该键', !in_array('exam_entry_lead_minutes', $stored, true));
 });
@@ -565,7 +568,7 @@ Fixture::cleanup();
 $t->guard('收尾：设置已恢复默认', function () use ($t) {
     Setting::flush();
     $all = Setting::all();
-    $t->assertSame('入场提前量回到 10', 10, (int) $all['exam_entry_lead_minutes']);
+    $t->assertSame('入场提前量回到 15', 15, (int) $all['exam_entry_lead_minutes']);
     $t->assertSame('每页条数回到 20', 20, (int) $all['page_size_default']);
     $t->assertTrue('未残留任何设置行', Setting::stored('exam_entry_lead_minutes') === null);
 });

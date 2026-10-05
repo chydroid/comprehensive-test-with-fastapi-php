@@ -56,8 +56,12 @@ final class ExamEngine
                 [$examId, $stuId]
             );
             if ((int) ($existing['c'] ?? 0) > 0) {
+                $already = (int) (Database::fetch(
+                    'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ? AND stu_id = ?',
+                    [$examId, $stuId]
+                )['c'] ?? 0);
                 Database::commit();
-                return ['generated' => false, 'warnings' => []];
+                return ['generated' => false, 'warnings' => [], 'questions' => $already];
             }
 
             // 确保成绩记录存在（考场口令/状态管理依赖它）
@@ -150,6 +154,12 @@ final class ExamEngine
                 );
             }
 
+            // 卷面题数：与插入同一事务内统计，供管理端逐人展示出题结果
+            $questions = (int) (Database::fetch(
+                'SELECT COUNT(*) AS c FROM `stupaper` WHERE exam_id = ? AND stu_id = ?',
+                [$examId, $stuId]
+            )['c'] ?? 0);
+
             Database::commit();
         } catch (\Throwable $e) {
             if (Database::inTransaction()) {
@@ -158,7 +168,7 @@ final class ExamEngine
             throw $e;
         }
 
-        return ['generated' => true, 'warnings' => $warnings];
+        return ['generated' => true, 'warnings' => $warnings, 'questions' => $questions];
     }
 
     /** 插入一条试卷题目（stupaper），optionOrder 为选项乱序展示序列（字母序列，可为空） */
@@ -282,17 +292,41 @@ final class ExamEngine
      * @param array $exam examinfo 行（用于取 stu_class 与组卷参数）
      * @return array{students:int, entered:int, generated:int, skipped:int, warnings:array<int,array{type:string,diff:string,need:int,have:int}>}
      */
-    public static function generateForClass(int $examId, array $exam): array
+    /**
+     * 为已进入考场的考生批量出题。
+     *
+     * @param int $examId
+     * @param array $exam examinfo 行
+     * @param string[]|null $stuIds 限定只给这些考生出题（管理端分批推进用）；
+     *                              null = 全部已入场考生（原有行为）
+     * @return array{students:int, entered:int, pending:int, generated:int, skipped:int,
+     *               warnings:array, details:array}
+     */
+    public static function generateForClass(int $examId, array $exam, ?array $stuIds = null): array
     {
         // 只给已进入考场的考生出卷：stu_status ∈ {online, locked}。
         // 名单来源（班级/补考名单）仅用于「有无参考对象」的防守校验（见控制器），
         // 真正的出卷范围由本方法按「实际入场状态」决定。
         $entered = self::enteredStudentIds($examId);
 
+        // 指定了考生子集时只处理其中「确实已入场」的那些：
+        // 未入场者不该被提前出卷（否则等于把试题发给还没进考场的人）。
+        if ($stuIds !== null) {
+            $wanted = array_fill_keys(array_map('strval', $stuIds), true);
+            $targets = array_values(array_filter($entered, static fn (string $id): bool => isset($wanted[$id])));
+        } else {
+            $targets = $entered;
+        }
+
+        // 姓名一次取回：管理端要逐人展示「正在给谁出题 / 出好了几题」，
+        // 不能让前端拿准考证号去猜人。
+        $names = self::studentNames($targets);
+
         $generated = 0;
         $skipped = 0;
         $warnings = [];
-        foreach ($entered as $stuId) {
+        $details = [];
+        foreach ($targets as $stuId) {
             $r = self::generatePaper($examId, (string) $stuId);
             if ($r['generated']) {
                 $generated++;
@@ -302,6 +336,12 @@ final class ExamEngine
             foreach ($r['warnings'] as $w) {
                 $warnings[$w['type'] . '_' . $w['diff']] = $w;
             }
+            $details[] = [
+                'stu_id'    => (string) $stuId,
+                'stu_name'  => $names[(string) $stuId] ?? '',
+                'generated' => (bool) $r['generated'],
+                'questions' => (int) ($r['questions'] ?? 0),
+            ];
         }
 
         // 只要该考试已存在试卷就视为「已出题」，推进为「已排卷」。
@@ -322,10 +362,65 @@ final class ExamEngine
         return [
             'students'  => count($entered),
             'entered'   => count($entered),
+            'pending'   => count($targets),
             'generated' => $generated,
             'skipped'   => $skipped,
             'warnings'  => array_values($warnings),
+            'details'   => $details,
         ];
+    }
+
+    /**
+     * 批量取考生姓名（准考证号 → 姓名）。
+     * 取不到的返回空串，不阻断出题：姓名只用于展示。
+     *
+     * @param string[] $stuIds
+     * @return array<string,string>
+     */
+    private static function studentNames(array $stuIds): array
+    {
+        $ids = array_values(array_filter(array_map('strval', $stuIds), static fn (string $v): bool => $v !== ''));
+        if ($ids === []) {
+            return [];
+        }
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        $out = [];
+        foreach (Database::fetchAll(
+            "SELECT id, stu_name FROM `stuinfo` WHERE id IN ({$ph})",
+            $ids
+        ) as $r) {
+            $out[(string) $r['id']] = (string) ($r['stu_name'] ?? '');
+        }
+        return $out;
+    }
+
+    /**
+     * 待出题考生名单（已入场者），含姓名与「是否已有卷」。
+     *
+     * 管理端出题面板据此先把要出题的人全部列出来（排队中），再分批推进逐人点亮，
+     * 让监考看得见「正在给谁出题」，而不是点一下等一个转圈。
+     *
+     * @return array<int,array{stu_id:string,stu_name:string,has_paper:bool,questions:int}>
+     */
+    public static function pendingStudents(int $examId): array
+    {
+        $rows = Database::fetchAll(
+            "SELECT s.stu_id,
+                    COALESCE(i.stu_name, '') AS stu_name,
+                    (SELECT COUNT(*) FROM `stupaper` p
+                      WHERE p.exam_id = s.exam_id AND p.stu_id = s.stu_id) AS q_cnt
+             FROM `stuscore` s
+             LEFT JOIN `stuinfo` i ON i.id = s.stu_id
+             WHERE s.exam_id = ? AND s.stu_status IN ('online', 'locked')
+             ORDER BY s.stu_id",
+            [$examId]
+        );
+        return array_map(static fn (array $r): array => [
+            'stu_id'    => (string) $r['stu_id'],
+            'stu_name'  => (string) ($r['stu_name'] ?? ''),
+            'questions' => (int) ($r['q_cnt'] ?? 0),
+            'has_paper' => (int) ($r['q_cnt'] ?? 0) > 0,
+        ], $rows);
     }
 
     /**
