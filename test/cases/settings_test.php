@@ -52,6 +52,7 @@ const S_KEYS = [
     'login_max_attempts', 'login_window_minutes', 'password_min_length',
     'rate_limit_enabled', 'rate_limit_max_requests', 'rate_limit_window_seconds',
     'page_size_default', 'waiting_poll_seconds', 'monitor_refresh_seconds',
+    'exam_notice',
 ];
 
 const S_ADMIN = '__TEST__setadmin';
@@ -148,6 +149,35 @@ $t->guard('public 子集不包含安全策略', function () use ($t) {
               'rate_limit_max_requests', 'rate_limit_window_seconds'] as $secret) {
         $t->assertTrue("不含 {$secret}", !array_key_exists($secret, $pub));
     }
+});
+
+$t->guard('考试注意事项：可配置、公开下发、多行', function () use ($t) {
+    settingsReset();
+    $def = Setting::get('exam_notice', '');
+    $t->assertTrue('默认非空', is_string($def) && trim($def) !== '', var_export($def, true));
+    $t->assertTrue('默认是多行（等待室按条目渲染）', substr_count((string) $def, "\n") >= 2);
+
+    $pub = Setting::publicSubset();
+    $t->assertTrue('公开子集含 exam_notice（等待室未登录也要能取到）', array_key_exists('exam_notice', $pub));
+
+    $meta = Setting::adminSchema();
+    $hit = null;
+    foreach ($meta['fields'] as $f) {
+        if ($f['key'] === 'exam_notice') { $hit = $f; break; }
+    }
+    $t->assertTrue('后台表单能拿到该字段', $hit !== null);
+    $t->assertSame('标记为多行（渲染成 textarea）', true, (bool) ($hit['multiline'] ?? false));
+    $t->assertSame('归属考试规则分组', 'exam', (string) ($hit['group'] ?? ''));
+
+    // 写入多行文本后原样读回（不能被 trim 成一行、也不能被截断）
+    $custom = "第一条：带好证件。\n第二条：关闭手机。\n第三条：听从监考安排。";
+    Setting::putMany(['exam_notice' => $custom]);
+    $t->assertSame('多行文本写读一致', $custom, (string) Setting::get('exam_notice', ''));
+
+    // 清空 = 撤销覆盖，回落默认文案
+    Setting::putMany(['exam_notice' => null]);
+    $t->assertSame('清空后回落默认', (string) $def, (string) Setting::get('exam_notice', ''));
+    settingsReset();
 });
 
 $t->guard('stored() 区分未配置与配置为默认值', function () use ($t) {

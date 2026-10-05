@@ -167,15 +167,24 @@ export function ConfigView() {
       } else if (f.type === 'string') {
         // secret 项用密码框：API Key 不该在屏幕上明文铺开（尤其是共享屏幕的场景）。
         // 值本身仍由服务端原样下发，管理员需要能核对填的是不是自己那一把钥匙。
-        const box = input({
-          name: f.key, type: f.secret ? 'password' : 'text',
-          value: f.value ?? '', maxlength: f.max || '',
-          placeholder: f.secret ? '未配置' : '',
-          autocomplete: 'off',
-        });
+        // multiline 项（如考试注意事项）用多行文本框：内容是一行一条的列表，
+        // 单行输入框既看不到全貌也没法换行。
+        const box = f.multiline
+          ? textarea({ name: f.key, value: f.value ?? '', rows: 6, placeholder: f.placeholder || '' })
+          : input({
+            name: f.key, type: f.secret ? 'password' : 'text',
+            value: f.value ?? '', maxlength: f.max || '',
+            placeholder: f.secret ? '未配置' : '',
+            autocomplete: 'off',
+          });
         node = box;
-        // input() 无 suffix 时直接返回 <input>，有 suffix 时返回包裹层
-        ctl[f.key] = { type: 'string', input: box.tagName === 'INPUT' ? box : box.querySelector('input'), field: f };
+        // input() 无 suffix 时直接返回 <input>，有 suffix 时返回包裹层；
+        // textarea() 返回 <textarea> 本身（不能去 querySelector('input')，会拿到 null）
+        ctl[f.key] = {
+          type: 'string',
+          input: box.tagName === 'INPUT' || box.tagName === 'TEXTAREA' ? box : box.querySelector('input'),
+          field: f,
+        };
       } else {
         node = input({
           name: f.key, type: 'number', value: String(f.value),

@@ -81,6 +81,17 @@ final class Setting
                      . '用百分比而非固定分数，是因为各场考试满分由组卷参数算出、差异很大'
                      . '（50 分卷与 200 分卷的「60 分」含义完全不同）。',
         ],
+        'exam_notice' => [
+            'group' => 'exam', 'type' => 'string', 'max' => 500, 'multiline' => true, 'public' => true,
+            'default' => "1. 请提前确认网络与设备正常，建议使用电脑答题，避免中途断电或断网。\n"
+                       . "2. 进入考场后请保持本页面在前台，切屏或离开窗口可能被记录为异常行为。\n"
+                       . "3. 答题过程会自动保存，仍建议答完一题及时翻页，不要长时间停留在同一题。\n"
+                       . "4. 考试时间以系统倒计时为准，时间到系统将自动交卷，请合理分配答题时间。\n"
+                       . "5. 交卷后无法再次进入本场考试，交卷前请确认已检查完毕。",
+            'label' => '考试注意事项',
+            'hint'  => '考生进入考场后、等待开考期间看到的事项提醒，**一行一条**（用回车换行）。'
+                     . '条目编号可由管理员自己写，前端统一按有序列表渲染。清空则回落默认文案。',
+        ],
 
         /* ---------------- 模拟考试与练习 ----------------
          *
@@ -353,8 +364,10 @@ final class Setting
                 'min'     => $def['min'] ?? null,
                 'max'     => $def['max'] ?? null,
                 // secret 项即便标了 public 也绝不外泄（见 publicSubset）
-                'secret'  => !empty($def['secret']),
-                'default' => $def['default'],
+                'secret'    => !empty($def['secret']),
+                // 多行文本（如考试注意事项）在后台渲染为 textarea 而非单行输入框
+                'multiline' => !empty($def['multiline']),
+                'default'   => $def['default'],
                 'value'   => $values[$key],
             ];
         }

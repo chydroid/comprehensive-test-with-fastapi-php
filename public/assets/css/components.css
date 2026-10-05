@@ -831,3 +831,49 @@
   font-weight: 700;
   transform: rotate(-12deg);
 }
+
+/* ============================ 19. 考场等待室（入场后 / 开考前） ============================
+ *
+ * 等待室三块内容自上而下：大号倒计时（或「进入考场」按钮）→ 考试基本信息 → 注意事项。
+ * 倒计时用等宽数字（tabular-nums），否则每秒跳字时整行宽度会抖动。
+ * ====================================================================================== */
+.wait-room { gap: var(--sp-4); }
+.wait-gate { text-align: center; padding: var(--sp-2) 0; }
+
+.wait-cd-label {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  letter-spacing: .08em;
+}
+.wait-cd-value {
+  margin-top: var(--sp-2);
+  font-size: clamp(32px, 8vw, 56px);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--brand-600);
+  letter-spacing: .04em;
+}
+.wait-enter-box { padding-top: var(--sp-2); }
+.wait-enter {
+  height: 58px;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-brand);
+}
+.wait-notice {
+  margin: 0;
+  padding-left: var(--sp-5);
+  display: grid;
+  gap: var(--sp-2);
+  color: var(--text-secondary);
+  line-height: var(--lh-normal);
+}
+.wait-notice li { list-style: decimal; }
+
+@media (max-width: 480px) {
+  .wait-cd-value { font-size: 38px; }
+  .wait-enter { height: 52px; font-size: var(--fs-lg); }
+}

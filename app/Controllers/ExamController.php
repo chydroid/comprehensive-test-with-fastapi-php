@@ -159,15 +159,8 @@ class ExamController extends BaseController
 
         return $this->ok([
             'csrf_token' => $csrf,
-            'exam' => [
-                'id'          => (int) $exam['id'],
-                'exam_name'   => $exam['exam_name'],
-                'exam_start'  => $exam['exam_start'],
-                'exam_end'    => $exam['exam_end'],
-                'exam_score'  => (int) $exam['exam_score'],
-                'exam_status' => $exam['exam_status'],
-            ],
-            'stu_name' => $student['stu_name'],
+            'exam'       => $this->examPayload($exam),
+            'stu_name'   => $student['stu_name'],
             'phase'    => $phase,
             'warnings' => [],
             'cheat_guard' => Setting::bool('enable_cheat_guard') ? 1 : 0,
@@ -258,14 +251,7 @@ class ExamController extends BaseController
             'paper_ready' => $paperReady,
             'score_visible' => Setting::bool('exam_show_score_immediately', true),
             'allow_view_answer' => Setting::bool('exam_allow_view_answer', true),
-            'exam'        => $exam === null ? null : [
-                'id'          => (int) $exam['id'],
-                'exam_name'   => $exam['exam_name'],
-                'exam_start'  => $exam['exam_start'],
-                'exam_end'    => $exam['exam_end'],
-                'exam_score'  => (int) $exam['exam_score'],
-                'exam_status' => $exam['exam_status'],
-            ],
+            'exam'        => $this->examPayload($exam),
             'stu_name'   => $sess['stu_name'] ?? '',
             // 答题页刷新后前端的 csrfToken 会随模块状态一起重置为空，
             // 而本接口是答题页启动 / 轮询的唯一入口，故在此重新下发令牌，
@@ -565,6 +551,54 @@ class ExamController extends BaseController
     }
 
     /* ------------------------------------------------------------------ */
+
+    /**
+     * 考生端可见的考试信息（等待室「考试基本信息」与倒计时用）。
+     *
+     * 除场次名与起止时间外，额外下发三项**前端无从自行算出**的信息：
+     *   - subj_name        科目名：需 join subject 表，前端手里只有 subj_id；
+     *   - question_total   题目总数：组卷参数里 4 类题 × 3 档难度共 12 个 _sum 字段之和；
+     *   - duration_minutes 考试时长：起止时间差。放在后端算是因为 exam_start/exam_end
+     *                      可能是零值日期或空串，前端解析极易得到 NaN。
+     *
+     * 保持只读不写：本方法不承担任何状态推进。
+     */
+    private function examPayload(?array $exam): ?array
+    {
+        if ($exam === null) {
+            return null;
+        }
+
+        $subjName = '';
+        $subjId = (int) ($exam['subj_id'] ?? 0);
+        if ($subjId > 0) {
+            $row = Database::fetch('SELECT subj_name FROM `subject` WHERE id = ?', [$subjId]);
+            $subjName = (string) ($row['subj_name'] ?? '');
+        }
+
+        $questionTotal = 0;
+        foreach (Exam::paperPlan($exam) as $seg) {
+            $questionTotal += (int) $seg['easy'] + (int) $seg['mid'] + (int) $seg['hard'];
+        }
+
+        $start = strtotime((string) ($exam['exam_start'] ?? ''));
+        $end   = strtotime((string) ($exam['exam_end'] ?? ''));
+        $duration = ($start !== false && $end !== false && $end > $start)
+            ? (int) round(($end - $start) / 60)
+            : 0;
+
+        return [
+            'id'               => (int) $exam['id'],
+            'exam_name'        => (string) ($exam['exam_name'] ?? ''),
+            'exam_start'       => $exam['exam_start'] ?? null,
+            'exam_end'         => $exam['exam_end'] ?? null,
+            'exam_score'       => (int) ($exam['exam_score'] ?? 0),
+            'exam_status'      => (string) ($exam['exam_status'] ?? ''),
+            'subj_name'        => $subjName,
+            'question_total'   => $questionTotal,
+            'duration_minutes' => $duration,
+        ];
+    }
 
     /**
      * 本场考试对当前考生的阶段：

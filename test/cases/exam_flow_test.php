@@ -115,6 +115,41 @@ $t->guard('窗口内凭口令入场成功', function () use ($t, $examId, $fx) {
     $t->assertSame('入场后状态 online', 'online', (string) ($row['stu_status'] ?? ''));
 });
 
+/* ---------- 4b. 等待室契约：前端倒计时 / 基本信息所需的字段必须齐全 ----------
+ *
+ * 等待室要显示「距开考还有多久」与「考试基本信息（科目 / 时长 / 满分 / 题量）」。
+ * 科目名要 join subject、题量是 12 个组卷参数之和、时长要处理零值日期，
+ * 三者前端都算不出来，必须由后端下发。字段一旦缺失，等待室会静默显示「—」，
+ * 因此在这里锁死契约。
+ */
+$t->guard('等待室下发倒计时与考试基本信息所需字段', function () use ($t, $examId) {
+    $res = Http::get('/api/exam/status');
+    $t->assertSame('状态接口 -> 200', 200, $res['status']);
+    $data = Http::data($res);
+    $exam = is_array($data['exam'] ?? null) ? $data['exam'] : [];
+
+    $t->assertTrue(
+        '含 exam_start（倒计时基准）',
+        array_key_exists('exam_start', $exam) && (string) $exam['exam_start'] !== '',
+        json_encode(array_keys($exam), JSON_UNESCAPED_UNICODE)
+    );
+    $t->assertTrue(
+        '含 server_ts（倒计时以服务端时间为准，防改本机时钟）',
+        array_key_exists('server_ts', $data) && (int) $data['server_ts'] > 0,
+        json_encode(array_keys($data), JSON_UNESCAPED_UNICODE)
+    );
+    $t->assertTrue(
+        '含科目名 subj_name',
+        array_key_exists('subj_name', $exam) && (string) $exam['subj_name'] !== '',
+        json_encode($exam, JSON_UNESCAPED_UNICODE)
+    );
+    // 夹具：4 种题型各 1 题、每题 5 分、开考 5 分钟后、结束 65 分钟后 → 60 分钟 / 20 分
+    $t->assertSame('题目总数 = 4', 4, (int) ($exam['question_total'] ?? -1));
+    $t->assertSame('考试时长 = 60 分钟', 60, (int) ($exam['duration_minutes'] ?? -1));
+    $t->assertSame('试卷满分 = 20', 20, (int) ($exam['exam_score'] ?? -1));
+    $t->assertSame('考试编号一致', $examId, (int) ($exam['id'] ?? 0));
+});
+
 /* ---------- 5. 开考后未入场者被拒（新规则） ---------- */
 $t->guard('开考后无法再入场', function () use ($t) {
     // exam_start 已过 → 入场窗口关闭

@@ -1,22 +1,28 @@
 /**
- * 考场（正式考试）视图：登录入场 + 等待开考 + 答题（复用 exam-runner）。
+ * 考场（正式考试）视图：登录入场 + 等待室（倒计时）+ 答题（复用 exam-runner）。
  *
  * 流程：入场（准考证号 + 密码 + 考场口令，入场窗口由后台「系统设置 → 考试规则」控制）
- *   → 等待室（轮询 /api/exam/status，到点/监考开考后自动进入答题）
- *   → 答题（exam-runner）。
+ *   → 等待室（大号倒计时 → 考试基本信息 → 考试注意事项；归零后出现「进入考场」大按钮）
+ *   → 点击按钮进入答题（exam-runner）。
+ *
+ * 两个关键决策：
+ *  1) 倒计时以**服务端时间**为准（status 每次回传 server_ts），考生改本机时钟
+ *     不能提前入场；
+ *  2) 到点后不再自动跳进答题页，必须考生自己点按钮 —— 避免「开考瞬间整场考生
+ *     同时拉卷」造成尖峰，也让考生能看清注意事项再开始。
  */
 
 import { el, clear, mount } from '../../core/dom.js';
 import { icon } from '../../core/icons.js';
 import { logoMark } from '../../core/logo.js';
-import { button, card, field, input, notify, alertBox } from '../../ui/components.js';
+import { button, card, field, input, notify, alertBox, descList } from '../../ui/components.js';
 import { withLoading } from '../../core/bootstrap.js';
 import { examApi } from '../../api/index.js';
 import { setCsrfToken } from '../../core/http.js';
 import { createExamRunner } from '../exam-runner.js';
-import { fmtDateTime } from '../../core/format.js';
+import { fmtDateTime, toDate } from '../../core/format.js';
 import {
-  loadAppSettings, appSettingInt, entryWindowText,
+  loadAppSettings, appSetting, appSettingInt, entryWindowText,
 } from '../../core/app-settings.js';
 
 /**
@@ -91,16 +97,54 @@ export function ExamLoginView({ router, query }) {
 }
 
 /* ============================ 等待室 + 答题中 ============================ */
+
+/** 倒计时剩余秒 → 「1 天 02:03:04」/「02:03:04」 */
+export function fmtCountdown(left) {
+  const s = Math.max(0, Math.floor(Number(left) || 0));
+  const p = (n) => String(n).padStart(2, '0');
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return d > 0
+    ? `${d} 天 ${p(h)}:${p(m)}:${p(s % 60)}`
+    : `${p(h)}:${p(m)}:${p(s % 60)}`;
+}
+
+/**
+ * 注意事项文本 → 条目数组。
+ * 行首自带的编号 / 项目符号会被剥掉，编号统一交给 <ol> 渲染，
+ * 管理员写「1. xxx」或「- xxx」都得到同一份有序列表。
+ */
+export function examNoticeLines(text) {
+  return String(text ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[0-9]+[.、)．]|[•·\-*])\s*/, '').trim())
+    .filter(Boolean);
+}
+
 export function ExamTakeView({ router, query }) {
   const examId = Number(query?.exam_id || 0);
   const host = el('div.stack');
 
   let runner = null;
   let pollTimer = null;
+  let tickTimer = null;
   let started = false;
   let beforeUnload = null;
+  /**
+   * 服务端时间偏移：Date.now() + serverOffset ≈ 服务端当前时刻。
+   * 倒计时必须以它为准 —— 否则考生把本机时钟调快就能提前点进考场。
+   */
+  let serverOffset = 0;
+
+  const serverNow = () => Date.now() + serverOffset;
+  const syncServerTime = (ts) => {
+    const n = Number(ts) || 0;
+    if (n > 0) serverOffset = n * 1000 - Date.now();
+  };
 
   const stopPoll = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
+  const stopTick = () => { if (tickTimer) { clearInterval(tickTimer); tickTimer = null; } };
 
   const onBeforeUnload = (e) => {
     // 仅在答题进行中阻止误关闭；等待室与已结束不拦截
@@ -120,20 +164,93 @@ export function ExamTakeView({ router, query }) {
     if (data.csrf_token) setCsrfToken(data.csrf_token);
     if (data.phase === 'answering') { startRunner(data.stu_name); return; }
     if (data.phase === 'submitted' || data.phase === 'closed') { renderClosed(data); return; }
-    renderWaiting(data.exam);
+    renderWaiting(data.exam, { stuName: data.stu_name, serverTs: data.server_ts });
   }
 
-  function renderWaiting(exam) {
-    mount(host, el('div', {}, el('div.card', {}, el('div.card-body.text-center', {}, [
-      el('div.mb-2', {}, [icon('clock', { size: 34 })]),
-      el('h2', { text: exam?.exam_name || '考场' }),
-      el('p.muted.mt-1', { text: '你已进入考场，正在等待开考…' }),
-      el('p.fs-sm.c-secondary', { text: exam?.exam_start ? `开考时间：${fmtDateTime(exam.exam_start)}` : '' }),
-      el('p.fs-sm.c-secondary.mt-1', { text: '开考后本页会自动进入答题界面，请保持本页开启。' }),
-      el('div.mt-3', {}, [button('刷新状态', { variant: 'secondary', size: 'sm', iconName: 'refresh-cw', onClick: () => boot() })]),
-    ]))));
-
+  /**
+   * 等待室：倒计时 → 考试基本信息 → 注意事项 → 「进入考场」按钮。
+   *
+   * 状态机只有两个互斥态：
+   *   - 倒计时中：显示剩余时间，隐藏进入按钮；
+   *   - 可进入：隐藏倒计时，显示大按钮（归零后或服务端已开考）。
+   */
+  function renderWaiting(exam, { stuName = '', serverTs = 0 } = {}) {
+    stopTick();
     stopPoll();
+    syncServerTime(serverTs);
+
+    const startTs = toDate(exam?.exam_start)?.getTime() || 0;
+    let ready = false; // 服务端是否已开考
+
+    /* ---- 倒计时 ---- */
+    const cdLabel = el('div.wait-cd-label', { text: startTs ? '距开考还有' : '等待监考教师开考' });
+    const cdValue = el('div.wait-cd-value', { text: fmtCountdown(0) });
+    const cdBox = el('div.wait-cd', {}, [cdLabel, cdValue]);
+
+    /* ---- 进入考场按钮 ---- */
+    const enterNote = el('p.muted.mt-2', { text: '' });
+    const enterBtn = button('进入考场', {
+      variant: 'primary', size: 'lg', block: true, class: 'wait-enter', iconName: 'log-in',
+      onClick: () => enterExam(),
+    });
+    const enterBox = el('div.wait-enter-box', { style: { display: 'none' } }, [enterBtn, enterNote]);
+
+    /** 按当前状态切换「倒计时 / 进入按钮」 */
+    function updateGate() {
+      if (ready) {
+        stopTick();
+        cdBox.style.display = 'none';
+        enterBox.style.display = '';
+        enterNote.textContent = '本场考试已开考，点击进入考场开始答题。';
+        return;
+      }
+      const left = startTs ? Math.max(0, Math.ceil((startTs - serverNow()) / 1000)) : 0;
+      cdValue.textContent = fmtCountdown(left);
+      if (left <= 0) {
+        stopTick();
+        cdBox.style.display = 'none';
+        enterBox.style.display = '';
+        enterNote.textContent = startTs
+          ? '开考时间已到，正在等待监考教师开考…'
+          : '本场考试尚未设置开考时间，请等待监考教师开考…';
+        return;
+      }
+      cdBox.style.display = '';
+      enterBox.style.display = 'none';
+    }
+
+    /** 点击「进入考场」：先与服务端确认，未开考则留在等待室继续等 */
+    async function enterExam() {
+      const r = await examApi.status().catch(() => null);
+      if (!r || !r.phase) { stopPoll(); stopTick(); router.navigate('/'); return; }
+      if (r.csrf_token) setCsrfToken(r.csrf_token);
+      syncServerTime(r.server_ts);
+      if (r.phase === 'answering') { stopPoll(); stopTick(); startRunner(r.stu_name); return; }
+      if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); stopTick(); renderClosed(r); return; }
+      // 到点但监考尚未开考（未出题 / 考场未推进）：不放行，继续等
+      notify.info('考试尚未开始，请等待监考教师开考');
+      updateGate();
+    }
+
+    /** 轮询一次服务端阶段；返回是否仍停留在等待室 */
+    async function pollOnce() {
+      const r = await examApi.status().catch(() => null);
+      // 会话已失效 / 被清理（phase 为空）：结束空转并回考场入口。
+      // 以前这里靠 http.js 的 401 全局跳转负责，但该接口已从全局跳转白名单
+      // 中排除（否则入口页会因「重渲染→再探测→再跳转」自激成请求风暴），
+      // 因此退场逻辑必须由本视图自己承担。
+      if (!r || !r.phase) { stopPoll(); stopTick(); router.navigate('/'); return false; }
+      if (r.csrf_token) setCsrfToken(r.csrf_token);
+      syncServerTime(r.server_ts);
+      if (r.phase === 'answering') { ready = true; updateGate(); return true; }
+      if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); stopTick(); renderClosed(r); return false; }
+      updateGate();
+      return true;
+    }
+
+    updateGate();
+    if (!ready) tickTimer = setInterval(updateGate, 1000);
+
     const pollSeconds = Math.max(2, appSettingInt('waiting_poll_seconds', 4));
     let polling = false;
     pollTimer = setInterval(async () => {
@@ -141,23 +258,61 @@ export function ExamTakeView({ router, query }) {
       if (polling) return;
       polling = true;
       try {
-        const r = await examApi.status().catch(() => null);
-        // 会话已失效 / 被清理（phase 为空）：结束空转并回考场入口。
-        // 以前这里靠 http.js 的 401 全局跳转负责，但该接口已从全局跳转白名单
-        // 中排除（否则入口页会因「重渲染→再探测→再跳转」自激成请求风暴），
-        // 因此退场逻辑必须由本视图自己承担。
-        if (!r || !r.phase) { stopPoll(); router.navigate('/'); return; }
-        if (r.csrf_token) setCsrfToken(r.csrf_token);
-        if (r.phase === 'answering') { stopPoll(); startRunner(r.stu_name); }
-        else if (r.phase === 'submitted' || r.phase === 'closed') { stopPoll(); renderClosed(r); }
+        await pollOnce();
       } finally {
         polling = false;
       }
     }, pollSeconds * 1000);
+
+    /* ---- 考试基本信息 ---- */
+    const infoCard = card({
+      title: '考试基本信息',
+      iconName: 'clipboard',
+      body: descList([
+        ['考试科目', exam?.subj_name || '—'],
+        ['考试时间', `${fmtDateTime(exam?.exam_start)} 至 ${fmtDateTime(exam?.exam_end)}`],
+        ['考试时长', exam?.duration_minutes ? `${exam.duration_minutes} 分钟` : '—'],
+        ['试卷满分', `${Number(exam?.exam_score || 0)} 分`],
+        ['题目数量', exam?.question_total ? `${exam.question_total} 题` : '—'],
+        ['考生', stuName || '—'],
+      ]),
+    });
+
+    /* ---- 考试注意事项（后台「考试规则 → 考试注意事项」，一行一条） ---- */
+    const noticeBody = el('div');
+    const renderNotice = () => {
+      const lines = examNoticeLines(appSetting('exam_notice', ''));
+      mount(noticeBody, lines.length
+        ? el('ol.wait-notice', {}, lines.map((t) => el('li', { text: t })))
+        : el('p.muted', { text: '暂无注意事项' }));
+    };
+    renderNotice();
+    loadAppSettings().then(renderNotice);
+    const noticeCard = card({ title: '考试注意事项', iconName: 'list', body: noticeBody });
+
+    mount(host, el('div.wait-room.stack', {}, [
+      card({
+        title: exam?.exam_name || '考场',
+        actions: [
+          button('刷新状态', {
+            variant: 'ghost', size: 'sm', iconName: 'refresh-cw',
+            onClick: async () => { if (await pollOnce()) notify.success('状态已刷新'); },
+          }),
+        ],
+        body: [
+          el('div.wait-gate', {}, [cdBox, enterBox]),
+          el('p.fs-sm.c-secondary.mt-2', { text: `开考时间：${fmtDateTime(exam?.exam_start)}` }),
+          el('p.fs-sm.c-secondary', { text: `结束时间：${fmtDateTime(exam?.exam_end)}` }),
+        ],
+      }),
+      infoCard,
+      noticeCard,
+    ]));
   }
 
   function renderClosed(data) {
     stopPoll();
+    stopTick();
     mount(host, el('div', {}, el('div.card', {}, el('div.card-body.text-center', {}, [
       el('div.mb-2', {}, [icon('check-circle', { size: 34 })]),
       el('h2', { text: data?.exam?.exam_name || '考试' }),
@@ -170,6 +325,7 @@ export function ExamTakeView({ router, query }) {
     if (started) return;
     started = true;
     stopPoll();
+    stopTick();
 
     runner = createExamRunner({
       mode: 'exam',
@@ -202,13 +358,14 @@ export function ExamTakeView({ router, query }) {
   void examId;
   boot();
 
-  // 视图卸载时清理：轮询、beforeunload，以及答题引擎内部的 1 秒倒计时。
+  // 视图卸载时清理：轮询、倒计时、beforeunload，以及答题引擎内部的 1 秒倒计时。
   // 漏掉 runner.dispose() 会让倒计时定时器在离开答题页后继续运行，
   // 归零时还会对已卸载的试卷触发一次自动交卷请求。
   return {
     node: host,
     dispose: () => {
       stopPoll();
+      stopTick();
       window.removeEventListener('beforeunload', beforeUnload);
       runner?.dispose?.();
       runner = null;
