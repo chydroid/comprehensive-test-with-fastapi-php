@@ -200,10 +200,7 @@ function renderNav({ router, active = 'home' }) {
         el('a', { href: '/student', text: '注册登陆', class: active === 'auth' ? 'is-active' : null }),
         el('a', { href: '/exam', text: '进入考场', class: active === 'exam' ? 'is-active' : null }),
       ]),
-      el('div.row.gap-sm', {}, [
-        button('教师端', { variant: 'ghost', size: 'sm', onClick: () => location.assign('/teacher') }),
-        button('管理后台', { variant: 'primary', size: 'sm', onClick: () => location.assign('/admin') }),
-      ]),
+      // 管理/教师入口已隐藏：统一走 /manage（不对门户展示，直链访问）
     ]),
   ]);
 }

@@ -38,6 +38,7 @@ use App\Controllers\Admin\UploadController;
 use App\Controllers\ExamController as StudentExamController;
 use App\Controllers\ExerciseController;
 use App\Controllers\ExerciseExamController;
+use App\Controllers\ManageAuthController;
 use App\Controllers\HomeController;
 use App\Controllers\NewsController as PublicNewsController;
 use App\Controllers\PublicCertificateController;
@@ -214,6 +215,9 @@ return [
     ['POST', '/api/admin/logout',          [AdminAuthController::class, 'logout']],
     ['GET',  '/api/admin/me',              [AdminAuthController::class, 'me']],
     ['POST', '/api/admin/profile/avatar',  [AdminAuthController::class, 'saveAvatar']],
+
+    /* ==================== 管理统一入口（管理员 + 教师自动识别） ==================== */
+    ['POST', '/api/manage/login',          [ManageAuthController::class, 'login']],
     ['PUT',  '/api/admin/profile/password', [AdminAuthController::class, 'changePassword']],
 
     /* ==================== 管理后台 - 概览 ==================== */
@@ -361,4 +365,6 @@ return [
     ['GET', '/exercise',  [\App\Controllers\PageController::class, 'exercise']],
     ['GET', '/teacher',   [\App\Controllers\PageController::class, 'teacher']],
     ['GET', '/admin',     [\App\Controllers\PageController::class, 'admin']],
+    // 管理统一入口（门户不展示，仅直链访问）：管理员/教师共用登录页
+    ['GET', '/manage',    [\App\Controllers\PageController::class, 'manage']],
 ];

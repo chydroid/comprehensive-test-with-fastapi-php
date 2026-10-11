@@ -101,6 +101,9 @@ class SessionAuthMiddleware implements Middleware
         ['/api/admin/login',      'public'],
         ['/api/admin/logout',     'public'],
 
+        // 管理统一入口登录（管理员/教师自动识别，门户不展示）
+        ['/api/manage/login',     'public'],
+
         // 管理后台 —— 带权限点（更长的前缀优先匹配）
         ['/api/admin/admins',     'admin', 'admin.manage'],
         ['/api/admin/system',     'admin', 'system.manage'],

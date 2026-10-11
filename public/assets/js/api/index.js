@@ -78,6 +78,11 @@ export const exerciseApi = {
   mockLogout: (body) => http.post('/exercise/mock/logout', body),
 };
 
+/* ==================== 管理统一入口（管理员 + 教师自动识别） ==================== */
+export const manageApi = {
+  login: (body) => http.post('/manage/login', body),
+};
+
 /* ============================ 教师端 ============================ */
 export const teacherApi = {
   login:  (body) => http.post('/teacher/login', body),

@@ -28,6 +28,7 @@ class PageController extends BaseController
         'exercise'=> ['在线练习', '/assets/js/apps/exercise.js', '题库练习与模拟'],
         'teacher' => ['教师工作台', '/assets/js/apps/teacher.js', '组卷 · 监考 · 成绩'],
         'admin'   => ['考试管理后台', '/assets/js/apps/admin.js', '运营管理'],
+        'manage'  => ['后台管理', '/assets/js/apps/manage.js', '管理员 · 教师统一入口'],
     ];
 
     /** 站点入口（门户首页） */
@@ -59,6 +60,12 @@ class PageController extends BaseController
     public function admin(): Response
     {
         return $this->render('admin');
+    }
+
+    /** 管理统一入口（管理员 + 教师共用登录页，门户不展示入口） */
+    public function manage(): Response
+    {
+        return $this->render('manage');
     }
 
     /* ------------------------------------------------------------------ */
