@@ -1704,7 +1704,7 @@ Core\newPdo(): Argument #5 ($pass) must be of type string, int given
 **验证**：`temp/probe_g4_fixed.php` 注入 `$_ENV` 纯数字配置后加载真实 config，
 断言 14 个字段全部 `is_string` **且值守恒**（`'888888'` 强转后仍等于 `'888888'`）→ PASS。
 
-> 本项目当前 `DB_PASS=d74e408875b8` 含字母，恰好躲过此 bug —— 属**侥幸未暴露**，
+> 本项目当前 `DB_PASS` 为含字母口令（真实值只存本地 `.env`，不入仓），恰好躲过此 bug —— 属**侥幸未暴露**，
 > 一旦换密码为纯数字即全站 500。
 
 ### BUG-257 ｜【P2】编码失败时指标与访问日志记录错误的 200（框架 G6 回灌）

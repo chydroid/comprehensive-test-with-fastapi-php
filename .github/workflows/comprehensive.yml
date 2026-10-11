@@ -18,23 +18,23 @@ jobs:
   comprehensive:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # MySQL 5.7 与本地开发库同版本；密码为开发测试用，非生产凭据
+    # MySQL 5.7 与本地开发库同版本；密码是 CI 一次性容器假口令，与任何真实凭据无关
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 3306
       DB_NAME: csip_exam
       DB_USER: root
-      DB_PASS: d74e408875b8
+      DB_PASS: ci_dummy_root
     services:
       mysql:
         image: mysql:5.7
         env:
-          MYSQL_ROOT_PASSWORD: d74e408875b8
+          MYSQL_ROOT_PASSWORD: ci_dummy_root
           MYSQL_DATABASE: csip_exam
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pd74e408875b8"
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_dummy_root"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
@@ -42,6 +42,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: 密钥扫描闸门（跟踪文件不得含真实密钥/口令）
+        run: bash scan_secrets.sh
 
       - name: Setup PHP 8.3
         uses: shivammathur/setup-php@v2
@@ -62,14 +65,14 @@ jobs:
       - name: 等待 MySQL 就绪
         run: |
           for i in $(seq 1 30); do
-            if mysqladmin ping -h 127.0.0.1 -uroot -pd74e408875b8 >/dev/null 2>&1; then
+            if mysqladmin ping -h 127.0.0.1 -uroot -pci_dummy_root >/dev/null 2>&1; then
               echo "MySQL is up"; break
             fi
             echo "waiting for MySQL... ($i)"; sleep 2
           done
 
       - name: 导入 CI 数据库种子（结构 + 最小数据，已剔除 ai_config 真实密钥）
-        run: mysql -h 127.0.0.1 -uroot -pd74e408875b8 csip_exam < db/ci_bootstrap.sql
+        run: mysql -h 127.0.0.1 -uroot -pci_dummy_root csip_exam < db/ci_bootstrap.sql
 
       - name: 预装 Playwright Chromium（含系统依赖；失败则 DOM 层自动跳过浏览器用例）
         working-directory: test/dom

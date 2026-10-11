@@ -22,6 +22,9 @@ export GCM_INTERACTIVE=never
 
 cd "$(dirname "$0")"
 
+# 密钥扫描闸门：跟踪文件命中真实密钥/口令即中止推送（防上传到公开远端）
+bash scan_secrets.sh || { echo "推送已中止。" >&2; exit 1; }
+
 git -c credential.helper= \
     -c credential.helper='!f() { echo username=x-access-token; echo password="$GITHUB_PAT"; }; f' \
     push github "$BRANCH"
