@@ -36,3 +36,9 @@ Thumbs.db
 
 # WorkBuddy 工作区数据
 .workbuddy/
+
+# 一键全功能实测：DOM 依赖与中间产物（详见 test/run_comprehensive.sh）
+/test/dom/node_modules/
+/test/seed.json
+/test/.seed.json
+

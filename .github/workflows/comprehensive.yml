@@ -1,0 +1,89 @@
+name: 全功能实测（四层）
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: comprehensive-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  comprehensive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # MySQL 5.7 与本地开发库同版本；密码为开发测试用，非生产凭据
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_NAME: csip_exam
+      DB_USER: root
+      DB_PASS: d74e408875b8
+    services:
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: d74e408875b8
+          MYSQL_DATABASE: csip_exam
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pd74e408875b8"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql
+          coverage: none
+          tools: none
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装 mysql 客户端（导入种子用）
+        run: sudo apt-get update && sudo apt-get install -y default-mysql-client
+
+      - name: 等待 MySQL 就绪
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -uroot -pd74e408875b8 >/dev/null 2>&1; then
+              echo "MySQL is up"; break
+            fi
+            echo "waiting for MySQL... ($i)"; sleep 2
+          done
+
+      - name: 导入 CI 数据库种子（结构 + 最小数据，已剔除 ai_config 真实密钥）
+        run: mysql -h 127.0.0.1 -uroot -pd74e408875b8 csip_exam < db/ci_bootstrap.sql
+
+      - name: 预装 Playwright Chromium（含系统依赖；失败则 DOM 层自动跳过浏览器用例）
+        working-directory: test/dom
+        run: npx playwright install --with-deps chromium || npx playwright install chromium || true
+
+      - name: 运行一键全功能实测（前端自检 / 后端回归 / AI e2e / DOM 冒烟）
+        run: bash test/run_comprehensive.sh
+
+      - name: 上传实测日志（失败时）
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: comprehensive-logs
+          path: |
+            /tmp/dom_*.log
+            /tmp/*srv*.log
+          retention-days: 5

@@ -1,0 +1,14 @@
+{
+  "name": "exam-dom-smoke",
+  "version": "1.0.0",
+  "private": true,
+  "description": "考试系统 DOM 冒烟测试依赖（jsdom + playwright），由 test/run_comprehensive.sh 使用",
+  "type": "module",
+  "scripts": {
+    "install:ci": "npm install"
+  },
+  "devDependencies": {
+    "jsdom": "30.0.1",
+    "playwright": "1.63.0"
+  }
+}
