@@ -20,6 +20,9 @@ composer.lock
 /public/uploads/*
 !/public/uploads/.gitkeep
 
+# 宝塔本地环境配置（open_basedir 含本机盘符路径，不入仓）
+/public/.user.ini
+
 # 编辑器 / 系统
 .idea/
 .vscode/
