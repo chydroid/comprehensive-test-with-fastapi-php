@@ -118,6 +118,8 @@ else
   run_dom login_portal   "$DT/login_smoke.mjs" "$PUB" portal
   run_dom admin_login    "$DT/admin_login_smoke.mjs" "$PUB"
   run_dom portal_login   "$DT/portal_login_smoke.mjs" "$PUB"
+  # 管理统一入口（真实 dev server + 真实登录链路；可选 env 传真实凭据测成功跳转）
+  run_dom manage         "$DT/manage_smoke.mjs" "$PUB"
   # 以下三项走真实 Chromium：浏览器可用才跑，否则跳过（不计入失败）
   if [ "$PW_OK" -eq 1 ]; then
     run_dom a2a3           "$DT/a2a3_smoke.mjs" "$PUB"

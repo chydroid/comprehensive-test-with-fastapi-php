@@ -17,7 +17,8 @@ const APP_NAME = '后台管理';
 
 applyInitialTheme();
 document.title = APP_NAME;
-installErrorHandlers();
+// 全局错误兜底：登录页不注入 401 跳转（登录失败由表单内提示），保留 ApiError 通知
+installErrorHandlers({ onUnauthorized: () => {} });
 
 clear(appRoot());
 appRoot().append(
