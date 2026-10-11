@@ -27,7 +27,7 @@ return [
         // TypeError → 全站 500（对齐框架第六轮 G4）
         'host'       => (string) env('DB_HOST', '127.0.0.1'),
         'port'       => (int) env('DB_PORT', 3306),
-        'name'       => (string) env('DB_NAME', 'csip_exam'),
+        'name'       => (string) env('DB_NAME', 'comprehensive_test'),
         'user'       => (string) env('DB_USER', 'csip_exam'),
         'pass'       => (string) env('DB_PASS', ''),
         'charset'    => 'utf8mb4',
