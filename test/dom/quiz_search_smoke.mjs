@@ -121,7 +121,7 @@ globalThis.fetch = window.fetch = async (url) => {
     const subj = Number(sp.get('subj_id') || 0);
     const kw = sp.get('keyword') || '';
     if (subj <= 0) return jsonOk({ list: [], total: 0, hint: '请先选择科目' });
-    if (kw.length < 3) return jsonOk({ list: [], total: 0, hint: '请输入至少 3 个字的题干关键词' });
+    if (kw.length < 4) return jsonOk({ list: [], total: 0, hint: '请输入至少 4 个字的题干关键词' });
     searchCalls++;
     lastSearch = { subj, kw, all: sp.get('all') || '' };
     // 简化：始终返回全部 3 题，由前端本地过滤（验证"取完整集 + 本地精化"）
@@ -143,7 +143,7 @@ ok('科目下拉已渲染（占位 + 2 科目）', !!sel() && sel().options.leng
 sel().value = '203';
 sel().dispatchEvent(new window.Event('change', { bubbles: true }));
 await wait(120);
-ok('未输关键词时提示至少 3 字', text().includes('请输入至少 3 个字的题干关键词'), text().slice(0, 160));
+ok('未输关键词时提示至少 4 字', text().includes('请输入至少 4 个字的题干关键词'), text().slice(0, 160));
 ok('未输关键词不发起检索', searchCalls === 0, String(searchCalls));
 
 // 2) 输入 4 字关键词 → 取完整集(all=1)，渲染全部 3 题
@@ -183,10 +183,11 @@ ok('改变关键词后重新取(第 2 次)', searchCalls === 2, String(searchCal
 ok('改变关键词后仅剩 1 题(实践要求)', optLists() === 1, String(optLists()));
 ok('改变关键词后正确项 2 个(A,B)', correctCount() === 2, String(correctCount()));
 
-// 6) 关键词不足 3 字 → 提示
-await typeKeyword('法');
-await until(() => text().includes('请输入至少 3 个字'));
-ok('关键词不足 3 字时提示', text().includes('请输入至少 3 个字的题干关键词'), text().slice(0, 160));
+// 6) 关键词 3 字仍不足（阈值已提高到 4 字）→ 提示，且不发起检索
+await typeKeyword('法治思');
+await until(() => text().includes('请输入至少 4 个字'));
+ok('关键词 3 字仍不足(阈值=4)时提示', text().includes('请输入至少 4 个字的题干关键词'), text().slice(0, 160));
+ok('3 字关键词不发起检索', searchCalls === 2, String(searchCalls));
 
 // 7) 取消选科目 → 提示先选科目
 sel().value = '';

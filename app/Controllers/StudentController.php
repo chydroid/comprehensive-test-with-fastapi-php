@@ -317,7 +317,7 @@ class StudentController extends BaseController
     /**
      * GET /api/student/quiz-search —— 题目搜索（学习检索）
      *
-     * 考生登录后按「科目 + 题干关键词（≥3 字）」模糊检索题库，返回题干、选项与
+     * 考生登录后按「科目 + 题干关键词（≥4 字）」模糊检索题库，返回题干、选项与
      * 正确答案（正确选项以 correct 标记），供背题 / 查阅。
      *
      * 分页：缺省分页（每页 20）；`all=1` 时返回该关键词的**全部**命中（不分页，上限 5000），
@@ -344,9 +344,9 @@ class StudentController extends BaseController
         if ($subjId <= 0) {
             return $this->ok($empty('请先选择科目', $keyword));
         }
-        // 题干关键词至少 3 字：避免过短关键词导致全表扫描与无意义结果
-        if (mb_strlen($keyword) < 3) {
-            return $this->ok($empty('请输入至少 3 个字的题干关键词', $keyword));
+        // 题干关键词至少 4 字：避免过短关键词命中过多、结果太泛
+        if (mb_strlen($keyword) < 4) {
+            return $this->ok($empty('请输入至少 4 个字的题干关键词', $keyword));
         }
 
         // all=1：返回该关键词的「全部」命中（不分页），供前端在已加载结果上继续精化筛选；

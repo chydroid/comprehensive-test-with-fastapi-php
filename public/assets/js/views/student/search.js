@@ -1,11 +1,11 @@
 /**
  * 题目搜索视图（考生端 · 学习检索）
  *
- * 登录后选择科目，输入题干关键词（≥3 字）即显示该关键词的**全部**匹配题目
+ * 登录后选择科目，输入题干关键词（≥4 字）即显示该关键词的**全部**匹配题目
  *（题干 / 选项 / 正确答案，正确选项绿色高亮），供背题 / 查阅。
  *
  * 交互（按用户要求，去掉结果分页）：
- *  - 首次达到 3 字：向服务端取「当前关键词」的完整命中集（all=1，不分页）；
+ *  - 首次达到 4 字：向服务端取「当前关键词」的完整命中集（all=1，不分页）；
  *  - 继续输入（在当前关键词基础上追加，即"已加载关键词"仍是其子串）：
  *    只在**已加载结果**上本地精化筛选，不再发请求，越输越精确、越快；
  *  - 仅当关键词变宽 / 改变（不再是已加载关键词的子串）或换科目时，才重新取。
@@ -68,7 +68,7 @@ export function QuizSearchView() {
     const kwInput = el('input', {
       class: 'input',
       type: 'search',
-      placeholder: '输入题干关键词（至少 3 个字）',
+      placeholder: '输入题干关键词（至少 4 个字）',
       value: state.keyword,
     });
     kwInput.addEventListener('input', () => {
@@ -92,7 +92,7 @@ export function QuizSearchView() {
           field('题干关键词', kwInput),
           field('题型', typeSeg),
         ]),
-        el('p.muted.search-tip', { text: '选择科目后输入题干中任意 3 个以上的字，即显示全部匹配题目；继续输入会在已有结果里进一步筛选，越输越精确，无需翻页。正确选项为绿色。' }),
+        el('p.muted.search-tip', { text: '选择科目后输入题干中任意 4 个以上的字，即显示全部匹配题目；继续输入会在已有结果里进一步筛选，越输越精确，无需翻页。正确选项为绿色。' }),
       ]),
     }));
   }
@@ -113,7 +113,7 @@ export function QuizSearchView() {
   /* ---------- 检索 ---------- */
   async function runSearch() {
     clearTimeout(debounceTimer);
-    if (state.subjId <= 0 || state.keyword.length < 3) {
+    if (state.subjId <= 0 || state.keyword.length < 4) {
       // 前置条件不满足：清空已加载集，仅展示提示
       state.loadedKeyword = null;
       state.loadedList = [];
@@ -140,7 +140,7 @@ export function QuizSearchView() {
   /* ---------- 元信息 ---------- */
   function renderMeta() {
     clear(metaSlot);
-    if (state.subjId <= 0 || state.keyword.length < 3) return;
+    if (state.subjId <= 0 || state.keyword.length < 4) return;
     const subj = state.subjects.find((s) => Number(s.id) === state.subjId);
     metaSlot.append(el('p.muted', {
       text: `「${subj ? subj.subj_name : ''}」中包含“${state.keyword}”的题目：${currentResults().length} 题`,
@@ -152,7 +152,7 @@ export function QuizSearchView() {
     renderMeta();
     clear(listSlot);
     if (state.subjId <= 0) { listSlot.append(emptyStated('请先选择一个科目', { iconName: 'list' })); return; }
-    if (state.keyword.length < 3) { listSlot.append(emptyStated('请输入至少 3 个字的题干关键词', { iconName: 'search' })); return; }
+    if (state.keyword.length < 4) { listSlot.append(emptyStated('请输入至少 4 个字的题干关键词', { iconName: 'search' })); return; }
     const items = currentResults();
     if (items.length === 0) { listSlot.append(emptyStated('没有匹配的题目，换个关键词试试', { iconName: 'search-x' })); return; }
     const wrap = el('div.stack');
