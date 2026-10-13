@@ -117,11 +117,16 @@ $t->guard('练习答错沉淀错题本（exercise）', function () use ($t, $csr
 
     // 重复答错：仅累加，不新建行
     Http::post('/api/exercise/answer', ['quiz_id' => $quizId, 'stu_key' => $wrong], ['X-CSRF-Token' => $csrf]);
-    $row2 = \Core\Database::fetch(
-        'SELECT wrong_count, COUNT(*) AS c FROM `wrong_book` WHERE stu_id = ? AND quiz_id = ?', [STU, $quizId]
+    // 注意：避免 SELECT 非聚合列 + COUNT(*) 无 GROUP BY（CI 的 ONLY_FULL_GROUP_BY 会报错），
+    // 拆成两条独立查询，任何 sql_mode 下都合规。
+    $c = \Core\Database::fetch(
+        'SELECT COUNT(*) AS c FROM `wrong_book` WHERE stu_id = ? AND quiz_id = ?', [STU, $quizId]
     );
-    $t->assertSame('重复答错仍只有一行', 1, (int) ($row2['c'] ?? 0));
-    $t->assertSame('wrong_count 累加到 2', 2, (int) ($row2['wrong_count'] ?? 0));
+    $wc = \Core\Database::fetch(
+        'SELECT wrong_count FROM `wrong_book` WHERE stu_id = ? AND quiz_id = ?', [STU, $quizId]
+    );
+    $t->assertSame('重复答错仍只有一行', 1, (int) ($c['c'] ?? 0));
+    $t->assertSame('wrong_count 累加到 2', 2, (int) ($wc['wrong_count'] ?? 0));
 
     // 答对 → 标记掌握
     $r2 = Http::post('/api/exercise/answer', ['quiz_id' => $quizId, 'stu_key' => $correct], ['X-CSRF-Token' => $csrf]);
