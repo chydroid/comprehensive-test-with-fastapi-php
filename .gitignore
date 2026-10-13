@@ -45,3 +45,10 @@ Thumbs.db
 /test/seed.json
 /test/.seed.json
 
+# 本地工具缓存（含 SQLite 记忆库，非项目产物）
+/.cncoder/
+
+# 宝塔/nginx 部署时误入的默认页（会覆盖 router.php 入口，勿入仓）
+/public/index.html
+/public/404.html
+

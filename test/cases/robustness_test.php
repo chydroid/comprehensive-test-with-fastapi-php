@@ -173,9 +173,18 @@ $t->guard('R1-5 批量 statusMap / statusSummaries 与逐场调用一致', funct
     $csrf = (string) (Http::data($res)['csrf_token'] ?? '');
     $t->assertTrue('教师登录', $csrf !== '');
 
+    // 自包含：确保库里至少有 5 场考试可供批量接口对比（CI 最小种子不含 examinfo 数据）。
+    // 这些考试用 Fixture 前缀创建，块末统一回收，不会污染后续用例。
+    $seeded = 0;
+    for ($i = 0; $i < 6; $i++) {
+        $e = Fixture::createExam(['exam_tea' => TEA]);
+        if ($e !== null) { $seeded++; }
+    }
+
     $rows = \Core\Database::fetchAll('SELECT id FROM `examinfo` ORDER BY id DESC LIMIT 5');
     $ids = array_map(static fn (array $r): int => (int) $r['id'], $rows);
     if (!$ids) { $t->assertTrue('有考试数据', false); return; }
+    $t->assertTrue('考试数据充足（>=5）', count($ids) >= 5, 'count=' . count($ids));
 
     $map = Exam::statusMap($ids);
     $sums = Exam::statusSummaries($ids);
@@ -198,6 +207,12 @@ $t->guard('R1-5 批量 statusMap / statusSummaries 与逐场调用一致', funct
     }
     $t->assertSame('批量结果与单场调用一致', [], $bad);
 });
+
+// 回收 R1-5 自建的考试（Fixture 前缀），避免污染后续用例
+Fixture::cleanup();
+// 关键：Fixture::cleanup() 会一并删掉测试考生 9000001，而 R2 仍需以学生身份登录，
+// 这里把考生重新建回来（幂等：不存在则建，存在则更新口令），否则 R2-1 的 asStudent() 必失败。
+ensureStudent();
 
 $t->guard('R1-6 监考列表接口仍正常返回（改造未破坏结构）', function () use ($t) {
     $res = Http::post('/api/admin/login', ['username' => ADMIN, 'password' => ADMIN_PWD]);

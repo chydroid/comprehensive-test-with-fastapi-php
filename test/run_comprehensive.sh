@@ -124,7 +124,26 @@ else
   if [ "$PW_OK" -eq 1 ]; then
     run_dom a2a3           "$DT/a2a3_smoke.mjs" "$PUB"
     run_dom a4             "$DT/a4_smoke.mjs" "$PUB"
-    run_dom c3c4c5         "$DT/c3c4c5_smoke.mjs" "$PUB"
+    # c3c4c5 依赖 teacher1 已结束正式考试：先造（__E2E__ 前缀，跑后按 id 精确回收），否则 C5-1 必失败
+    php "$ROOT/test/seed_c3c4c5.php" > "$ROOT/test/seed_c3.json" 2> "$ROOT/test/seed_c3.err"
+    if [ "$?" -eq 0 ]; then
+      C3_ID=$(node -e "process.stdout.write(String(require('./test/seed_c3.json').exam_id))" 2>/dev/null)
+      run_dom c3c4c5       "$DT/c3c4c5_smoke.mjs" "$PUB"
+      # 精确回收：按 id + 固定前缀名双保险，绝不误删真实数据
+      php -r '
+        require "core/helpers.php"; bootstrap();
+        $id = isset($argv[1]) ? (int)$argv[1] : 0;
+        if ($id > 0) {
+          \Core\Database::query("DELETE FROM stuscore WHERE exam_id = ?", [$id]);
+          \Core\Database::query("DELETE FROM examinfo WHERE id = ? AND exam_name = ?", [$id, "__E2E__c3c4c5_smoke"]);
+          echo "  已清理 c3c4c5 种子考试 id=" . $id . "\n";
+        }
+      ' "$C3_ID"
+    else
+      echo "  [SKIP] c3c4c5 种子造场失败，c3c4c5 跳过"; cat "$ROOT/test/seed_c3.err"
+      dom_fail=$((dom_fail+1))
+    fi
+    rm -f "$ROOT/test/seed_c3.json" "$ROOT/test/seed_c3.err"
   else
     echo "  [SKIP] a2a3 / a4 / c3c4c5（playwright chromium 不可用）"
   fi

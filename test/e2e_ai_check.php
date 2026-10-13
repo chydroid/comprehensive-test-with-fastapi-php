@@ -107,6 +107,15 @@ $pdo = new PDO(
     $cfg['user'], $cfg['pass'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
 );
 $teaName = (string) ($login['username'] ?? 'teacher1');
+// 自包含：确保该教师名下有一场正式考试（CI 最小种子不含 examinfo 数据，否则
+// 「定位可操作的考试」会因查无此教师的正式考试而失败）。用 __E2E__ 前缀，脚本
+// 末尾统一回收，绝不污染真实数据。
+$pdo->prepare('DELETE FROM `examinfo` WHERE exam_name = ?')->execute(['__E2E__teacher1正式考试']);
+$pdo->prepare(
+    'INSERT INTO `examinfo` (exam_name, subj_id, exam_tea, exam_class, exam_status, exam_start, exam_end, stu_class, paper_mode)
+     VALUES (?, ?, ?, "正式", "over", NOW(), NOW(), 0, "random")'
+)->execute(['__E2E__teacher1正式考试', 158, $teaName]);
+
 // 必须挑该教师自己的**正式考试**：模拟考试 exam_tea 为空，assertOwnExam 会正确地 404。
 $stExam = $pdo->prepare(
     'SELECT id, exam_name, subj_id, exam_tea, exam_class, exam_status FROM examinfo
@@ -359,6 +368,13 @@ if ($created) {
     } catch (Throwable $e) {
         echo "\n  ⚠️ 清理临时管理员失败: " . $e->getMessage() . "\n";
     }
+}
+
+// 回收本脚本自建的 teacher1 正式考试（__E2E__ 前缀）
+try {
+    $pdo->prepare('DELETE FROM `examinfo` WHERE exam_name = ?')->execute(['__E2E__teacher1正式考试']);
+} catch (Throwable $e) {
+    echo "\n  ⚠️ 清理 teacher1 正式考试失败: " . $e->getMessage() . "\n";
 }
 
 echo "\n════ 汇总 ════\n";

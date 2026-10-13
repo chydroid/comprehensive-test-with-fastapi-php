@@ -49,6 +49,12 @@ for FILE in "${FILES[@]}"; do
     echo "[RUN ] $NAME"
     echo "------------------------------------------------------------"
 
+    # 跨用例污染清扫：每个用例启动前删除测试夹具残留（__TEST__/__E2E__ 考场、
+    # 备份表等），保证用例在干净库上运行。best-effort：失败不阻断主套件。
+    if [ -f "$ROOT/test/lib/scour_test_data.php" ]; then
+        "$PHP_BIN" "$ROOT/test/lib/scour_test_data.php" >/dev/null 2>&1 || true
+    fi
+
     OUTPUT="$("$PHP_BIN" "$FILE" 2>&1)"
     STATUS=$?
     printf '%s\n' "$OUTPUT"
