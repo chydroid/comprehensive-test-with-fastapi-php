@@ -380,6 +380,16 @@
 .option-item.is-wrong .option-key { background: var(--danger-500); border-color: var(--danger-500); color: #fff; }
 .option-text { flex: 1; padding-top: 2px; line-height: var(--lh-normal); word-break: break-word; }
 
+/* 题目搜索（学习检索）：正确选项用绿色字体高亮 + 参考答案。
+   .option-item.is-correct 已有绿色边框/底色/键位，这里补足「绿色字体」。
+   仅作用于 .quiz-search，避免波开门户/错题本等其他端既有观感。 */
+.quiz-search .option-item.is-correct .option-text { color: var(--success-600); font-weight: 600; }
+.quiz-search .search-tip { font-size: var(--fs-sm); line-height: var(--lh-normal); color: var(--text-secondary); }
+.quiz-search .answer-line { display: flex; gap: var(--sp-2); align-items: baseline; }
+.quiz-search .answer-line-label { color: var(--text-secondary); }
+.quiz-search .answer-line-text { color: var(--success-600); font-weight: 600; }
+.quiz-search .answer-key { color: var(--success-600); font-weight: 600; }
+
 /* B1 防作弊：浮水印遮罩（仅启用防作弊的正式考试挂载）。
    平铺考生标识，极低不透明度 + pointer-events:none，不挡操作，仅作威慑。 */
 .exam-watermark {

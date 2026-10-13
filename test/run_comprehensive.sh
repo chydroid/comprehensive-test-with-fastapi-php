@@ -153,6 +153,8 @@ else
   run_dom exam_form      "$DT/exam_form_smoke.mjs" "$PUB"
   # 纯视图结构（桩 api，不需要 server，但放进同一轮也无妨）
   run_dom generate_panel "$DT/generate_panel_smoke.mjs" "$PUB"
+  # 考生端题目搜索（桩 http，纯视图）：选科目 + 题干关键词(≥3字) → 渲染选项，正确项绿色高亮
+  run_dom quiz_search    "$DT/quiz_search_smoke.mjs" "$PUB"
 
   # 种子考场依赖型：先造两个独立可考考场（各 2 名夹具考生，绑定 teacher1）
   if [ -f "$ROOT/test/seed_exam_for_smoke.php" ]; then

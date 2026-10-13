@@ -115,6 +115,8 @@ return [
     // C3 学习资料库（考生端：浏览 + 记浏览量）
     ['GET',  '/api/student/materials',           [StudentCenterController::class, 'materials']],
     ['POST', '/api/student/materials/{id}/hit',  [StudentCenterController::class, 'materialHit']],
+    // 题目搜索（学习检索）：按科目 + 题干关键词(≥3字)模糊匹配，返回选项与正确答案（见控制器注释）
+    ['GET',  '/api/student/quiz-search',         [StudentCenterController::class, 'quizSearch']],
 
     /* ==================== 电子证书（C1） ==================== */
     // 静态段在前：/certificates 不能被 /certificates/{examId} 抢先匹配

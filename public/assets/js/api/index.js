@@ -41,6 +41,8 @@ export const studentApi = {
   wrongBookList:     (params) => http.get('/student/wrong-book', { query: params }),
   wrongBookPractice: (params) => http.get('/student/wrong-book/practice', { query: params }),
   wrongBookCheck:    (body) => http.post('/student/wrong-book/check', body),
+  // 题目搜索（学习检索）：按科目 + 题干关键词(≥3字)匹配，返回选项与正确答案
+  quizSearch:        (params) => http.get('/student/quiz-search', { query: params }),
   // C5 考后问卷：读取本场题目（含本人已作答）+ 提交反馈
   survey:        (params) => http.get('/student/survey', { query: params }),
   submitSurvey:  (body) => http.post('/student/survey', body),

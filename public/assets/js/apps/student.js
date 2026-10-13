@@ -16,6 +16,7 @@ import {
 import { ExerciseView } from '../views/student/exercise.js';
 import { MockSetupView, MockTakeView, MockReviewView } from '../views/student/mock.js';
 import { WrongBookView } from '../views/student/wrongbook.js';
+import { QuizSearchView } from '../views/student/search.js';
 import { StudentCertificatesView } from '../views/student/certificates.js';
 import { StudentMaterialView } from '../views/student/material.js';
 
@@ -31,6 +32,8 @@ const NAV = [
   { key: 'exercise', label: '在线练习', icon: 'edit-3', group: 'practice' },
   { key: 'mock',     label: '模拟考试', icon: 'target', group: 'practice' },
   { key: 'wrongbook', label: '错题本', icon: 'book-open', group: 'practice' },
+  // 题目搜索（学习检索）：选科目 + 题干关键词(≥3字)匹配，显示选项与正确答案
+  { key: 'search', label: '题目搜索', icon: 'search', group: 'practice' },
   // C3 学习资料：只读浏览与下载
   { key: 'materials', label: '学习资料', icon: 'book', group: 'practice' },
   { key: 'info',     label: '个人资料', icon: 'user', group: 'account' },
@@ -50,6 +53,7 @@ const VIEWS = {
   exercise: ExerciseView,
   mock: MockSetupView,
   wrongbook: WrongBookView,
+  search: QuizSearchView,
   materials: StudentMaterialView,
   info: StudentInfoView,
   password: StudentPasswordView,

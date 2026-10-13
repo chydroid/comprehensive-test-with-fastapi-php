@@ -9,6 +9,7 @@ use App\Models\Grade;
 use App\Models\SchoolClass;
 use App\Models\StuScoreBak;
 use App\Models\Student;
+use App\Models\Quiz;
 use App\Services\AuthSession;
 use App\Services\Material;
 use App\Services\Password;
@@ -311,6 +312,85 @@ class StudentController extends BaseController
         $id = $this->idParam();
         Material::hit($id);
         return $this->ok(['id' => $id]);
+    }
+
+    /**
+     * GET /api/student/quiz-search —— 题目搜索（学习检索）
+     *
+     * 考生登录后按「科目 + 题干关键词（≥3 字）」模糊检索题库，返回题干、选项与
+     * 正确答案（正确选项以 correct 标记），供背题 / 查阅。
+     *
+     * ⚠️ 与考试 / 练习不同，本入口是「学习检索」场景，**刻意下发 quiz_key 与正确选项**：
+     *    Quiz::withoutAnswer 的「答案绝不下发给考生端」约束只适用于判分链路
+     *    （正式考试 / 练习 / 模拟考），此处是明确的例外——只读、不判分、不写成绩。
+     *    仅按题干 quiz_title 匹配，不触及任何考试会话或成绩。
+     */
+    public function quizSearch(): Response
+    {
+        $this->authStudent();
+
+        $subjId  = (int) $this->request->query('subj_id', 0);
+        $keyword = trim((string) $this->request->query('keyword', ''));
+        $class   = trim((string) $this->request->query('quiz_class', ''));
+
+        $empty = static fn (string $hint, string $kw): array => [
+            'list' => [], 'total' => 0, 'page' => 1,
+            'per_page' => 0, 'total_pages' => 0, 'keyword' => $kw, 'hint' => $hint,
+        ];
+        if ($subjId <= 0) {
+            return $this->ok($empty('请先选择科目', $keyword));
+        }
+        // 题干关键词至少 3 字：避免过短关键词导致全表扫描与无意义结果
+        if (mb_strlen($keyword) < 3) {
+            return $this->ok($empty('请输入至少 3 个字的题干关键词', $keyword));
+        }
+
+        $p = $this->page(20, 100);
+
+        $where  = ['q.subj_id = ?', 'q.quiz_title LIKE ?'];
+        $params = [$subjId, '%' . addcslashes($keyword, '%_\\') . '%'];
+        if ($class !== '' && in_array($class, Quiz::TYPES, true)) {
+            $where[]  = 'q.quiz_class = ?';
+            $params[] = $class;
+        }
+        $sqlWhere = implode(' AND ', $where);
+
+        $total = (int) (Database::fetch("SELECT COUNT(*) AS c FROM `quizlib` q WHERE {$sqlWhere}", $params)['c'] ?? 0);
+        $rows = Database::fetchAll(
+            "SELECT q.id, q.quiz_title, q.quiz_class, q.quiz_diff, q.quiz_kp, q.quiz_option, q.quiz_key, s.subj_name
+             FROM `quizlib` q INNER JOIN `subject` s ON s.id = q.subj_id
+             WHERE {$sqlWhere} ORDER BY q.id LIMIT {$p['per_page']} OFFSET {$p['offset']}",
+            $params
+        );
+
+        foreach ($rows as &$r) {
+            $cls = (string) $r['quiz_class'];
+            $key = strtoupper((string) ($r['quiz_key'] ?? ''));
+            // 多选答案为字母集合（去重）；单选/判断为单字母
+            $correctLetters = $cls === 'checkbox'
+                ? array_values(array_unique(str_split($key)))
+                : str_split($key);
+            $opts = Quiz::parseOptions((string) ($r['quiz_option'] ?? ''));
+            foreach ($opts as &$o) {
+                $o['correct'] = in_array($o['key'], $correctLetters, true);
+            }
+            unset($o);
+            $r['quiz_option_list'] = $opts;
+            $r['quiz_key']         = $key;   // 学习检索：下发答案
+            $r['quiz_type_label']  = Quiz::TYPE_LABELS[$cls] ?? '';
+            $r['quiz_diff_label']  = Quiz::DIFF_LABELS[$r['quiz_diff'] ?? ''] ?? '';
+            unset($r['quiz_option']);
+        }
+        unset($r);
+
+        return $this->ok([
+            'list'        => $rows,
+            'total'       => $total,
+            'page'        => $p['page'],
+            'per_page'    => $p['per_page'],
+            'total_pages' => (int) ceil($total / max(1, $p['per_page'])),
+            'keyword'     => $keyword,
+        ]);
     }
 
     /**
