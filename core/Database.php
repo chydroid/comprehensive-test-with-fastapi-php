@@ -119,7 +119,7 @@ class Database
         $foundRowsAttr = defined('Pdo\\Mysql::ATTR_FOUND_ROWS')
             ? \Pdo\Mysql::ATTR_FOUND_ROWS
             : \PDO::MYSQL_ATTR_FOUND_ROWS;
-        return new PDO($dsn, $user, $pass, [
+        $pdo = new PDO($dsn, $user, $pass, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
@@ -129,6 +129,39 @@ class Database
             // 使幂等 PUT（内容不变）也返回 true，避免误报"内容未变化"
             $foundRowsAttr => true,
         ]);
+
+        // 对齐 MySQL 会话时区与 PHP（app.timezone）：应用以 PHP 时区写入裸 datetime 字符串
+        // （无时区信息），而过期判定等核心业务逻辑用 MySQL NOW() 比较。若 MySQL 会话/服务器
+        // 时区 ≠ PHP 时区（如容器化 MySQL 默认 UTC），比较会整体偏移数小时，导致"考试是否过期"
+        // 等关键判断失真（曾致 CI 全功能实测失败）。此处强制会话时区一致，用偏移量（不依赖
+        // MySQL 时区表），对生产同样安全——无论数据库服务器在哪个时区都能正确比较。
+        try {
+            $pdo->exec("SET time_zone = '" . self::sessionTimeZone() . "'");
+        } catch (\Throwable $e) {
+            // 个别 MySQL 不支持偏移时区时静默降级；业务仍可用，仅 TZ 相关比较回退到服务器时区
+        }
+
+        return $pdo;
+    }
+
+    /**
+     * 计算与 PHP（app.timezone）对齐的 MySQL 会话时区偏移串（如 '+08:00'）。
+     *
+     * 用偏移量而非命名时区，避免依赖 MySQL 的时区表（部分精简镜像未加载）。
+     * app.timezone 不可用时回退 UTC（偏移 +00:00）。
+     */
+    private static function sessionTimeZone(): string
+    {
+        $tzName = (string) (config('app.timezone', 'UTC') ?? 'UTC');
+        try {
+            $tz = new \DateTimeZone($tzName);
+        } catch (\Throwable $e) {
+            $tz = new \DateTimeZone('UTC');
+        }
+        $offsetSec = $tz->getOffset(new \DateTime('now', new \DateTimeZone('UTC')));
+        $sign = $offsetSec >= 0 ? '+' : '-';
+        $abs = abs($offsetSec);
+        return sprintf('%s%02d:%02d', $sign, intdiv($abs, 3600), intdiv($abs % 3600, 60));
     }
 
     /** 是否纯读 SQL：仅 SELECT 且非行锁（FOR UPDATE / LOCK IN SHARE MODE），其余（含 DDL/DML）走主库 */
