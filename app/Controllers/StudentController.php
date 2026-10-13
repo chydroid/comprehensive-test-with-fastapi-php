@@ -320,6 +320,10 @@ class StudentController extends BaseController
      * 考生登录后按「科目 + 题干关键词（≥3 字）」模糊检索题库，返回题干、选项与
      * 正确答案（正确选项以 correct 标记），供背题 / 查阅。
      *
+     * 分页：缺省分页（每页 20）；`all=1` 时返回该关键词的**全部**命中（不分页，上限 5000），
+     * 供前端「取一次完整集、之后在已加载结果上继续精化」——继续输入只在本地过滤、不发新请求，
+     * 仅当关键词变宽/改变（不再是已加载关键词的子串）时才重新取。
+     *
      * ⚠️ 与考试 / 练习不同，本入口是「学习检索」场景，**刻意下发 quiz_key 与正确选项**：
      *    Quiz::withoutAnswer 的「答案绝不下发给考生端」约束只适用于判分链路
      *    （正式考试 / 练习 / 模拟考），此处是明确的例外——只读、不判分、不写成绩。
@@ -345,7 +349,9 @@ class StudentController extends BaseController
             return $this->ok($empty('请输入至少 3 个字的题干关键词', $keyword));
         }
 
-        $p = $this->page(20, 100);
+        // all=1：返回该关键词的「全部」命中（不分页），供前端在已加载结果上继续精化筛选；
+        // 缺省仍走分页（兼容其他调用方）。
+        $all = (int) $this->request->query('all', 0) === 1;
 
         $where  = ['q.subj_id = ?', 'q.quiz_title LIKE ?'];
         $params = [$subjId, '%' . addcslashes($keyword, '%_\\') . '%'];
@@ -356,12 +362,22 @@ class StudentController extends BaseController
         $sqlWhere = implode(' AND ', $where);
 
         $total = (int) (Database::fetch("SELECT COUNT(*) AS c FROM `quizlib` q WHERE {$sqlWhere}", $params)['c'] ?? 0);
-        $rows = Database::fetchAll(
-            "SELECT q.id, q.quiz_title, q.quiz_class, q.quiz_diff, q.quiz_kp, q.quiz_option, q.quiz_key, s.subj_name
-             FROM `quizlib` q INNER JOIN `subject` s ON s.id = q.subj_id
-             WHERE {$sqlWhere} ORDER BY q.id LIMIT {$p['per_page']} OFFSET {$p['offset']}",
-            $params
-        );
+
+        $selectSql = "SELECT q.id, q.quiz_title, q.quiz_class, q.quiz_diff, q.quiz_kp, q.quiz_option, q.quiz_key, s.subj_name
+                      FROM `quizlib` q INNER JOIN `subject` s ON s.id = q.subj_id
+                      WHERE {$sqlWhere} ORDER BY q.id";
+        if ($all) {
+            // 安全上限：单科目题库量级（当前最大 1601），防止异常大结果集
+            $cap = 5000;
+            $page = 1;
+            $perPage = $total;
+            $rows = Database::fetchAll($selectSql . " LIMIT {$cap}", $params);
+        } else {
+            $p = $this->page(20, 100);
+            $page = $p['page'];
+            $perPage = $p['per_page'];
+            $rows = Database::fetchAll($selectSql . " LIMIT {$perPage} OFFSET {$p['offset']}", $params);
+        }
 
         foreach ($rows as &$r) {
             $cls = (string) $r['quiz_class'];
@@ -386,10 +402,11 @@ class StudentController extends BaseController
         return $this->ok([
             'list'        => $rows,
             'total'       => $total,
-            'page'        => $p['page'],
-            'per_page'    => $p['per_page'],
-            'total_pages' => (int) ceil($total / max(1, $p['per_page'])),
+            'page'        => $page,
+            'per_page'    => $perPage,
+            'total_pages' => $all ? 1 : (int) ceil($total / max(1, $perPage)),
             'keyword'     => $keyword,
+            'all'         => $all,
         ]);
     }
 
