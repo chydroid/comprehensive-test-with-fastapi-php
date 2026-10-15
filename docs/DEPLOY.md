@@ -66,13 +66,23 @@ rm -f /www/wwwroot/<站点>/public/index.html /www/wwwroot/<站点>/public/404.h
 
 ### 2.2 配置伪静态（必做）
 
-**站点设置 → 伪静态** → 粘贴 `docs/nginx-rewrite.conf` 的内容：
+**站点设置 → 伪静态** → 粘贴 `docs/nginx-rewrite.conf` 的内容（见下方「宝塔专用」段）。
+
+> ⚠️ 宝塔的伪静态是嵌在 `server{}` 里的，**不要写 `location / { try_files }` 这种带 `location` 块的写法**
+> ——会和宝塔自带的主 `location /` 冲突，nginx 校验报 `duplicate location "/"`，站点直接打不开。
+> 必须用下面的 `if (!-e $request_filename)` 形式（已写在 `docs/nginx-rewrite.conf` 顶部）。
 
 ```nginx
-location / {
-    try_files $uri $uri/ /index.php?$query_string;
+if (!-e $request_filename) {
+    rewrite ^(.*)$ /index.php last;
 }
 ```
+
+为什么这样写：`core/Request.php` 读的是 `$_SERVER['REQUEST_URI']`，nginx 内部重写到
+`/index.php` 时会**保留原始 URI（含 query string）**，所以路由能正确匹配 `/api/student/me`、
+`/api/public/hero?limit=8` 等。漏配这一条的典型症状：**首页能开，但所有 `/api/*`、`/manage` 全部 404**。
+
+> 手工 Nginx（非宝塔）才用 `try_files` 版本，见 `docs/nginx-rewrite.conf` 的「手工 Nginx」段。
 
 ### 2.3 处理 open_basedir（必做，否则 500）
 
@@ -331,7 +341,7 @@ mysqldump --single-transaction --default-character-set=utf8mb4 comprehensive_tes
 |---|---|---|
 | 全站 500，日志有 `open_basedir restriction` | 宝塔防跨站开着 | 2.3：关掉或改 `.user.ini` |
 | 门户显示 "Welcome to nginx!" | `public/index.html` 没删 | 2.1：`rm` 掉 |
-| 首页正常，`/api/*`、`/manage` 404 | 伪静态没配 | 2.2：配 `try_files` |
+| 首页正常，`/api/*`、`/manage` 404 | 伪静态没配（或用了 `location /` 写法导致 nginx 校验失败） | 2.2：宝塔用 `if (!-e $request_filename)` 写法 |
 | `Parse error: syntax error ... readonly` | PHP < 8.1 | 面板换 PHP 8.1+ |
 | `/api/health` 返回 `db:false` | `.env` 凭据错 / 库没建 / 账号没授权 | 跑 `deploy/precheck.php` |
 | 登录后一跳就掉线 | HTTPS 未生效但 `SESSION_SECURE=true` | 先置 false，配好 HTTPS 再改回 |
