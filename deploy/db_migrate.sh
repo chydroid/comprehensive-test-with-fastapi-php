@@ -61,16 +61,25 @@ for arg in "$@"; do
 done
 
 BIN_DIR=""
-for d in /usr/bin /www/server/mysql/bin /usr/local/mysql/bin; do
-  [ -d "$d" ] && BIN_DIR="$d" && break
+# Linux 路径：要求该目录同时含 mysql 与 mysqldump 才采用
+for d in /www/server/mysql/bin /usr/local/mysql/bin /usr/bin; do
+  if [ -x "$d/mysql" ] && [ -x "$d/mysqldump" ]; then BIN_DIR="$d"; break; fi
 done
+# Windows 路径（宝塔 Windows 面板 / 本机 BtSoft，版本号用通配）
+if [ -z "$BIN_DIR" ]; then
+  for d in /d/BtSoft/mysql/MySQL*/bin /c/Program*/MySQL/MySQL*/bin; do
+    if [ -x "$d/mysql.exe" ] && [ -x "$d/mysqldump.exe" ]; then BIN_DIR="$d"; break; fi
+  done
+fi
 MYSQL="$BIN_DIR/mysql"
 MYSQLDUMP="$BIN_DIR/mysqldump"
 [ -x "$MYSQL" ] || MYSQL="$(command -v mysql || true)"
 [ -x "$MYSQLDUMP" ] || MYSQLDUMP="$(command -v mysqldump || true)"
 
 if [ -z "$MYSQL" ] || [ -z "$MYSQLDUMP" ]; then
-  echo "❌ 找不到 mysql / mysqldump 客户端" >&2; exit 1
+  echo "❌ 找不到 mysql / mysqldump 客户端（已尝试宝塔/系统路径与 PATH）" >&2
+  echo "   手动指定： export PATH=\"\$PATH:/d/BtSoft/mysql/MySQL5.7/bin\" 后重试" >&2
+  exit 1
 fi
 
 ask_pass() {
@@ -141,6 +150,7 @@ case "$CMD" in
       "SELECT table_name FROM information_schema.tables WHERE table_schema='$DB_NAME' ORDER BY table_name;" \
       | while read -r t; do
           [ -z "$t" ] && continue
+          t="${t%$'\r'}"   # 去掉 Windows 换行符残留，否则表名带 \r 会报 Incorrect table name
           n=$(MYSQL_PWD="$DB_PASS" "$MYSQL" $(common_args) -N -B -e "SELECT COUNT(*) FROM \`$t\`;" "$DB_NAME")
           printf '%s\t%s\n' "$t" "$n"
         done
