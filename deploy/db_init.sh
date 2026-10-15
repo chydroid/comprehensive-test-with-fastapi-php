@@ -124,7 +124,8 @@ if [ "$DO_IMPORT" = 1 ]; then
   [ -f "$SRC" ] || { echo "❌ 找不到 $SRC" >&2; exit 1; }
 
   TMP="$(mktemp /tmp/exam_struct_XXXXXX.sql)"
-  trap 'rm -f "$TMP"' EXIT
+  TMP2=""   # 清空用的临时文件，在 --empty 分支内赋值
+  trap 'rm -f "$TMP" "${TMP2:-}"' EXIT
   # 剥掉 CREATE DATABASE / USE，其余原样保留
   grep -v -E '^(CREATE DATABASE|USE )' "$SRC" > "$TMP"
 
@@ -145,15 +146,25 @@ fi
 # ---------- ③ 清空种子数据 ----------
 if [ "$DO_EMPTY" = 1 ]; then
   echo "▸ 清空 $DB_NAME 所有表的数据（保留结构）"
-  run_sql "$DB_USER" "$DB_PASS" "SET FOREIGN_KEY_CHECKS=0;"
   tables=$(run_sql "$DB_USER" "$DB_PASS" \
     "SELECT table_name FROM information_schema.tables WHERE table_schema='$DB_NAME';")
-  cnt=0
-  for t in $tables; do
-    run_sql "$DB_USER" "$DB_PASS" "TRUNCATE TABLE \`$t\`;" "$DB_NAME" >/dev/null
-    cnt=$((cnt+1))
-  done
-  run_sql "$DB_USER" "$DB_PASS" "SET FOREIGN_KEY_CHECKS=1;"
+
+  # 关键：FK 开关 + 所有 TRUNCATE 必须落在【同一个连接】里执行，
+  # 否则每次 run_sql 都是新会话，SET FOREIGN_KEY_CHECKS=0 会立刻被重置，
+  # 触发 ERROR 1701 (Cannot truncate a table referenced in a foreign key constraint)。
+  TMP2="$(mktemp /tmp/exam_empty_XXXXXX.sql)"
+  {
+    echo "SET FOREIGN_KEY_CHECKS=0;"
+    for t in $tables; do
+      echo "TRUNCATE TABLE \`$t\`;"
+    done
+    echo "SET FOREIGN_KEY_CHECKS=1;"
+  } > "$TMP2"
+
+  MYSQL_PWD="$DB_PASS" "$MYSQL" -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" \
+      --default-character-set=utf8mb4 --database="$DB_NAME" < "$TMP2" >/dev/null
+
+  cnt=$(echo "$tables" | wc -w)
   echo "✅ 已清空 $cnt 张表，库现在是干净的空结构（可安全导入真实数据）"
 fi
 
