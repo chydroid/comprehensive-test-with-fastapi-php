@@ -18,6 +18,8 @@ import { QTYPE } from '../exam-runner.js';
 export function ExerciseView() {
   const root = el('div.stack');
   const headSlot = el('div.page-head');
+  // 练习进行中的「顶部折叠条」：点击可展开/收起科目与题型选择
+  const compactBar = el('div.ex-compact', { role: 'button', tabindex: '0', 'aria-expanded': 'false' });
   const pickerSlot = el('div');
   const noticeSlot = el('div');
   const questionSlot = el('div');
@@ -29,12 +31,59 @@ export function ExerciseView() {
     types: {},
     question: null,
     counts: {},
+    pickerExpanded: false,
     // 服务端下发的暂停结论与原因（'' / 'self_in_exam' / 'exam_ongoing'）
     paused: false,
     pauseReason: '',
   };
 
-  root.append(headSlot, pickerSlot, noticeSlot, questionSlot);
+  root.append(headSlot, compactBar, pickerSlot, noticeSlot, questionSlot);
+
+  /* ---------- 顶部折叠条：折叠 / 展开逻辑 ---------- */
+  function subjectName() {
+    const s = state.subjects.find((x) => x.id === state.subjId);
+    return s ? s.subj_name : '未选择科目';
+  }
+  function typeLabel() {
+    return (QTYPE[state.quizClass] && QTYPE[state.quizClass].label) || state.quizClass || '未选择题型';
+  }
+  function updateCompactText() {
+    clear(compactBar);
+    compactBar.append(
+      el('span.ex-compact-info', { text: `科目：${subjectName()}　题型：${typeLabel()}` }),
+      el('span.ex-compact-toggle', {}, [
+        icon('chevronDown', { size: 16 }),
+        el('span.ex-compact-label', { text: state.pickerExpanded ? '收起' : '展开' }),
+      ]),
+    );
+  }
+  function updateLayout() {
+    const practicing = !!state.question;
+    compactBar.style.display = practicing ? '' : 'none';
+    pickerSlot.style.display = (practicing && !state.pickerExpanded) ? 'none' : '';
+    compactBar.classList.toggle('is-open', state.pickerExpanded);
+    compactBar.setAttribute('aria-expanded', String(state.pickerExpanded));
+    updateCompactText();
+  }
+  function togglePicker() {
+    if (!state.question) return;
+    state.pickerExpanded = !state.pickerExpanded;
+    updateLayout();
+  }
+  // 进入练习（已抽题）：自动把选择区折叠成顶部一行
+  function enterPractice() {
+    state.pickerExpanded = false;
+    updateLayout();
+  }
+  // 自动跳转计时器（跨题目共享，避免上一题的定时器在换题后再次触发 draw）
+  let advanceTimer = null;
+  function cancelAdvance() {
+    if (advanceTimer) { clearTimeout(advanceTimer); advanceTimer = null; }
+  }
+  compactBar.addEventListener('click', togglePicker);
+  compactBar.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePicker(); }
+  });
 
   /* ---------- 头部 ---------- */
   mount(headSlot, [
@@ -76,7 +125,7 @@ export function ExerciseView() {
     clear(pickerSlot);
     const subjSel = select(
       state.subjects.map((s) => ({ value: String(s.id), label: s.subj_name })),
-      { name: 'subj_id', value: String(state.subjId || '') },
+      { name: 'subj_id', value: String(state.subjId || ''), class: 'subject-select' },
     );
     subjSel.disabled = state.paused;
     subjSel.addEventListener('change', async () => {
@@ -103,6 +152,7 @@ export function ExerciseView() {
         ]),
       ]),
     }));
+    updateCompactText();
   }
 
   function renderNotice() {
@@ -121,6 +171,7 @@ export function ExerciseView() {
   }
 
   async function draw() {
+    cancelAdvance();
     if (state.paused) {
       notify.warning(state.pauseReason === 'self_in_exam'
         ? '你正在参加正式考试，不能同时进行在线练习'
@@ -142,6 +193,7 @@ export function ExerciseView() {
     }
     state.question = res.result.question;
     renderQuestion();
+    enterPractice();
   }
 
   function renderQuestion(result) {
@@ -153,6 +205,8 @@ export function ExerciseView() {
 
     let answer = null;
     const optionNodes = [];
+    let answeredCorrect = false;
+    const resultSlot = el('div');
 
     const body = el('div.stack');
     if (q.quiz_pic_name) {
@@ -166,7 +220,15 @@ export function ExerciseView() {
 
     if (isFill) {
       const inp = el('input', { class: 'input blank-input', placeholder: '请输入答案' });
-      inp.addEventListener('input', () => { answer = inp.value.trim(); });
+      inp.addEventListener('input', () => {
+        answer = inp.value.trim();
+        if (!answeredCorrect && resultSlot.childElementCount) {
+          clear(resultSlot);
+          answeredCorrect = false;
+          submitBtn.disabled = false;
+          cancelAdvance();
+        }
+      });
       body.append(inp);
     } else {
       const list = el('div.option-list');
@@ -177,6 +239,15 @@ export function ExerciseView() {
           el('span.option-text', { text: o.text }),
         ]);
         node.addEventListener('click', () => {
+          if (answeredCorrect) return;
+          // 作答后修改选项：清掉上一次对错标记与反馈，允许重新提交
+          if (optionNodes.some((n) => n.classList.contains('is-correct') || n.classList.contains('is-wrong'))) {
+            for (const n of optionNodes) n.classList.remove('is-correct', 'is-wrong');
+            clear(resultSlot);
+            answeredCorrect = false;
+            submitBtn.disabled = false;
+            cancelAdvance();
+          }
           if (meta.kind === 'multi') {
             node.classList.toggle('is-selected');
             const sel = [...list.querySelectorAll('.option-item.is-selected')].map((n) => n.dataset.key).sort().join('');
@@ -194,14 +265,21 @@ export function ExerciseView() {
       body.append(list);
     }
 
-    const resultSlot = el('div');
     const submitBtn = button('提交答案', {
-      variant: 'primary', iconName: 'check',
+      variant: 'primary', iconName: 'check', class: 'ex-submit',
       onClick: async () => {
+        if (answeredCorrect) return;
         const val = answer == null ? '' : String(answer);
         const r = await withLoading(submitBtn, () => exerciseApi.check({ quiz_id: q.quiz_id, stu_key: val }));
         if (!r.ok) return;
         renderResult(r.result);
+        if (r.result.correct) {
+          // 答对：锁定并 1.5 秒后自动跳到下一题
+          answeredCorrect = true;
+          submitBtn.disabled = true;
+          advanceTimer = setTimeout(() => { advanceTimer = null; draw(); }, 1500);
+        }
+        // 答错：停留当前题，等待用户修改答案后重新提交（答对即跳转）。
       },
     });
 
@@ -232,11 +310,18 @@ export function ExerciseView() {
       title: q.quiz_type_label || '练习题',
       actions: [badge(`题目 #${q.quiz_id}`)],
       body,
-      footer: el('div.row.between', {}, [submitBtn, button('换一题', { variant: 'secondary', iconName: 'shuffle', onClick: () => draw() })]),
+        footer: el('div.row.between.ex-footer', {}, [
+        submitBtn,
+        button('下一题', {
+          variant: 'secondary', iconName: 'arrowRight', class: 'ex-next',
+          onClick: () => { cancelAdvance(); draw(); },
+        }),
+      ]),
     }));
     questionSlot.append(resultSlot);
   }
 
   renderQuestionEmpty();
+  updateLayout();
   return root;
 }

@@ -519,3 +519,33 @@
   align-items: center;
   gap: var(--sp-2);
 }
+
+/* ===== 在线练习：科目下拉缩窄 / 顶部折叠条 / 按钮宽度 ===== */
+/* 科目下拉框宽度缩小 10% */
+.subject-select { width: 90%; }
+
+/* 练习进行中：把科目+题型选择折叠成顶部一条可点击展开的行 */
+.ex-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--dur-fast), border-color var(--dur-fast);
+}
+.ex-compact:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.ex-compact:focus-visible { outline: none; border-color: var(--brand-500); box-shadow: var(--focus-ring); }
+.ex-compact-info { font-size: var(--fs-sm); font-weight: 500; color: var(--text-primary); }
+.ex-compact-toggle { display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--text-tertiary); }
+.ex-compact-toggle svg { transition: transform var(--dur-fast); }
+.ex-compact.is-open .ex-compact-toggle svg { transform: rotate(180deg); }
+
+/* 提交答案 +20% / 下一题 -20%（相对原等宽基线：60% : 40%） */
+.ex-footer .ex-submit { flex: 3 1 0; }
+.ex-footer .ex-next { flex: 2 1 0; }
