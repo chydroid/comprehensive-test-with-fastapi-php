@@ -68,6 +68,8 @@ export const examApi = {
 /* ============================ 练习 / 模拟考试 ============================ */
 export const exerciseApi = {
   list:   (params) => http.get('/exercise', { query: params }),
+  progress:    (params) => http.get('/exercise/progress', { query: params }),
+  saveProgress:(body) => http.post('/exercise/progress', body),
   check:  (body) => http.post('/exercise/answer', body),
   mockConfig: (params) => http.get('/exercise/mock/config', { query: params }),
   mockStart:  (body) => http.post('/exercise/mock/start', body),

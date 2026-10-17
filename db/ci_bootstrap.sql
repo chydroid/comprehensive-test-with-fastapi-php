@@ -588,6 +588,22 @@ CREATE TABLE `wrong_book` (
   KEY `idx_stu_mastered` (`stu_id`,`mastered`),
   KEY `idx_stu_type` (`stu_id`,`exam_type`)
 ) ENGINE=InnoDB AUTO_INCREMENT=21 DEFAULT CHARSET=utf8mb4 COMMENT='考生错题本（跨模式归集，按 stu_id+quiz_id 聚合）';
+
+-- 在线练习进度：按「考生 + 科目 + 题型 + 模式」聚合。
+-- sequence（顺序练习）用 last_quiz_id 续练；random（随机练习）用 practiced 记已练题数。
+CREATE TABLE `exercise_progress` (
+  `id`           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `stu_id`       VARCHAR(32)  NOT NULL COMMENT '准考证号（与 stuscore.stu_id 一致）',
+  `subj_id`      INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '科目 id（subject.id）',
+  `quiz_class`   VARCHAR(16)  NOT NULL DEFAULT '' COMMENT '题型 radio1/radio2/checkbox/text/longtext',
+  `mode`         VARCHAR(16)  NOT NULL DEFAULT 'random' COMMENT 'sequence=顺序练习, random=随机练习',
+  `last_quiz_id` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '最近一次练习的题目 id（顺序续练 / 随机去重）',
+  `practiced`    INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '随机模式：该用户已练习题数',
+  `updated_at`   DATETIME    NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_stu_subj_mode` (`stu_id`, `subj_id`, `quiz_class`, `mode`),
+  KEY `idx_stu` (`stu_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='在线练习进度（考生+科目+题型+模式）';
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 

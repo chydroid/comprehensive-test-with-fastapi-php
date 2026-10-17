@@ -31,7 +31,8 @@ class ExerciseController extends BaseController
 {
     /**
      * GET|POST /api/exercise
-     * 参数：subj_id、quiz_class，按当前科目+题型随机抽一题
+     * 参数：subj_id、quiz_class、mode(sequence|random)、from_id
+     * 按当前科目+题型抽一题；mode=sequence 顺序续练，mode=random 随机（默认）。
      */
     public function index(): Response
     {
@@ -42,9 +43,13 @@ class ExerciseController extends BaseController
         $in = $this->validate([
             'subj_id'    => 'integer',
             'quiz_class' => 'in:radio1,radio2,checkbox,text,longtext',
+            'mode'       => 'in:sequence,random',
+            'from_id'    => 'integer',
         ]);
         $subjId = (int) ($in['subj_id'] ?? 0);
         $quizClass = (string) ($in['quiz_class'] ?? '');
+        $mode = (string) ($in['mode'] ?? 'random');
+        $fromId = (int) ($in['from_id'] ?? 0);
 
         $subjects = (new Subject())->all('id ASC');
 
@@ -72,25 +77,67 @@ class ExerciseController extends BaseController
             }
         }
 
+        // 已保存进度（顺序续练起点 / 随机去重 / 已练计数），供抽题与响应复用
+        $stored = $this->loadProgress($stuId, $subjId, $quizClass, $mode);
+
         if (!$practicePaused && $subjId > 0 && $quizClass !== '') {
             $quizCount = $types[$quizClass] ?? 0;
             if ($quizCount === 0) {
                 throw new HttpException(404, '该科目下此题型暂无题目', 40400);
             }
-            $offset = random_int(0, $quizCount - 1);
-            $row = Database::fetch(
-                'SELECT q.id AS quiz_id, q.subj_id, q.quiz_title, q.quiz_class, q.quiz_option,
-                        q.quiz_diff, q.quiz_pic_name, s.subj_name
-                 FROM `quizlib` q
-                 INNER JOIN `subject` s ON s.id = q.subj_id
-                 WHERE q.subj_id = ? AND q.quiz_class = ?
-                 ORDER BY q.id ASC LIMIT 1 OFFSET ' . $offset,
-                [$subjId, $quizClass]
-            );
+            $sel = 'SELECT q.id AS quiz_id, q.subj_id, q.quiz_title, q.quiz_class, q.quiz_option,
+                           q.quiz_diff, q.quiz_pic_name, s.subj_name
+                    FROM `quizlib` q
+                    INNER JOIN `subject` s ON s.id = q.subj_id
+                    WHERE q.subj_id = ? AND q.quiz_class = ?';
+            $row = null;
+            if ($mode === 'sequence') {
+                // 顺序模式：优先从「当前题之后」取下一题（from_id 优先，否则已存进度），
+                // 到末尾则回卷到本题型第一题，便于循环巩固。
+                $after = $fromId > 0 ? $fromId : (int) $stored['last_quiz_id'];
+                if ($after > 0) {
+                    $row = Database::fetch(
+                        $sel . ' AND q.id > ? ORDER BY q.id ASC LIMIT 1',
+                        [$subjId, $quizClass, $after]
+                    );
+                }
+                if ($row === null) {
+                    $row = Database::fetch($sel . ' ORDER BY q.id ASC LIMIT 1', [$subjId, $quizClass]);
+                }
+            } else {
+                // 随机模式：排除当前/上次题目（避免连续重复同一题），其余随机取一题
+                $exclude = $fromId > 0 ? $fromId : (int) $stored['last_quiz_id'];
+                if ($quizCount > 1 && $exclude > 0) {
+                    $row = Database::fetch(
+                        $sel . ' AND q.id <> ? ORDER BY RAND() LIMIT 1',
+                        [$subjId, $quizClass, $exclude]
+                    );
+                }
+                if ($row === null) {
+                    $offset = random_int(0, $quizCount - 1);
+                    $row = Database::fetch(
+                        $sel . ' ORDER BY q.id ASC LIMIT 1 OFFSET ' . $offset,
+                        [$subjId, $quizClass]
+                    );
+                }
+            }
             if ($row !== null) {
                 // 练习时也不带答案下发（答案走 /api/exercise/answer 校验接口）
                 $question = \App\Models\Quiz::withoutAnswer($row);
+                // 持久化当前位置：顺序模式供下次续练，随机模式供下次去重
+                $this->saveProgressRow($stuId, $subjId, $quizClass, $mode, (int) $row['id'], 0);
             }
+        }
+
+        // 顺序模式进度序号：当前题在本题型中的 1-based 位置
+        $seqIndex = 0;
+        $seqTotal = $quizCount;
+        if ($mode === 'sequence' && $question !== null) {
+            $seqTotal = $quizCount;
+            $seqIndex = (int) (Database::fetch(
+                'SELECT COUNT(*) AS c FROM `quizlib` WHERE subj_id = ? AND quiz_class = ? AND id <= ?',
+                [$subjId, $quizClass, $question['quiz_id']]
+            )['c'] ?? 0);
         }
 
         return $this->ok([
@@ -107,7 +154,101 @@ class ExerciseController extends BaseController
             // pause_reason：'self_in_exam'（本人在考，硬约束）/
             //               'exam_ongoing'（全局策略暂停）/ ''（未暂停）
             'pause_reason'     => $pause['reason'],
+            // 练习进度：顺序模式给 seq_index/seq_total；随机模式给 practiced（已练题数）
+            'progress'         => [
+                'mode'         => $mode,
+                'last_quiz_id' => $question !== null ? (int) $question['quiz_id'] : (int) $stored['last_quiz_id'],
+                'practiced'    => (int) $stored['practiced'],
+                'seq_index'    => $seqIndex,
+                'seq_total'    => $seqTotal,
+            ],
         ]);
+    }
+
+    /**
+     * GET /api/exercise/progress
+     * 读取某「考生+科目+题型+模式」的练习进度，用于选择器提示与顺序续练起点。
+     */
+    public function progress(): Response
+    {
+        $sess = $this->authStudent();
+        $stuId = (string) $sess['id'];
+        $in = $this->validate([
+            'subj_id'    => 'required|integer',
+            'quiz_class' => 'required|in:radio1,radio2,checkbox,text,longtext',
+            'mode'       => 'in:sequence,random',
+        ]);
+        $subjId = (int) $in['subj_id'];
+        $quizClass = (string) $in['quiz_class'];
+        $mode = (string) ($in['mode'] ?? 'random');
+
+        $stored = $this->loadProgress($stuId, $subjId, $quizClass, $mode);
+        $seqTotal = (int) (Database::fetch(
+            'SELECT COUNT(*) AS c FROM `quizlib` WHERE subj_id = ? AND quiz_class = ?',
+            [$subjId, $quizClass]
+        )['c'] ?? 0);
+        $seqIndex = 0;
+        if ((int) $stored['last_quiz_id'] > 0) {
+            $seqIndex = (int) (Database::fetch(
+                'SELECT COUNT(*) AS c FROM `quizlib` WHERE subj_id = ? AND quiz_class = ? AND id <= ?',
+                [$subjId, $quizClass, (int) $stored['last_quiz_id']]
+            )['c'] ?? 0);
+        }
+
+        return $this->ok([
+            'mode'         => $mode,
+            'last_quiz_id' => (int) $stored['last_quiz_id'],
+            'practiced'    => (int) $stored['practiced'],
+            'seq_index'    => $seqIndex,
+            'seq_total'    => $seqTotal,
+        ]);
+    }
+
+    /**
+     * POST /api/exercise/progress
+     * 保存进度：last_quiz_id 直接覆盖；practiced 按 practiced_delta 累加（随机模式 +1）。
+     */
+    public function saveProgress(): Response
+    {
+        $sess = $this->authStudent();
+        $stuId = (string) $sess['id'];
+        $in = $this->validate([
+            'subj_id'        => 'required|integer',
+            'quiz_class'     => 'required|in:radio1,radio2,checkbox,text,longtext',
+            'mode'           => 'required|in:sequence,random',
+            'last_quiz_id'   => 'integer',
+            'practiced_delta' => 'integer',
+        ]);
+        $lastQuizId = (int) ($in['last_quiz_id'] ?? 0);
+        $delta = (int) ($in['practiced_delta'] ?? 0);
+        $this->saveProgressRow($stuId, (int) $in['subj_id'], (string) $in['quiz_class'], (string) $in['mode'], $lastQuizId, $delta);
+
+        return $this->ok(['saved' => true]);
+    }
+
+    /** 读取练习进度；无记录返回零值 */
+    private function loadProgress(string $stuId, int $subjId, string $quizClass, string $mode): array
+    {
+        $row = Database::fetch(
+            'SELECT last_quiz_id, practiced FROM `exercise_progress`
+             WHERE stu_id = ? AND subj_id = ? AND quiz_class = ? AND mode = ? LIMIT 1',
+            [$stuId, $subjId, $quizClass, $mode]
+        );
+        return $row ?? ['last_quiz_id' => 0, 'practiced' => 0];
+    }
+
+    /** upsert 练习进度：覆盖 last_quiz_id，practiced 累加 practiced_delta */
+    private function saveProgressRow(string $stuId, int $subjId, string $quizClass, string $mode, int $lastQuizId, int $practicedDelta): void
+    {
+        Database::query(
+            'INSERT INTO `exercise_progress` (stu_id, subj_id, quiz_class, mode, last_quiz_id, practiced, updated_at)
+             VALUES (?, ?, ?, ?, ?, GREATEST(0, ?), NOW())
+             ON DUPLICATE KEY UPDATE
+               last_quiz_id = VALUES(last_quiz_id),
+               practiced = GREATEST(0, practiced + ?),
+               updated_at = NOW()',
+            [$stuId, $subjId, $quizClass, $mode, $lastQuizId, $practicedDelta, $practicedDelta]
+        );
     }
 
     /**

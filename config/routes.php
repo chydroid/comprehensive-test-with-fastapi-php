@@ -143,6 +143,8 @@ return [
     /* ==================== 在线练习 ==================== */
     ['GET',  '/api/exercise',              [ExerciseController::class, 'index']],
     ['POST', '/api/exercise',              [ExerciseController::class, 'index']],
+    ['GET',  '/api/exercise/progress',     [ExerciseController::class, 'progress']],
+    ['POST', '/api/exercise/progress',     [ExerciseController::class, 'saveProgress']],
     ['POST', '/api/exercise/answer',       [ExerciseController::class, 'check']],
 
     /* ==================== 模拟考试 ==================== */

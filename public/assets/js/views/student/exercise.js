@@ -29,12 +29,16 @@ export function ExerciseView() {
     subjId: 0,
     quizClass: '',
     types: {},
+    // 练习方式：random=随机练习（默认，沿用旧行为），sequence=顺序练习
+    mode: 'random',
     question: null,
     counts: {},
     pickerExpanded: false,
     // 服务端下发的暂停结论与原因（'' / 'self_in_exam' / 'exam_ongoing'）
     paused: false,
     pauseReason: '',
+    // 练习进度（顺序模式：seq_index/seq_total；随机模式：practiced）
+    progress: { mode: 'random', last_quiz_id: 0, practiced: 0, seq_index: 0, seq_total: 0 },
   };
 
   root.append(headSlot, compactBar, pickerSlot, noticeSlot, questionSlot);
@@ -92,7 +96,7 @@ export function ExerciseView() {
       el('p.page-sub', { text: '随机抽题、即时判分、反复练习' }),
     ]),
     el('div.page-head-actions', {}, [
-      button('换一题', { variant: 'primary', size: 'sm', iconName: 'shuffle', onClick: () => draw() }),
+      button('换一题', { variant: 'primary', size: 'sm', iconName: 'shuffle', onClick: () => advance() }),
     ]),
   ]);
 
@@ -141,15 +145,47 @@ export function ExerciseView() {
       label: `${QTYPE[t]?.label || t} (${state.types[t]})`,
     }));
 
+    // 练习方式：随机 / 顺序
+    const modeItems = [
+      { key: 'random', label: '随机练习' },
+      { key: 'sequence', label: '顺序练习' },
+    ];
+    const modeSeg = segmented(modeItems, state.mode, (k) => {
+      state.mode = k;
+      state.question = null;
+      loadProgressHint();
+      draw();
+    });
+
+    // 已保存进度提示（选择器阶段即可看到「续练起点」）
+    const p = state.progress || {};
+    let hintText = '';
+    if (state.mode === 'sequence') {
+      if (p.seq_total) hintText = `已保存进度：上次练习到第 ${p.seq_index} / ${p.seq_total} 题`;
+    } else {
+      hintText = `已保存进度：随机练习已练 ${p.practiced || 0} 道`;
+    }
+
     pickerSlot.append(card({
       iconName: 'filter',
       body: el('div.stack', {}, [
         el('div.form-grid', {}, [
           field('科目', subjSel),
           typeItems.length
-            ? field('题型', segmented(typeItems, state.quizClass, (k) => { state.quizClass = k; draw(); }))
+            ? field('题型', segmented(typeItems, state.quizClass, (k) => {
+                state.quizClass = k;
+                state.question = null;
+                loadProgressHint();
+                draw();
+              }))
             : field('题型', el('div.muted', { text: '该科目暂无可用题型' })),
         ]),
+        el('div.ex-mode-row', {}, [
+          field('练习方式', modeSeg),
+        ]),
+        hintText
+          ? el('div.ex-progress-hint.muted', { text: hintText })
+          : el('div'),
       ]),
     }));
     updateCompactText();
@@ -180,7 +216,13 @@ export function ExerciseView() {
     }
     if (!state.subjId) { notify.warning('请先选择科目'); return; }
     if (!state.quizClass) { notify.warning('请先选择题型'); return; }
-    const res = await withLoading(questionSlot, () => exerciseApi.list({ subj_id: state.subjId, quiz_class: state.quizClass }));
+    const res = await withLoading(questionSlot, () => exerciseApi.list({
+      subj_id: state.subjId,
+      quiz_class: state.quizClass,
+      mode: state.mode,
+      // 有当前题时把「当前题 id」作为续练起点；首次/切换模式时为 0（按已存进度续练）
+      from_id: state.question ? state.question.quiz_id : 0,
+    }));
     if (!res.ok) {
       clear(questionSlot);
       questionSlot.append(alertBox(res.error?.message || '抽题失败', { type: 'danger' }));
@@ -192,8 +234,44 @@ export function ExerciseView() {
       return;
     }
     state.question = res.result.question;
+    if (res.result.progress) state.progress = res.result.progress;
     renderQuestion();
     enterPractice();
+  }
+
+  /**
+   * 保存进度后跳到下一题：顺序模式覆盖 last_quiz_id；随机模式 practiced +1。
+   * 进度保存失败不阻断练习（容错）。
+   */
+  async function saveProgress() {
+    if (!state.question) return;
+    const delta = state.mode === 'random' ? 1 : 0;
+    try {
+      await exerciseApi.saveProgress({
+        subj_id: state.subjId,
+        quiz_class: state.quizClass,
+        mode: state.mode,
+        last_quiz_id: state.question.quiz_id,
+        practiced_delta: delta,
+      });
+    } catch (_) { /* 进度保存失败不阻断练习 */ }
+  }
+
+  // 保存当前题进度，再抽下一题（手动「换一题 / 下一题」与自动跳题统一走这里）
+  async function advance() {
+    if (!state.question) { await draw(); return; }
+    await saveProgress();
+    await draw();
+  }
+
+  // 读取已存进度用于选择器提示（练习方式/题型切换后刷新）
+  async function loadProgressHint() {
+    if (!state.subjId || !state.quizClass) return;
+    const res = await exerciseApi.progress({
+      subj_id: state.subjId, quiz_class: state.quizClass, mode: state.mode,
+    }).catch(() => null);
+    if (res && res.progress) state.progress = res.progress;
+    renderPicker();
   }
 
   function renderQuestion(result) {
@@ -209,6 +287,31 @@ export function ExerciseView() {
     const resultSlot = el('div');
 
     const body = el('div.stack');
+
+    // 练习进度（顺序：第 X/Y 题 + 进度条；随机：已练 N 道）
+    const progressSlot = el('div.ex-progress');
+    function renderProgress() {
+      clear(progressSlot);
+      const pr = state.progress || {};
+      if (state.mode === 'sequence') {
+        const idx = pr.seq_index || 0;
+        const total = pr.seq_total || 0;
+        progressSlot.append(el('div.ex-progress-row', {}, [
+          el('span.ex-progress-label', { text: `进度　第 ${idx} / ${total} 题` }),
+          el('div.ex-progress-bar', {}, [
+            el('div.ex-progress-fill', { style: `width:${total ? Math.round((idx / total) * 100) : 0}%` }),
+          ]),
+        ]));
+      } else {
+        const n = pr.practiced || 0;
+        progressSlot.append(el('div.ex-progress-row', {}, [
+          el('span.ex-progress-label', { text: `随机练习已练 ${n} 道（本题型）` }),
+        ]));
+      }
+    }
+    renderProgress();
+    body.append(progressSlot);
+
     if (q.quiz_pic_name) {
       // 只保留 addEventListener：内联 onerror 属性在 script-src 'self' 的 CSP 下
       // 不会执行，只会产生控制台违规日志。
@@ -274,10 +377,10 @@ export function ExerciseView() {
         if (!r.ok) return;
         renderResult(r.result);
         if (r.result.correct) {
-          // 答对：锁定并 1.5 秒后自动跳到下一题
+          // 答对：锁定并 1.5 秒后自动跳到下一题（保存进度）
           answeredCorrect = true;
           submitBtn.disabled = true;
-          advanceTimer = setTimeout(() => { advanceTimer = null; draw(); }, 1500);
+          advanceTimer = setTimeout(() => { advanceTimer = null; advance(); }, 1500);
         }
         // 答错：停留当前题，等待用户修改答案后重新提交（答对即跳转）。
       },
@@ -307,6 +410,7 @@ export function ExerciseView() {
 
     questionSlot.append(card({
       iconName: 'help-circle',
+      class: 'ex-q-enter',
       title: q.quiz_type_label || '练习题',
       actions: [badge(`题目 #${q.quiz_id}`)],
       body,
@@ -314,7 +418,7 @@ export function ExerciseView() {
         submitBtn,
         button('下一题', {
           variant: 'secondary', iconName: 'arrowRight', class: 'ex-next',
-          onClick: () => { cancelAdvance(); draw(); },
+          onClick: () => { cancelAdvance(); advance(); },
         }),
       ]),
     }));

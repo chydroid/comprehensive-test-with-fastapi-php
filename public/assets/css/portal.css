@@ -549,3 +549,28 @@
 /* 提交答案 +20% / 下一题 -20%（相对原等宽基线：60% : 40%） */
 .ex-footer .ex-submit { flex: 3 1 0; }
 .ex-footer .ex-next { flex: 2 1 0; }
+
+/* 练习方式（顺序/随机）独占一行，避免与科目/题型挤成三列 */
+.ex-mode-row { margin-top: var(--sp-1); }
+
+/* 跳题动画：每次渲染新题卡片淡入 + 上移，明确提示已切换题目 */
+@keyframes exSlideIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.ex-q-enter { animation: exSlideIn .42s cubic-bezier(.22, .61, .36, 1); }
+
+/* 练习进度 */
+.ex-progress { margin-bottom: var(--sp-3); }
+.ex-progress-row { display: flex; align-items: center; gap: var(--sp-3); }
+.ex-progress-label { font-size: var(--fs-sm); font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+.ex-progress-bar {
+  flex: 1 1 auto; height: 6px; border-radius: 999px;
+  background: var(--bg-muted, #eef0f4); overflow: hidden;
+}
+.ex-progress-fill {
+  height: 100%; border-radius: inherit; width: 0;
+  background: linear-gradient(90deg, var(--brand-500), var(--brand-400, #4f8cff));
+  transition: width var(--dur) ease;
+}
+.ex-progress-hint { margin-top: var(--sp-2); font-size: var(--fs-sm); }
